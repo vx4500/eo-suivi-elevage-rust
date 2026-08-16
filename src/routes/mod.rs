@@ -128,11 +128,19 @@ pub fn router(state: AppState) -> Router {
         .route("/utilisateurs", get(utilisateurs))
         .route("/utilisateurs/creer", post(utilisateur_creer))
         .route("/utilisateurs/{id}/actif", post(utilisateur_actif))
+        .route("/utilisateurs/{id}/sections", post(utilisateur_sections))
+        .route("/utilisateurs/{id}/mdp", post(utilisateur_mdp))
         .route("/sauvegarde", get(sauvegarde))
         .route("/structure", get(structure))
         .route("/structure/site", post(structure_site))
         .route("/structure/salle", post(structure_salle))
         .route("/structure/case", post(structure_case))
+        .route("/structure/salle/{id}/modifier", post(structure_salle_modifier))
+        .route("/structure/salle/{id}/ordre", post(structure_salle_ordre))
+        .route("/structure/salle/{id}/supprimer", post(structure_salle_supprimer))
+        .route("/structure/case/{id}/rfid", post(structure_case_rfid))
+        .route("/structure/case/{id}/supprimer", post(structure_case_supprimer))
+        .route("/structure/site/{id}/supprimer", post(structure_site_supprimer))
         .route("/taches", get(taches))
         .route("/taches/ajouter", post(tache_ajouter))
         .route("/taches/{id}/fait", post(tache_fait))
@@ -147,6 +155,8 @@ pub fn router(state: AppState) -> Router {
         .route("/entretien/{id}/date", post(entretien_date))
         .route("/entretien/{id}/supprimer", post(entretien_supprimer))
         .route("/engraissement", get(engraissement))
+        .route("/declaration", post(declaration_ajouter))
+        .route("/declaration/{id}/supprimer", post(declaration_supprimer))
         .route("/abattoir", get(abattoir).post(abattoir_saisie))
         .route("/abattoir/saisie/{id}/supprimer", post(abattoir_saisie_supprimer))
         .route("/cahiers", get(cahiers).post(cahier_ajouter))
@@ -2093,12 +2103,226 @@ async fn utilisateurs(State(state):State<AppState>,Extension(session):Extension<
 async fn utilisateur_creer(State(state):State<AppState>,Extension(session):Extension<SessionData>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{if!session.est_admin(){return Err(AppError::Forbidden)}verify_csrf(&session,&form)?;let id=form_text(&form,"identifiant").ok_or_else(||AppError::Invalid("Identifiant obligatoire".into()))?;let password=form.get("mdp").cloned().unwrap_or_default();if password.len()<8{return Err(AppError::Invalid("Mot de passe: 8 caractères minimum".into()))}sqlx::query("INSERT INTO utilisateur(identifiant,nom,prenom,hash_mdp,role,actif,doit_changer_mdp) VALUES(?,?,?,?,?,1,1)").bind(id).bind(form_text(&form,"nom")).bind(form_text(&form,"prenom")).bind(auth::hash_password(&password)).bind(form_text(&form,"role").unwrap_or_else(||"salarie".into())).execute(&state.pool).await?;Ok(Redirect::to("/utilisateurs").into_response())}
 async fn utilisateur_actif(State(state):State<AppState>,Extension(session):Extension<SessionData>,Path(id):Path<i64>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{if!session.est_admin(){return Err(AppError::Forbidden)}verify_csrf(&session,&form)?;sqlx::query("UPDATE utilisateur SET actif=CASE actif WHEN 1 THEN 0 ELSE 1 END WHERE id=? AND identifiant<>'admin'").bind(id).execute(&state.pool).await?;Ok(Redirect::to("/utilisateurs").into_response())}
 
+async fn utilisateur_sections(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Path(id): Path<i64>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    if !session.est_admin() {
+        return Err(AppError::Forbidden);
+    }
+    verify_csrf(&session, &form)?;
+    let allowed = [
+        "planning",
+        "bandes",
+        "truies",
+        "charcutiers",
+        "productivite",
+        "ifip",
+        "reformes",
+        "cochettes",
+        "sanitaire",
+        "stock",
+        "economique",
+        "structure",
+        "effectifs",
+        "archives",
+        "entretien",
+    ];
+    let sections = allowed
+        .iter()
+        .filter(|section| form.contains_key(&format!("section_{section}")))
+        .copied()
+        .collect::<Vec<_>>()
+        .join(",");
+    sqlx::query("UPDATE utilisateur SET sections=? WHERE id=? AND role='salarie'")
+        .bind(sections)
+        .bind(id)
+        .execute(&state.pool)
+        .await?;
+    Ok(Redirect::to("/utilisateurs").into_response())
+}
+
+async fn utilisateur_mdp(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Path(id): Path<i64>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    if !session.est_admin() {
+        return Err(AppError::Forbidden);
+    }
+    verify_csrf(&session, &form)?;
+    let password = form.get("mdp").cloned().unwrap_or_default();
+    if password.len() < 8 {
+        return Err(AppError::Invalid(
+            "Le mot de passe doit contenir au moins 8 caractères".into(),
+        ));
+    }
+    sqlx::query("UPDATE utilisateur SET hash_mdp=?,doit_changer_mdp=1,tentatives_echec=0,bloque_jusqu=NULL WHERE id=?")
+        .bind(auth::hash_password(&password))
+        .bind(id)
+        .execute(&state.pool)
+        .await?;
+    Ok(Redirect::to("/utilisateurs").into_response())
+}
+
 async fn sauvegarde(State(state):State<AppState>,Extension(session):Extension<SessionData>)->AppResult<Response>{if!session.est_admin(){return Err(AppError::Forbidden)}sqlx::query("PRAGMA wal_checkpoint(FULL)").execute(&state.pool).await?;let bytes=tokio::fs::read(&state.config.db_path).await.map_err(anyhow::Error::from)?;let filename=format!("elevage_sauvegarde_{}.db",Local::now().date_naive());let mut headers=HeaderMap::new();headers.insert(header::CONTENT_TYPE,HeaderValue::from_static("application/x-sqlite3"));headers.insert(header::CONTENT_DISPOSITION,HeaderValue::from_str(&format!("attachment; filename=\"{filename}\"")).map_err(|e|AppError::Internal(e.into()))?);Ok((headers,bytes).into_response())}
 
-async fn structure(State(state):State<AppState>,Extension(session):Extension<SessionData>)->AppResult<Html<String>>{list_page(&state,&session,"Structure de l'élevage","Sites, salles et cases","SELECT s.id,COALESCE(si.nom,si.code) AS site,s.nom AS salle,s.type,c.nom AS cases,c.nb_max_porcs,c.num_vanne FROM salle s JOIN site si ON si.id=s.site_id LEFT JOIN casesalle c ON c.salle_id=s.id ORDER BY si.nom,s.ordre,c.nom",&["id","site","salle","type","cases","nb_max_porcs","num_vanne"]).await}
+async fn structure(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+) -> AppResult<Html<String>> {
+    let sites = generic_rows(&state.pool, "SELECT id,code,nom FROM site ORDER BY COALESCE(nom,code)").await?;
+    let rooms = generic_rows(&state.pool, "SELECT s.id,s.site_id,s.nom,s.type,s.rfid,s.nb_cases,s.ordre,COALESCE(si.nom,si.code) AS site FROM salle s JOIN site si ON si.id=s.site_id ORDER BY COALESCE(si.nom,si.code),s.ordre,s.nom").await?;
+    let cases = generic_rows(&state.pool, "SELECT c.id,c.salle_id,c.nom,c.rfid,c.nb_max_porcs,c.num_vanne,s.nom AS salle,COALESCE(si.nom,si.code) AS site FROM casesalle c JOIN salle s ON s.id=c.salle_id JOIN site si ON si.id=s.site_id ORDER BY COALESCE(si.nom,si.code),s.ordre,c.nom").await?;
+    let mut ctx = context(&session);
+    ctx.insert("sites".into(), Value::Array(sites));
+    ctx.insert("salles".into(), Value::Array(rooms));
+    ctx.insert("cases".into(), Value::Array(cases));
+    render(&state, "structure.html", Value::Object(ctx))
+}
 async fn structure_site(State(state):State<AppState>,Extension(session):Extension<SessionData>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;let code=form_text(&form,"code").ok_or_else(||AppError::Invalid("Code obligatoire".into()))?;sqlx::query("INSERT INTO site(code,nom) VALUES(?,?)").bind(code).bind(form_text(&form,"nom")).execute(&state.pool).await?;Ok(Redirect::to("/structure").into_response())}
 async fn structure_salle(State(state):State<AppState>,Extension(session):Extension<SessionData>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;sqlx::query("INSERT INTO salle(site_id,nom,type,rfid,nb_cases,ordre) VALUES(?,?,?,?,0,COALESCE((SELECT MAX(ordre)+1 FROM salle WHERE site_id=?),0))").bind(form_i64(&form,"site_id")).bind(form_text(&form,"nom")).bind(form_text(&form,"type")).bind(form_text(&form,"rfid")).bind(form_i64(&form,"site_id")).execute(&state.pool).await?;Ok(Redirect::to("/structure").into_response())}
 async fn structure_case(State(state):State<AppState>,Extension(session):Extension<SessionData>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;sqlx::query("INSERT INTO casesalle(salle_id,nom,rfid,nb_max_porcs,num_vanne) VALUES(?,?,?,?,?)").bind(form_i64(&form,"salle_id")).bind(form_text(&form,"nom")).bind(form_text(&form,"rfid")).bind(form_i64(&form,"nb_max_porcs")).bind(form_text(&form,"num_vanne")).execute(&state.pool).await?;Ok(Redirect::to("/structure").into_response())}
+
+async fn structure_salle_modifier(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Path(id): Path<i64>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    verify_csrf(&session, &form)?;
+    let name = form_text(&form, "nom")
+        .ok_or_else(|| AppError::Invalid("Nom de salle obligatoire".into()))?;
+    sqlx::query("UPDATE salle SET nom=?,type=?,rfid=? WHERE id=?")
+        .bind(name)
+        .bind(form_text(&form, "type"))
+        .bind(form_text(&form, "rfid"))
+        .bind(id)
+        .execute(&state.pool)
+        .await?;
+    Ok(Redirect::to("/structure").into_response())
+}
+
+async fn structure_salle_ordre(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Path(id): Path<i64>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    verify_csrf(&session, &form)?;
+    let current: Option<(i64, i64)> =
+        sqlx::query_as("SELECT site_id,COALESCE(ordre,0) FROM salle WHERE id=?")
+            .bind(id)
+            .fetch_optional(&state.pool)
+            .await?;
+    let Some((site_id, order)) = current else {
+        return Err(AppError::NotFound);
+    };
+    let direction = form.get("direction").map(String::as_str).unwrap_or("");
+    let other: Option<(i64, i64)> = if direction == "haut" {
+        sqlx::query_as("SELECT id,COALESCE(ordre,0) FROM salle WHERE site_id=? AND COALESCE(ordre,0)<? ORDER BY COALESCE(ordre,0) DESC,id DESC LIMIT 1")
+            .bind(site_id).bind(order).fetch_optional(&state.pool).await?
+    } else if direction == "bas" {
+        sqlx::query_as("SELECT id,COALESCE(ordre,0) FROM salle WHERE site_id=? AND COALESCE(ordre,0)>? ORDER BY COALESCE(ordre,0),id LIMIT 1")
+            .bind(site_id).bind(order).fetch_optional(&state.pool).await?
+    } else {
+        None
+    };
+    if let Some((other_id, other_order)) = other {
+        let mut tx = state.pool.begin().await?;
+        sqlx::query("UPDATE salle SET ordre=? WHERE id=?")
+            .bind(other_order)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("UPDATE salle SET ordre=? WHERE id=?")
+            .bind(order)
+            .bind(other_id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+    }
+    Ok(Redirect::to("/structure").into_response())
+}
+
+async fn structure_case_rfid(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Path(id): Path<i64>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    verify_csrf(&session, &form)?;
+    sqlx::query("UPDATE casesalle SET rfid=?,num_vanne=?,nb_max_porcs=? WHERE id=?")
+        .bind(form_text(&form, "rfid"))
+        .bind(form_text(&form, "num_vanne"))
+        .bind(form_i64(&form, "nb_max_porcs"))
+        .bind(id)
+        .execute(&state.pool)
+        .await?;
+    Ok(Redirect::to("/structure").into_response())
+}
+
+async fn structure_case_supprimer(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Path(id): Path<i64>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    verify_csrf(&session, &form)?;
+    let used: i64 = sqlx::query_scalar("SELECT (SELECT COUNT(*) FROM transfert WHERE case_source_id=? OR case_dest_id=?)+(SELECT COUNT(*) FROM declarationmort WHERE case_id=?)+(SELECT COUNT(*) FROM truie WHERE case_id=?)")
+        .bind(id).bind(id).bind(id).bind(id).fetch_one(&state.pool).await?;
+    if used > 0 {
+        return Err(AppError::Invalid("Cette case contient un historique ou des animaux et ne peut pas être supprimée".into()));
+    }
+    sqlx::query("DELETE FROM casesalle WHERE id=?")
+        .bind(id)
+        .execute(&state.pool)
+        .await?;
+    Ok(Redirect::to("/structure").into_response())
+}
+
+async fn structure_salle_supprimer(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Path(id): Path<i64>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    verify_csrf(&session, &form)?;
+    let children: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM casesalle WHERE salle_id=?")
+        .bind(id).fetch_one(&state.pool).await?;
+    if children > 0 {
+        return Err(AppError::Invalid("Supprime ou déplace d'abord les cases de cette salle".into()));
+    }
+    sqlx::query("DELETE FROM salle WHERE id=?")
+        .bind(id).execute(&state.pool).await?;
+    Ok(Redirect::to("/structure").into_response())
+}
+
+async fn structure_site_supprimer(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Path(id): Path<i64>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    verify_csrf(&session, &form)?;
+    let children: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM salle WHERE site_id=?")
+        .bind(id).fetch_one(&state.pool).await?;
+    if children > 0 {
+        return Err(AppError::Invalid("Supprime d'abord les salles de ce site".into()));
+    }
+    sqlx::query("DELETE FROM site WHERE id=?")
+        .bind(id).execute(&state.pool).await?;
+    Ok(Redirect::to("/structure").into_response())
+}
 
 async fn taches(State(state):State<AppState>,Extension(session):Extension<SessionData>)->AppResult<Html<String>>{list_page(&state,&session,"Tâches et réparations","Échéances et suivi","SELECT id,titre,type,bande_code,salle,echeance,fait,note,cree_le FROM tache ORDER BY fait,echeance,cree_le DESC",&["id","titre","type","bande_code","salle","echeance","fait","note"]).await}
 async fn tache_ajouter(State(state):State<AppState>,Extension(session):Extension<SessionData>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{verify_csrf(&session,&form)?;sqlx::query("INSERT INTO tache(titre,type,bande_code,salle,echeance,note,fait,cree_le) VALUES(?,?,?,?,?,?,0,CURRENT_TIMESTAMP)").bind(form_text(&form,"titre")).bind(form_text(&form,"type")).bind(form_text(&form,"bande_code")).bind(form_text(&form,"salle")).bind(form_text(&form,"echeance")).bind(form_text(&form,"note")).execute(&state.pool).await?;Ok(Redirect::to("/taches").into_response())}
@@ -2201,15 +2425,103 @@ async fn engraissement(
     } else {
         "SELECT id,horodatage,bande_code,date,stade,cause,poids,nombre,declare_par,note FROM declarationmort ORDER BY horodatage DESC LIMIT 250".to_string()
     };
-    list_page(
-        &state,
-        &session,
-        "Suivi engraissement",
-        "Déclarations de mortalité et observations des lots.",
-        &sql,
-        &["horodatage", "bande_code", "date", "stade", "cause", "poids", "nombre", "declare_par", "note"],
+    let declarations = generic_rows(&state.pool, &sql).await?;
+    let band_sql = if session.role == "engraisseur" {
+        format!(
+            "SELECT id,code,instructions,poids_cible FROM bande WHERE active=1 AND engraisseur_id={} ORDER BY date_mb,code",
+            session.uid
+        )
+    } else {
+        "SELECT id,code,instructions,poids_cible FROM bande WHERE active=1 ORDER BY date_mb,code"
+            .to_string()
+    };
+    let bands = generic_rows(&state.pool, &band_sql).await?;
+    let cases = generic_rows(
+        &state.pool,
+        "SELECT c.id,COALESCE(si.nom,si.code)||' · '||s.nom||' · '||c.nom AS nom FROM casesalle c JOIN salle s ON s.id=c.salle_id JOIN site si ON si.id=s.site_id ORDER BY si.nom,s.ordre,c.nom",
     )
-    .await
+    .await?;
+    let mut ctx = context(&session);
+    ctx.insert("declarations".into(), Value::Array(declarations));
+    ctx.insert("bandes".into(), Value::Array(bands));
+    ctx.insert("cases".into(), Value::Array(cases));
+    ctx.insert(
+        "today".into(),
+        json!(Local::now().date_naive().format("%Y-%m-%d").to_string()),
+    );
+    render(&state, "prestataire.html", Value::Object(ctx))
+}
+
+async fn declaration_ajouter(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    verify_csrf(&session, &form)?;
+    let band = form_text(&form, "bande_code")
+        .ok_or_else(|| AppError::Invalid("Bande obligatoire".into()))?;
+    if session.role == "engraisseur" {
+        let authorized: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM bande WHERE code=? AND engraisseur_id=? AND active=1",
+        )
+        .bind(&band)
+        .bind(session.uid)
+        .fetch_one(&state.pool)
+        .await?;
+        if authorized == 0 {
+            return Err(AppError::Forbidden);
+        }
+    } else {
+        require_writer(&session)?;
+    }
+    let number = form_i64(&form, "nombre")
+        .filter(|value| *value > 0 && *value <= 10_000)
+        .ok_or_else(|| AppError::Invalid("Nombre invalide".into()))?;
+    let case_id = form_i64(&form, "case_id");
+    if let Some(case_id) = case_id {
+        let present = case_pig_count(&state.pool, case_id).await?;
+        if number > present {
+            return Err(AppError::Invalid(format!(
+                "Effectif insuffisant dans la case : {present} porc(s) présent(s)"
+            )));
+        }
+    }
+    sqlx::query("INSERT INTO declarationmort(bande_code,date,stade,case_id,cause,poids,nombre,declare_par,note) VALUES(?,?,?,?,?,?,?,?,?)")
+        .bind(&band)
+        .bind(form_text(&form, "date").unwrap_or_else(|| Local::now().date_naive().format("%Y-%m-%d").to_string()))
+        .bind(form_text(&form, "stade"))
+        .bind(case_id)
+        .bind(form_text(&form, "cause"))
+        .bind(form_f64(&form, "poids"))
+        .bind(number)
+        .bind(&session.identifiant)
+        .bind(form_text(&form, "note"))
+        .execute(&state.pool)
+        .await?;
+    Ok(Redirect::to("/engraissement").into_response())
+}
+
+async fn declaration_supprimer(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Path(id): Path<i64>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    verify_csrf(&session, &form)?;
+    if session.role == "engraisseur" {
+        sqlx::query("DELETE FROM declarationmort WHERE id=? AND declare_par=?")
+            .bind(id)
+            .bind(&session.identifiant)
+            .execute(&state.pool)
+            .await?;
+    } else {
+        require_writer(&session)?;
+        sqlx::query("DELETE FROM declarationmort WHERE id=?")
+            .bind(id)
+            .execute(&state.pool)
+            .await?;
+    }
+    Ok(Redirect::to("/engraissement").into_response())
 }
 
 async fn abattoir(
