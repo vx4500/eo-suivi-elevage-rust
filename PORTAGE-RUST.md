@@ -2,10 +2,10 @@
 
 La 1.65 d’origine contient 215 routes HTTP et environ 8 200 lignes dans son
 fichier principal. Le changement Python → Rust est une réécriture du moteur,
-pas une conversion automatique. La version 2.1.2 relie explicitement 115
+pas une conversion automatique. La version 2.1.3 relie explicitement 115
 chemins Rust ; certaines déclarations gèrent plusieurs verbes HTTP.
 
-## Fonctions opérationnelles en Rust 2.1.2
+## Fonctions opérationnelles en Rust 2.1.3
 
 | Domaine | État |
 | --- | --- |
@@ -46,5 +46,5 @@ Une écriture non portée renvoie volontairement `501 Not Implemented`. Cela
   impressions exécutées sur une copie ;
 - aucune donnée personnelle ni copie de la base n’est incluse dans l’archive ;
 - la 2.0.1 a compilé et démarré avec Rust 1.97.1 sur Debian 13 ;
-- la 2.1.2 doit être validée par `cargo fmt --check`, `cargo clippy`,
+- la 2.1.3 doit être validée par `cargo fmt --check`, `cargo clippy`,
   `cargo test` et `cargo build --release` sur le serveur de recette.
