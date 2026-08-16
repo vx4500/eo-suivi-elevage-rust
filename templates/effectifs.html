@@ -16,6 +16,10 @@
   <button>Ajouter l’inventaire</button>
 </form>{% endif %}
 
+{% if session.peut_modifier %}<form class="card rust-actions" method="post" action="/effectifs/inventaire-case"><input type="hidden" name="csrf_token" value="{{ session.csrf }}"><h3>Stock initial ou inventaire d'une case</h3><label>Case<select name="case_id" required>{% for c in cases %}<option value="{{ c.id }}">{{ c.site }} · {{ c.salle }} · {{ c.nom }} — {{ c.effectif }} présent(s)</option>{% endfor %}</select></label><label>Date<input type="date" name="date" value="{{ today }}" required></label><label>Effectif compté<input type="number" name="nombre" min="0" required></label><label>Note<input name="note"></label><button>Enregistrer l'inventaire de case</button></form>{% endif %}
+
+<h2>Effectifs par case</h2><div class="rust-scroll"><table><tr><th>Site</th><th>Salle</th><th>Case</th><th>Présents</th><th>Capacité</th></tr>{% for c in cases %}<tr><td>{{ c.site }}</td><td>{{ c.salle }}</td><td>{{ c.nom }}</td><td><b>{{ c.effectif }}</b></td><td>{{ c.nb_max_porcs or '—' }}</td></tr>{% endfor %}</table></div>
+
 <h2>Présents calculés par bande</h2>
 <div class="rust-scroll"><table><thead><tr><th>Bande</th><th>Site</th><th>Mise-bas</th><th>Effectif restant</th></tr></thead><tbody>{% for b in bandes %}<tr><td><a href="/bande/{{ b.id }}">{{ b.code }}</a></td><td>{{ b.site or '—' }}</td><td>{{ b.date_mb|date_fr }}</td><td><b>{{ b.effectif }}</b></td></tr>{% else %}<tr><td colspan="4" class="rust-empty">Aucune bande active</td></tr>{% endfor %}</tbody></table></div>
 
