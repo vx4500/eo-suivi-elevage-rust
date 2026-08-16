@@ -1128,15 +1128,157 @@ async fn gttt(
     State(state): State<AppState>,
     Extension(session): Extension<SessionData>,
 ) -> AppResult<Html<String>> {
-    list_page(
-        &state,
-        &session,
-        "GTTT",
-        "Résultats techniques par rang de portée, calculés depuis les données importées.",
-        "SELECT rang,COUNT(*) AS portees,ROUND(AVG(nv),2) AS nes_vifs,ROUND(AVG(mn),2) AS mort_nes,ROUND(AVG(sev),2) AS sevres,ROUND(AVG(tx_pertes),2) AS pertes_pct,ROUND(AVG(duree_gest),1) AS gestation_jours FROM porteerang WHERE rang IS NOT NULL GROUP BY rang ORDER BY rang",
-        &["rang", "portees", "nes_vifs", "mort_nes", "sevres", "pertes_pct", "gestation_jours"],
+    let litters = load_gttt_litters(&state.pool, None).await?;
+    let summary = gttt_summary(&litters);
+    let rank_rows = gttt_rank_rows(&litters);
+    let band_codes = sqlx::query_scalar::<_, String>(
+        "SELECT DISTINCT bande FROM porteerang WHERE bande IS NOT NULL AND trim(bande)<>'' ORDER BY bande",
     )
-    .await
+    .fetch_all(&state.pool)
+    .await?;
+    let mut band_rows = Vec::with_capacity(band_codes.len());
+    for code in band_codes {
+        let rows = load_gttt_litters(&state.pool, Some(&code)).await?;
+        let mut value = gttt_summary(&rows);
+        value
+            .as_object_mut()
+            .expect("résumé GTTT objet")
+            .insert("bande".into(), json!(code));
+        band_rows.push(value);
+    }
+    let mut ctx = context(&session);
+    ctx.insert("synthese".into(), summary);
+    ctx.insert("rangs".into(), Value::Array(rank_rows));
+    ctx.insert("bandes".into(), Value::Array(band_rows));
+    render(&state, "gttt.html", Value::Object(ctx))
+}
+
+#[derive(Clone, Debug)]
+struct GtttLitter {
+    rank: i64,
+    gestation: Option<f64>,
+    live_born: Option<f64>,
+    stillborn: Option<f64>,
+    stillborn_rate: Option<f64>,
+    weaned: Option<f64>,
+    adopted: Option<f64>,
+    removed: Option<f64>,
+}
+
+async fn load_gttt_litters(pool: &SqlitePool, band: Option<&str>) -> AppResult<Vec<GtttLitter>> {
+    let sql = if band.is_some() {
+        "SELECT rang,duree_gest,nv,mn,tx_mn_nt,sev,ad,re FROM porteerang WHERE bande=? ORDER BY rang,id"
+    } else {
+        "SELECT rang,duree_gest,nv,mn,tx_mn_nt,sev,ad,re FROM porteerang ORDER BY rang,id"
+    };
+    let mut query = sqlx::query_as::<
+        _,
+        (
+            i64,
+            Option<f64>,
+            Option<f64>,
+            Option<f64>,
+            Option<f64>,
+            Option<f64>,
+            Option<f64>,
+            Option<f64>,
+        ),
+    >(sql);
+    if let Some(band) = band {
+        query = query.bind(band);
+    }
+    Ok(query
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .map(|row| GtttLitter {
+            rank: row.0,
+            gestation: row.1,
+            live_born: row.2,
+            stillborn: row.3,
+            stillborn_rate: row.4,
+            weaned: row.5,
+            adopted: row.6,
+            removed: row.7,
+        })
+        .collect())
+}
+
+fn gttt_real_total(litter: &GtttLitter) -> f64 {
+    let base = litter.live_born.unwrap_or(0.0) + litter.stillborn.unwrap_or(0.0);
+    match (litter.stillborn, litter.stillborn_rate) {
+        (Some(stillborn), Some(rate)) if stillborn > 0.0 && rate > 0.0 => {
+            (stillborn / (rate / 100.0)).max(base)
+        }
+        _ => base,
+    }
+}
+
+fn gttt_summary(litters: &[GtttLitter]) -> Value {
+    let valid: Vec<&GtttLitter> = litters
+        .iter()
+        .filter(|litter| litter.live_born.is_some())
+        .collect();
+    let mean = |values: Vec<f64>| {
+        (!values.is_empty()).then(|| values.iter().sum::<f64>() / values.len() as f64)
+    };
+    let total_real = valid.iter().map(|litter| gttt_real_total(litter)).sum::<f64>();
+    let total_stillborn = valid
+        .iter()
+        .map(|litter| litter.stillborn.unwrap_or(0.0))
+        .sum::<f64>();
+    let with_weaning: Vec<&GtttLitter> = valid
+        .iter()
+        .copied()
+        .filter(|litter| litter.weaned.is_some())
+        .collect();
+    let available = with_weaning
+        .iter()
+        .map(|litter| {
+            litter.live_born.unwrap_or(0.0) + litter.adopted.unwrap_or(0.0)
+                - litter.removed.unwrap_or(0.0)
+        })
+        .sum::<f64>();
+    let losses = with_weaning
+        .iter()
+        .map(|litter| {
+            litter.live_born.unwrap_or(0.0) + litter.adopted.unwrap_or(0.0)
+                - litter.removed.unwrap_or(0.0)
+                - litter.weaned.unwrap_or(0.0)
+        })
+        .sum::<f64>();
+    json!({
+        "portees": valid.len(),
+        "nes_totaux_moy": mean(valid.iter().map(|litter| gttt_real_total(litter)).collect::<Vec<_>>()).map(|value| (value * 100.0).round() / 100.0),
+        "nes_vifs_moy": mean(valid.iter().filter_map(|litter| litter.live_born).collect::<Vec<_>>()).map(|value| (value * 100.0).round() / 100.0),
+        "sevres_moy": mean(litters.iter().filter_map(|litter| litter.weaned).collect::<Vec<_>>()).map(|value| (value * 100.0).round() / 100.0),
+        "taux_mortnes": (total_real > 0.0).then(|| (total_stillborn / total_real * 1000.0).round() / 10.0),
+        "mortalite_allaitement": (available > 0.0).then(|| ((losses.max(0.0) / available) * 1000.0).round() / 10.0),
+        "total_sevres": litters.iter().map(|litter| litter.weaned.unwrap_or(0.0)).sum::<f64>().round() as i64,
+        "gestation_moy": mean(litters.iter().filter_map(|litter| litter.gestation).collect::<Vec<_>>()).map(|value| (value * 10.0).round() / 10.0),
+    })
+}
+
+fn gttt_rank_rows(litters: &[GtttLitter]) -> Vec<Value> {
+    let mut ranks: Vec<i64> = litters.iter().map(|litter| litter.rank).collect();
+    ranks.sort_unstable();
+    ranks.dedup();
+    ranks
+        .into_iter()
+        .map(|rank| {
+            let selected = litters
+                .iter()
+                .filter(|litter| litter.rank == rank)
+                .cloned()
+                .collect::<Vec<_>>();
+            let mut value = gttt_summary(&selected);
+            value
+                .as_object_mut()
+                .expect("résumé GTTT objet")
+                .insert("rang".into(), json!(rank));
+            value
+        })
+        .collect()
 }
 
 async fn productivite(
@@ -2158,4 +2300,41 @@ async fn compatibility_fallback(
     if request.method()!=axum::http::Method::GET{return(StatusCode::NOT_IMPLEMENTED,Html(format!("<!doctype html><meta charset='utf-8'><main style='font-family:sans-serif;max-width:760px;margin:60px auto'><h1>EO-Suivi Rust</h1><p>La route <code>{path}</code> n’est pas encore reliée à une action Rust.</p><p><a href='/'>Retour</a></p></main>"))).into_response()}
     let Some(Extension(session))=session else{return Redirect::to("/login").into_response()};
     let mut ctx=context(&session);ctx.insert("title".into(),json!(path.trim_matches('/').replace('-'," ")));ctx.insert("description".into(),json!("Module reconnu par la couche de compatibilité Rust. Les données restent intactes dans SQLite."));ctx.insert("columns".into(),Value::Array(vec![]));ctx.insert("rows".into(),Value::Array(vec![]));match render(&state,"liste.html",Value::Object(ctx)){Ok(html)=>html.into_response(),Err(error)=>error.into_response()}
+}
+
+#[cfg(test)]
+mod gttt_tests {
+    use super::*;
+
+    fn litter(
+        live_born: f64,
+        stillborn: f64,
+        stillborn_rate: Option<f64>,
+        weaned: f64,
+        adopted: f64,
+        removed: f64,
+    ) -> GtttLitter {
+        GtttLitter {
+            rank: 1,
+            gestation: Some(115.0),
+            live_born: Some(live_born),
+            stillborn: Some(stillborn),
+            stillborn_rate,
+            weaned: Some(weaned),
+            adopted: Some(adopted),
+            removed: Some(removed),
+        }
+    }
+
+    #[test]
+    fn taux_mortnes_utilise_mortnes_sur_nes_totaux() {
+        let summary = gttt_summary(&[litter(13.0, 1.0, None, 11.0, 0.0, 0.0)]);
+        assert_eq!(summary["taux_mortnes"], json!(7.1));
+    }
+
+    #[test]
+    fn mortalite_allaitement_tient_compte_adoptions_retraits() {
+        let summary = gttt_summary(&[litter(13.0, 1.0, None, 11.0, 2.0, 1.0)]);
+        assert_eq!(summary["mortalite_allaitement"], json!(21.4));
+    }
 }
