@@ -72,6 +72,32 @@ async fn schema_complet_et_ecritures_compatibles() -> anyhow::Result<()> {
         .bind(sale_session).execute(&mut *tx).await?;
     sqlx::query("INSERT INTO chargeventedirecte(session_vente_id,categorie,libelle,montant) VALUES(?,'découpe','Découpe',25)")
         .bind(sale_session).execute(&mut *tx).await?;
+    let product = sqlx::query("INSERT INTO produitventedirecte(nom,prix,unite,actif,ordre,quantite_disponible) VALUES('Colis test',12.5,'kg',1,1,10)")
+        .execute(&mut *tx).await?.last_insert_rowid();
+    let order = sqlx::query("INSERT INTO commandeventedirecte(session_vente_id,nom_client,telephone,statut,total) VALUES(?,'Client test','0102030405','nouvelle',37.5)")
+        .bind(sale_session).execute(&mut *tx).await?.last_insert_rowid();
+    sqlx::query("INSERT INTO lignecommandeventedirecte(commande_id,produit_id,nom_produit,prix_unitaire,unite,quantite,total_ligne) VALUES(?,?,'Colis test',12.5,'kg',3,37.5)")
+        .bind(order).bind(product).execute(&mut *tx).await?;
+    sqlx::query("UPDATE produitventedirecte SET quantite_disponible=quantite_disponible-3 WHERE id=?")
+        .bind(product).execute(&mut *tx).await?;
+    let reserved_stock: f64 = sqlx::query_scalar("SELECT quantite_disponible FROM produitventedirecte WHERE id=?")
+        .bind(product).fetch_one(&mut *tx).await?;
+    assert_eq!(reserved_stock, 7.0);
+    // Une modification rend d'abord l'ancienne réservation, puis réserve la nouvelle.
+    sqlx::query("UPDATE produitventedirecte SET quantite_disponible=quantite_disponible+3 WHERE id=?")
+        .bind(product).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM lignecommandeventedirecte WHERE commande_id=?")
+        .bind(order).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO lignecommandeventedirecte(commande_id,produit_id,nom_produit,prix_unitaire,unite,quantite,total_ligne) VALUES(?,?,'Colis test',12.5,'kg',5,62.5)")
+        .bind(order).bind(product).execute(&mut *tx).await?;
+    sqlx::query("UPDATE produitventedirecte SET quantite_disponible=quantite_disponible-5 WHERE id=?")
+        .bind(product).execute(&mut *tx).await?;
+    let edited_stock: f64 = sqlx::query_scalar("SELECT quantite_disponible FROM produitventedirecte WHERE id=?")
+        .bind(product).fetch_one(&mut *tx).await?;
+    assert_eq!(edited_stock, 5.0);
+    let preparation: f64 = sqlx::query_scalar("SELECT CAST(SUM(l.quantite) AS REAL) FROM lignecommandeventedirecte l JOIN commandeventedirecte c ON c.id=l.commande_id WHERE c.session_vente_id=? AND c.statut<>'annulee' AND l.produit_id=?")
+        .bind(sale_session).bind(product).fetch_one(&mut *tx).await?;
+    assert_eq!(preparation, 5.0);
     tx.rollback().await?;
 
     let check: String = sqlx::query_scalar("PRAGMA quick_check")
