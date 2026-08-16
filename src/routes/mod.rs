@@ -1,11 +1,12 @@
 use crate::auth::{self, SessionData};
 use crate::config::Config;
 use crate::db;
+use crate::economic_import::{self, ImportLine};
 use crate::error::{AppError, AppResult};
 use crate::models::{
     Bande, CompteurEnergie, Evenement, ProduitVenteDirecte, ReleveCompteur, Truie, Utilisateur,
 };
-use axum::extract::{Extension, Form, Multipart, Path, Query, State};
+use axum::extract::{DefaultBodyLimit, Extension, Form, Multipart, Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
@@ -17,7 +18,7 @@ use minijinja::Environment;
 use serde_json::{json, Map, Value};
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Column, Row, SqlitePool, TypeInfo, ValueRef};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -109,6 +110,19 @@ pub fn router(state: AppState) -> Router {
         .route("/energie/modele.csv", get(energie_modele_csv))
         .route("/energie/import", post(energie_import))
         .route("/economique", get(economique))
+        .route(
+            "/economique/import-pdf",
+            post(economique_import_pdf).layer(DefaultBodyLimit::max(10 * 1024 * 1024)),
+        )
+        .route("/economique/import/{token}", get(economique_import_apercu))
+        .route(
+            "/economique/import/{token}/confirmer",
+            post(economique_import_confirmer),
+        )
+        .route(
+            "/economique/import/{token}/annuler",
+            post(economique_import_annuler),
+        )
         .route("/economique/aliment", post(economique_aliment))
         .route("/economique/veto", post(economique_veto))
         .route("/economique/vente", post(economique_vente))
@@ -2368,6 +2382,7 @@ async fn energie_import(
 async fn economique(
     State(state): State<AppState>,
     Extension(session): Extension<SessionData>,
+    Query(query): Query<HashMap<String, String>>,
 ) -> AppResult<Html<String>> {
     let ventes_total: f64 = sqlx::query_scalar("SELECT CAST(COALESCE(SUM(montant_net),0) AS REAL) FROM venteapport").fetch_one(&state.pool).await?;
     let aliment: f64 = sqlx::query_scalar("SELECT CAST(COALESCE(SUM(montant_ht),0) AS REAL) FROM livraisonaliment").fetch_one(&state.pool).await?;
@@ -2385,6 +2400,7 @@ async fn economique(
     let valuations = generic_rows(&state.pool,"SELECT id,num_apport,date,libelle,montant,categorie,CASE WHEN lower(COALESCE(categorie,''))='retenue' THEN 1 ELSE 0 END AS est_retenue FROM valorisationapport ORDER BY date DESC,id DESC LIMIT 200").await?;
     let monthly = generic_rows(&state.pool,"WITH RECURSIVE mois(m) AS (SELECT date('now','start of month','-11 months') UNION ALL SELECT date(m,'+1 month') FROM mois WHERE m<date('now','start of month')),depenses AS (SELECT substr(date,1,7) AS m,SUM(COALESCE(montant_ht,0)) AS montant FROM livraisonaliment GROUP BY m UNION ALL SELECT substr(date,1,7),SUM(COALESCE(montant_ht,0)) FROM achatveto GROUP BY substr(date,1,7) UNION ALL SELECT substr(date,1,7),SUM(COALESCE(montant_ht,0)) FROM achatsemence GROUP BY substr(date,1,7) UNION ALL SELECT substr(date,1,7),SUM(COALESCE(montant_net,montant_ht,0)) FROM achatgenetique GROUP BY substr(date,1,7)),revenus AS (SELECT substr(date,1,7) AS m,SUM(COALESCE(montant_net,0)) AS montant,SUM(COALESCE(poids_total,0)) AS poids FROM venteapport GROUP BY m) SELECT substr(m.m,1,7) AS mois,ROUND(COALESCE((SELECT SUM(d.montant) FROM depenses d WHERE d.m=substr(m.m,1,7)),0),2) AS depenses,ROUND(COALESCE(r.montant,0),2) AS revenus,ROUND(r.montant/NULLIF(r.poids,0),3) AS prix_net_kg FROM mois m LEFT JOIN revenus r ON r.m=substr(m.m,1,7) ORDER BY m.m").await?;
     let unallocated = generic_rows(&state.pool,"SELECT 'Aliment' AS categorie,ROUND(COALESCE(SUM(montant_ht),0),2) AS montant FROM livraisonaliment WHERE bande_id IS NULL UNION ALL SELECT 'Vétérinaire',ROUND(COALESCE(SUM(montant_ht),0),2) FROM achatveto WHERE bande_id IS NULL UNION ALL SELECT 'Semence',ROUND(COALESCE(SUM(montant_ht),0),2) FROM achatsemence WHERE bande_id IS NULL UNION ALL SELECT 'Génétique',ROUND(COALESCE(SUM(COALESCE(montant_net,montant_ht)),0),2) FROM achatgenetique WHERE bande_code IS NULL OR trim(bande_code)=''").await?;
+    let imports = generic_rows(&state.pool,"SELECT token,replace(type_import,'economique:','') AS type_import,nom_fichier,statut,cree_le,applique_le FROM importjournal WHERE type_import LIKE 'economique:%' ORDER BY cree_le DESC LIMIT 15").await?;
     let total_weight: f64 = sqlx::query_scalar("SELECT CAST(COALESCE(SUM(poids_total),0) AS REAL) FROM venteapport").fetch_one(&state.pool).await?;
     let total_pigs: i64 = sqlx::query_scalar("SELECT CAST(COALESCE(SUM(nb_porcs),0) AS INTEGER) FROM venteapport").fetch_one(&state.pool).await?;
     let mut ctx = context(&session);
@@ -2396,8 +2412,319 @@ async fn economique(
     ctx.insert("valorisations".into(),Value::Array(valuations));
     ctx.insert("mensuel".into(),Value::Array(monthly));
     ctx.insert("non_affectes".into(),Value::Array(unallocated));
+    ctx.insert("imports_pdf".into(),Value::Array(imports));
+    ctx.insert("import_ok".into(),json!(query.get("import_ok")));
     ctx.insert("today".into(),json!(Local::now().date_naive().format("%Y-%m-%d").to_string()));
     render(&state,"economique.html",Value::Object(ctx))
+}
+
+fn require_economic_import(session: &SessionData) -> AppResult<()> {
+    if matches!(session.role.as_str(), "admin" | "eleveur") {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden)
+    }
+}
+
+fn import_detail_str<'a>(line: &'a ImportLine, key: &str) -> Option<&'a str> {
+    line.details.get(key).and_then(Value::as_str).filter(|value| !value.is_empty())
+}
+
+fn import_detail_f64(line: &ImportLine, key: &str) -> Option<f64> {
+    line.details.get(key).and_then(Value::as_f64)
+}
+
+fn import_detail_i64(line: &ImportLine, key: &str) -> Option<i64> {
+    line.details.get(key).and_then(|value| value.as_i64().or_else(|| value.as_f64().map(|number| number.round() as i64)))
+}
+
+fn import_key(line: &ImportLine) -> String {
+    let detail = match line.kind.as_str() {
+        "aliment" => format!("{}|{}", import_detail_str(line,"produit").unwrap_or(""), import_detail_str(line,"silo").unwrap_or("")),
+        "veto" => import_detail_str(line,"produit").unwrap_or("").to_string(),
+        "vente" | "synthese" => import_detail_str(line,"frappe").unwrap_or("").to_string(),
+        "valorisation" | "retenue" => format!("{}|{}", line.kind, line.label),
+        _ => String::new(),
+    };
+    format!("{}|{}|{}",line.kind,line.reference.as_deref().unwrap_or(""),detail.to_lowercase())
+}
+
+async fn economic_preview_action(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    line: &ImportLine,
+    seen: &mut HashSet<String>,
+) -> AppResult<(String, Option<String>)> {
+    if line.reference.as_deref().map(str::trim).unwrap_or_default().is_empty() {
+        return Ok(("erreur".into(), Some("Référence de facture, apport ou frappe manquante".into())));
+    }
+    if line.amount.is_none() && line.kind != "synthese" {
+        return Ok(("erreur".into(), Some("Montant non détecté de façon fiable".into())));
+    }
+    let key = import_key(line);
+    if !seen.insert(key) {
+        return Ok(("ignorer".into(), Some("Doublon dans le document".into())));
+    }
+    let reference = line.reference.as_deref().unwrap_or_default();
+    let exists: i64 = match line.kind.as_str() {
+        "aliment" => sqlx::query_scalar("SELECT COUNT(*) FROM livraisonaliment WHERE COALESCE(num_facture,'')=? AND lower(COALESCE(produit,''))=lower(?) AND COALESCE(silo,'')=COALESCE(?, '')")
+            .bind(reference).bind(import_detail_str(line,"produit")).bind(import_detail_str(line,"silo")).fetch_one(&mut **transaction).await?,
+        "veto" => sqlx::query_scalar("SELECT COUNT(*) FROM achatveto WHERE COALESCE(num_facture,'')=? AND lower(COALESCE(produit,''))=lower(?)")
+            .bind(reference).bind(import_detail_str(line,"produit")).fetch_one(&mut **transaction).await?,
+        "semence" => sqlx::query_scalar("SELECT COUNT(*) FROM achatsemence WHERE COALESCE(num_facture,'')=?")
+            .bind(reference).fetch_one(&mut **transaction).await?,
+        "genetique" => sqlx::query_scalar("SELECT COUNT(*) FROM achatgenetique WHERE COALESCE(num_facture,'')=?")
+            .bind(reference).fetch_one(&mut **transaction).await?,
+        "vente" => sqlx::query_scalar("SELECT COUNT(*) FROM venteapport WHERE COALESCE(num_apport,'')=? AND COALESCE(frappe,'')=COALESCE(?, '')")
+            .bind(reference).bind(import_detail_str(line,"frappe")).fetch_one(&mut **transaction).await?,
+        "synthese" => sqlx::query_scalar("SELECT COUNT(*) FROM venteapport WHERE COALESCE(frappe,'')=?")
+            .bind(reference).fetch_one(&mut **transaction).await?,
+        "valorisation" | "retenue" => 1,
+        _ => return Ok(("erreur".into(),Some("Type de ligne non pris en charge".into()))),
+    };
+    let action = if matches!(line.kind.as_str(), "valorisation" | "retenue") {
+        "remplacer"
+    } else if exists > 0 {
+        "mettre_a_jour"
+    } else {
+        "ajouter"
+    };
+    Ok((action.into(), None))
+}
+
+async fn economique_import_pdf(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    mut multipart: Multipart,
+) -> AppResult<Response> {
+    require_economic_import(&session)?;
+    let mut csrf = None;
+    let mut filename = "document.pdf".to_string();
+    let mut data = None;
+    while let Some(field) = multipart.next_field().await.map_err(|error|AppError::Invalid(error.to_string()))? {
+        match field.name() {
+            Some("csrf_token") => csrf = Some(field.text().await.map_err(|error|AppError::Invalid(error.to_string()))?),
+            Some("fichier") => {
+                filename = field.file_name().unwrap_or("document.pdf").chars()
+                    .filter(|character| character.is_alphanumeric() || ".-_ ".contains(*character))
+                    .take(180).collect();
+                data = Some(field.bytes().await.map_err(|error|AppError::Invalid(error.to_string()))?);
+            }
+            _ => {}
+        }
+    }
+    if csrf.as_deref() != Some(session.csrf.as_str()) {
+        return Err(AppError::Forbidden);
+    }
+    let bytes = data.ok_or_else(||AppError::Invalid("Fichier PDF manquant".into()))?;
+    if bytes.len() > 8 * 1024 * 1024 {
+        return Err(AppError::Invalid("PDF trop volumineux (maximum 8 Mo)".into()));
+    }
+    if !filename.to_lowercase().ends_with(".pdf") {
+        return Err(AppError::Invalid("Seuls les fichiers PDF sont acceptés dans cette version".into()));
+    }
+    let text = economic_import::extract_pdf_text(&bytes).map_err(AppError::Invalid)?;
+    let parsed = economic_import::parse_document(&text).map_err(AppError::Invalid)?;
+    let token = uuid::Uuid::new_v4().simple().to_string();
+    let mut transaction = state.pool.begin().await?;
+    sqlx::query("DELETE FROM importjournal WHERE statut='apercu' AND cree_le<datetime('now','-1 day')")
+        .execute(&mut *transaction).await?;
+    sqlx::query("INSERT INTO importjournal(token,type_import,nom_fichier,statut,cree_par) VALUES(?,?,?,'apercu',?)")
+        .bind(&token).bind(format!("economique:{}",parsed.document_type)).bind(&filename).bind(session.uid)
+        .execute(&mut *transaction).await?;
+    let mut seen = HashSet::new();
+    let mut counts = HashMap::<String,i64>::new();
+    for (index,line) in parsed.lines.iter().enumerate() {
+        let (action,anomaly) = economic_preview_action(&mut transaction,line,&mut seen).await?;
+        *counts.entry(action.clone()).or_default() += 1;
+        sqlx::query("INSERT INTO importligne(token,numero_ligne,action,anomalie,donnees_json) VALUES(?,?,?,?,?)")
+            .bind(&token).bind(index as i64 + 1).bind(&action).bind(&anomaly)
+            .bind(serde_json::to_string(line).map_err(|error|AppError::Internal(error.into()))?)
+            .execute(&mut *transaction).await?;
+    }
+    let summary = json!({
+        "ajouter": counts.get("ajouter").copied().unwrap_or_default(),
+        "mettre_a_jour": counts.get("mettre_a_jour").copied().unwrap_or_default(),
+        "remplacer": counts.get("remplacer").copied().unwrap_or_default(),
+        "ignorer": counts.get("ignorer").copied().unwrap_or_default(),
+        "erreur": counts.get("erreur").copied().unwrap_or_default(),
+        "avertissements": parsed.warnings,
+    });
+    sqlx::query("UPDATE importjournal SET resume=? WHERE token=?")
+        .bind(summary.to_string()).bind(&token).execute(&mut *transaction).await?;
+    transaction.commit().await?;
+    Ok(Redirect::to(&format!("/economique/import/{token}")).into_response())
+}
+
+async fn economique_import_apercu(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Path(token): Path<String>,
+) -> AppResult<Html<String>> {
+    require_economic_import(&session)?;
+    let journal = sqlx::query_as::<_,(String,Option<String>,Option<String>,Option<i64>)>("SELECT type_import,nom_fichier,resume,cree_par FROM importjournal WHERE token=? AND statut='apercu' AND type_import LIKE 'economique:%'")
+        .bind(&token).fetch_optional(&state.pool).await?.ok_or(AppError::NotFound)?;
+    if journal.3 != Some(session.uid) && !session.est_admin() {
+        return Err(AppError::Forbidden);
+    }
+    let stored = sqlx::query_as::<_,(i64,String,Option<String>,String)>("SELECT numero_ligne,action,anomalie,donnees_json FROM importligne WHERE token=? ORDER BY numero_ligne")
+        .bind(&token).fetch_all(&state.pool).await?;
+    let mut rows = Vec::new();
+    for (number,action,anomaly,raw) in stored {
+        let line: ImportLine = serde_json::from_str(&raw).map_err(|error|AppError::Internal(error.into()))?;
+        rows.push(json!({"ligne":number,"action":action,"anomalie":anomaly,"type":line.kind,"date":line.date,"reference":line.reference,"libelle":line.label,"quantite":line.quantity,"prix_unitaire":line.unit_price,"montant":line.amount}));
+    }
+    let summary = journal.2.as_deref().and_then(|raw|serde_json::from_str::<Value>(raw).ok()).unwrap_or_else(||json!({}));
+    let bands = generic_rows(&state.pool,"SELECT id,code,date_mb,site FROM bande ORDER BY active DESC,date_mb IS NULL,date_mb,id").await?;
+    let mut ctx = context(&session);
+    ctx.insert("token".into(),json!(token));
+    ctx.insert("type_document".into(),json!(journal.0.trim_start_matches("economique:")));
+    ctx.insert("nom_fichier".into(),json!(journal.1));
+    ctx.insert("resume".into(),summary);
+    ctx.insert("lignes".into(),Value::Array(rows));
+    ctx.insert("bandes".into(),Value::Array(bands));
+    render(&state,"economique_import_apercu.html",Value::Object(ctx))
+}
+
+async fn economique_import_confirmer(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Path(token): Path<String>,
+    Form(form): Form<HashMap<String,String>>,
+) -> AppResult<Response> {
+    require_economic_import(&session)?;
+    verify_csrf(&session,&form)?;
+    let mut transaction = state.pool.begin().await?;
+    let owner: Option<i64> = sqlx::query_scalar("SELECT cree_par FROM importjournal WHERE token=? AND statut='apercu' AND type_import LIKE 'economique:%'")
+        .bind(&token).fetch_optional(&mut *transaction).await?.flatten();
+    if owner.is_none() {
+        return Err(AppError::NotFound);
+    }
+    if owner != Some(session.uid) && !session.est_admin() {
+        return Err(AppError::Forbidden);
+    }
+    let errors: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM importligne WHERE token=? AND action='erreur'")
+        .bind(&token).fetch_one(&mut *transaction).await?;
+    if errors > 0 {
+        return Err(AppError::Invalid("L'import contient une erreur bloquante".into()));
+    }
+    let band_id = form_i64(&form,"bande_id");
+    let band_code: Option<String> = if let Some(id)=band_id {
+        Some(sqlx::query_scalar("SELECT code FROM bande WHERE id=?").bind(id).fetch_optional(&mut *transaction).await?.ok_or_else(||AppError::Invalid("Bande inconnue".into()))?)
+    } else { None };
+    let stored = sqlx::query_as::<_,(i64,String)>("SELECT numero_ligne,donnees_json FROM importligne WHERE token=? AND action NOT IN ('erreur','ignorer') ORDER BY numero_ligne")
+        .bind(&token).fetch_all(&mut *transaction).await?;
+    let mut lines = Vec::new();
+    for (number,raw) in stored {
+        let line: ImportLine = serde_json::from_str(&raw).map_err(|_|AppError::Invalid(format!("Données invalides à la ligne {number}")))?;
+        lines.push(line);
+    }
+    let mut cleared_apports = HashSet::new();
+    let mut applied = 0_i64;
+    for line in &lines {
+        let reference = line.reference.as_deref().ok_or_else(||AppError::Invalid("Référence manquante".into()))?;
+        if matches!(line.kind.as_str(),"vente"|"valorisation"|"retenue") && cleared_apports.insert(reference.to_string()) {
+            sqlx::query("DELETE FROM valorisationapport WHERE num_apport=?").bind(reference).execute(&mut *transaction).await?;
+        }
+        match line.kind.as_str() {
+            "aliment" => {
+                let id: Option<i64> = sqlx::query_scalar("SELECT id FROM livraisonaliment WHERE COALESCE(num_facture,'')=? AND lower(COALESCE(produit,''))=lower(?) AND COALESCE(silo,'')=COALESCE(?, '') ORDER BY id LIMIT 1")
+                    .bind(reference).bind(import_detail_str(line,"produit")).bind(import_detail_str(line,"silo")).fetch_optional(&mut *transaction).await?;
+                if let Some(id)=id {
+                    sqlx::query("UPDATE livraisonaliment SET date=?,fournisseur=?,produit=?,silo=?,tonnage=?,pu_ht=?,montant_ht=?,bande_id=COALESCE(?,bande_id) WHERE id=?")
+                        .bind(line.date.as_deref()).bind(import_detail_str(line,"fournisseur")).bind(import_detail_str(line,"produit")).bind(import_detail_str(line,"silo")).bind(import_detail_f64(line,"tonnage")).bind(import_detail_f64(line,"pu_ht")).bind(import_detail_f64(line,"montant_ht")).bind(band_id).bind(id).execute(&mut *transaction).await?;
+                } else {
+                    sqlx::query("INSERT INTO livraisonaliment(date,fournisseur,produit,silo,tonnage,pu_ht,montant_ht,num_facture,bande_id) VALUES(?,?,?,?,?,?,?,?,?)")
+                        .bind(line.date.as_deref()).bind(import_detail_str(line,"fournisseur")).bind(import_detail_str(line,"produit")).bind(import_detail_str(line,"silo")).bind(import_detail_f64(line,"tonnage")).bind(import_detail_f64(line,"pu_ht")).bind(import_detail_f64(line,"montant_ht")).bind(reference).bind(band_id).execute(&mut *transaction).await?;
+                }
+            }
+            "veto" => {
+                let id: Option<i64> = sqlx::query_scalar("SELECT id FROM achatveto WHERE COALESCE(num_facture,'')=? AND lower(COALESCE(produit,''))=lower(?) ORDER BY id LIMIT 1")
+                    .bind(reference).bind(import_detail_str(line,"produit")).fetch_optional(&mut *transaction).await?;
+                if let Some(id)=id {
+                    sqlx::query("UPDATE achatveto SET date=?,produit=?,quantite=?,pu_ht=?,montant_ht=?,fournisseur=?,bande_id=COALESCE(?,bande_id) WHERE id=?")
+                        .bind(line.date.as_deref()).bind(import_detail_str(line,"produit")).bind(import_detail_f64(line,"quantite")).bind(import_detail_f64(line,"pu_ht")).bind(import_detail_f64(line,"montant_ht")).bind(import_detail_str(line,"fournisseur")).bind(band_id).bind(id).execute(&mut *transaction).await?;
+                } else {
+                    sqlx::query("INSERT INTO achatveto(date,produit,quantite,pu_ht,montant_ht,num_facture,fournisseur,bande_id) VALUES(?,?,?,?,?,?,?,?)")
+                        .bind(line.date.as_deref()).bind(import_detail_str(line,"produit")).bind(import_detail_f64(line,"quantite")).bind(import_detail_f64(line,"pu_ht")).bind(import_detail_f64(line,"montant_ht")).bind(reference).bind(import_detail_str(line,"fournisseur")).bind(band_id).execute(&mut *transaction).await?;
+                }
+            }
+            "semence" => {
+                let id: Option<i64> = sqlx::query_scalar("SELECT id FROM achatsemence WHERE COALESCE(num_facture,'')=? ORDER BY id LIMIT 1").bind(reference).fetch_optional(&mut *transaction).await?;
+                if let Some(id)=id {
+                    sqlx::query("UPDATE achatsemence SET date=?,fournisseur=?,designation=?,nb_doses=?,montant_ht=?,montant_ttc=?,bande_id=COALESCE(?,bande_id) WHERE id=?")
+                        .bind(line.date.as_deref()).bind(import_detail_str(line,"fournisseur")).bind(import_detail_str(line,"designation")).bind(import_detail_i64(line,"nb_doses")).bind(import_detail_f64(line,"montant_ht")).bind(import_detail_f64(line,"montant_ttc")).bind(band_id).bind(id).execute(&mut *transaction).await?;
+                } else {
+                    sqlx::query("INSERT INTO achatsemence(date,num_facture,fournisseur,designation,nb_doses,montant_ht,montant_ttc,bande_id) VALUES(?,?,?,?,?,?,?,?)")
+                        .bind(line.date.as_deref()).bind(reference).bind(import_detail_str(line,"fournisseur")).bind(import_detail_str(line,"designation")).bind(import_detail_i64(line,"nb_doses")).bind(import_detail_f64(line,"montant_ht")).bind(import_detail_f64(line,"montant_ttc")).bind(band_id).execute(&mut *transaction).await?;
+                }
+            }
+            "genetique" => {
+                let id: Option<i64> = sqlx::query_scalar("SELECT id FROM achatgenetique WHERE COALESCE(num_facture,'')=? ORDER BY id LIMIT 1").bind(reference).fetch_optional(&mut *transaction).await?;
+                if let Some(id)=id {
+                    sqlx::query("UPDATE achatgenetique SET date=?,fournisseur=?,designation=?,nb_animaux=?,poids_total=?,prix_moyen=?,montant_ht=?,montant_net=?,bande_code=COALESCE(?,bande_code) WHERE id=?")
+                        .bind(line.date.as_deref()).bind(import_detail_str(line,"fournisseur")).bind(import_detail_str(line,"designation")).bind(import_detail_i64(line,"nb_animaux")).bind(import_detail_f64(line,"poids_total")).bind(import_detail_f64(line,"prix_moyen")).bind(import_detail_f64(line,"montant_ht")).bind(import_detail_f64(line,"montant_net")).bind(band_code.as_deref()).bind(id).execute(&mut *transaction).await?;
+                } else {
+                    sqlx::query("INSERT INTO achatgenetique(date,num_facture,fournisseur,designation,nb_animaux,poids_total,prix_moyen,montant_ht,montant_net,bande_code) VALUES(?,?,?,?,?,?,?,?,?,?)")
+                        .bind(line.date.as_deref()).bind(reference).bind(import_detail_str(line,"fournisseur")).bind(import_detail_str(line,"designation")).bind(import_detail_i64(line,"nb_animaux")).bind(import_detail_f64(line,"poids_total")).bind(import_detail_f64(line,"prix_moyen")).bind(import_detail_f64(line,"montant_ht")).bind(import_detail_f64(line,"montant_net")).bind(band_code.as_deref()).execute(&mut *transaction).await?;
+                }
+            }
+            "vente" => {
+                let frappe=import_detail_str(line,"frappe");
+                let id: Option<i64> = sqlx::query_scalar("SELECT id FROM venteapport WHERE COALESCE(num_apport,'')=? AND COALESCE(frappe,'')=COALESCE(?, '') ORDER BY id LIMIT 1").bind(reference).bind(frappe).fetch_optional(&mut *transaction).await?;
+                let lots_json=line.details.get("lots_json").map(Value::to_string);
+                if let Some(id)=id {
+                    sqlx::query("UPDATE venteapport SET date=?,bande_id=COALESCE(?,bande_id),frappe=?,nb_porcs=?,poids_total=?,poids_moyen=?,prix_moyen=?,plus_value=?,montant_net=?,tmp=?,muscle_gamme=?,muscle_lot=?,total_retenues=?,semaine=?,lots_json=? WHERE id=?")
+                        .bind(line.date.as_deref()).bind(band_id).bind(frappe).bind(import_detail_i64(line,"nb_porcs")).bind(import_detail_f64(line,"poids_total")).bind(import_detail_f64(line,"poids_moyen")).bind(import_detail_f64(line,"prix_moyen")).bind(import_detail_f64(line,"plus_value")).bind(import_detail_f64(line,"montant_net")).bind(import_detail_f64(line,"tmp")).bind(import_detail_f64(line,"muscle_gamme")).bind(import_detail_f64(line,"muscle_lot")).bind(import_detail_f64(line,"total_retenues")).bind(import_detail_str(line,"semaine")).bind(lots_json).bind(id).execute(&mut *transaction).await?;
+                } else {
+                    sqlx::query("INSERT INTO venteapport(date,num_apport,bande_id,frappe,nb_porcs,poids_total,poids_moyen,prix_moyen,plus_value,montant_net,tmp,muscle_gamme,muscle_lot,total_retenues,semaine,lots_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+                        .bind(line.date.as_deref()).bind(reference).bind(band_id).bind(frappe).bind(import_detail_i64(line,"nb_porcs")).bind(import_detail_f64(line,"poids_total")).bind(import_detail_f64(line,"poids_moyen")).bind(import_detail_f64(line,"prix_moyen")).bind(import_detail_f64(line,"plus_value")).bind(import_detail_f64(line,"montant_net")).bind(import_detail_f64(line,"tmp")).bind(import_detail_f64(line,"muscle_gamme")).bind(import_detail_f64(line,"muscle_lot")).bind(import_detail_f64(line,"total_retenues")).bind(import_detail_str(line,"semaine")).bind(lots_json).execute(&mut *transaction).await?;
+                }
+            }
+            "valorisation" | "retenue" => {
+                sqlx::query("INSERT INTO valorisationapport(num_apport,date,libelle,montant,categorie) VALUES(?,?,?,?,?)")
+                    .bind(reference).bind(line.date.as_deref()).bind(&line.label).bind(line.amount).bind(&line.kind).execute(&mut *transaction).await?;
+            }
+            "synthese" => {
+                let id: Option<i64> = sqlx::query_scalar("SELECT id FROM venteapport WHERE COALESCE(frappe,'')=? ORDER BY date DESC,id DESC LIMIT 1").bind(reference).fetch_optional(&mut *transaction).await?;
+                if let Some(id)=id {
+                    sqlx::query("UPDATE venteapport SET poids_moyen=COALESCE(?,poids_moyen),tmp=COALESCE(?,tmp),tx_qualification=COALESCE(?,tx_qualification),nb_porcs=COALESCE(nb_porcs,?),plus_value=COALESCE(?,plus_value) WHERE id=?")
+                        .bind(import_detail_f64(line,"poids_moyen")).bind(import_detail_f64(line,"tmp")).bind(import_detail_f64(line,"tx_qualification")).bind(import_detail_i64(line,"nb_porcs")).bind(import_detail_f64(line,"plus_value")).bind(id).execute(&mut *transaction).await?;
+                } else {
+                    sqlx::query("INSERT INTO venteapport(date,bande_id,frappe,nb_porcs,poids_moyen,tmp,tx_qualification,plus_value) VALUES(?,?,?,?,?,?,?,?)")
+                        .bind(line.date.as_deref()).bind(band_id).bind(reference).bind(import_detail_i64(line,"nb_porcs")).bind(import_detail_f64(line,"poids_moyen")).bind(import_detail_f64(line,"tmp")).bind(import_detail_f64(line,"tx_qualification")).bind(import_detail_f64(line,"plus_value")).execute(&mut *transaction).await?;
+                }
+            }
+            _ => return Err(AppError::Invalid("Type de ligne non pris en charge".into())),
+        }
+        applied += 1;
+    }
+    for reference in cleared_apports {
+        sqlx::query("UPDATE venteapport SET total_retenues=(SELECT ROUND(COALESCE(SUM(ABS(montant)),0),2) FROM valorisationapport WHERE num_apport=? AND lower(COALESCE(categorie,''))='retenue') WHERE num_apport=?")
+            .bind(&reference).bind(&reference).execute(&mut *transaction).await?;
+    }
+    sqlx::query("UPDATE importjournal SET statut='applique',applique_le=CURRENT_TIMESTAMP WHERE token=?")
+        .bind(&token).execute(&mut *transaction).await?;
+    transaction.commit().await?;
+    db::journal(&state.pool,&session.identifiant,"import","economique",&format!("{applied} ligne(s), import {token}"),"/economique/import/confirmer").await;
+    Ok(Redirect::to(&format!("/economique?import_ok={applied}")).into_response())
+}
+
+async fn economique_import_annuler(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Path(token): Path<String>,
+    Form(form): Form<HashMap<String,String>>,
+) -> AppResult<Response> {
+    require_economic_import(&session)?;
+    verify_csrf(&session,&form)?;
+    let mut transaction=state.pool.begin().await?;
+    let owner:Option<i64>=sqlx::query_scalar("SELECT cree_par FROM importjournal WHERE token=? AND statut='apercu' AND type_import LIKE 'economique:%'").bind(&token).fetch_optional(&mut *transaction).await?.flatten();
+    if owner.is_none() { return Err(AppError::NotFound); }
+    if owner != Some(session.uid) && !session.est_admin() { return Err(AppError::Forbidden); }
+    sqlx::query("DELETE FROM importligne WHERE token=?").bind(&token).execute(&mut *transaction).await?;
+    sqlx::query("DELETE FROM importjournal WHERE token=? AND statut='apercu'").bind(&token).execute(&mut *transaction).await?;
+    transaction.commit().await?;
+    Ok(Redirect::to("/economique").into_response())
 }
 
 async fn economique_aliment(State(state):State<AppState>,Extension(session):Extension<SessionData>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;let amount=economic_amount(&form,"montant_ht").ok_or_else(||AppError::Invalid("Montant HT obligatoire".into()))?;sqlx::query("INSERT INTO livraisonaliment(date,fournisseur,produit,silo,tonnage,pu_ht,montant_ht,num_facture,site,bande_id) VALUES(?,?,?,?,?,?,?,?,?,?)").bind(form_text(&form,"date")).bind(form_text(&form,"fournisseur")).bind(form_text(&form,"produit")).bind(form_text(&form,"silo")).bind(form_f64(&form,"tonnage")).bind(form_f64(&form,"pu_ht")).bind(amount).bind(form_text(&form,"num_facture")).bind(form_text(&form,"site")).bind(form_i64(&form,"bande_id")).execute(&state.pool).await?;Ok(Redirect::to("/economique").into_response())}
