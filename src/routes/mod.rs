@@ -79,7 +79,10 @@ pub fn router(state: AppState) -> Router {
         .route("/gttt", get(gttt))
         .route("/productivite", get(productivite))
         .route("/reformes", get(reformes))
+        .route("/reformes/seuils", post(reformes_seuils))
+        .route("/reformes/criteres", post(reformes_criteres))
         .route("/cochettes", get(cochettes))
+        .route("/cochettes/criteres", post(cochettes_criteres))
         .route("/ifip", get(ifip))
         .route("/ifip/maj", post(ifip_maj))
         .route("/charcutiers", get(charcutiers))
@@ -1616,34 +1619,44 @@ async fn productivite(
     let mut ctx=context(&session);ctx.insert("bandes".into(),Value::Array(rows_to_json(rows)?));ctx.insert("mois".into(),json!(months));render(&state,"productivite.html",Value::Object(ctx))
 }
 
+async fn parameter_f64(pool:&SqlitePool,key:&str,default:f64)->AppResult<f64>{let value:Option<String>=sqlx::query_scalar("SELECT valeur FROM parametre WHERE cle=?").bind(key).fetch_optional(pool).await?.flatten();Ok(value.and_then(|value|parse_french_number(&value)).unwrap_or(default))}
+async fn parameter_list(pool:&SqlitePool,key:&str,defaults:&[&str])->AppResult<Vec<String>>{let value:Option<String>=sqlx::query_scalar("SELECT valeur FROM parametre WHERE cle=?").bind(key).fetch_optional(pool).await?.flatten();Ok(value.filter(|value|!value.trim().is_empty()).map(|value|value.split(',').map(str::trim).filter(|value|!value.is_empty()).map(str::to_string).collect()).unwrap_or_else(||defaults.iter().map(|value|(*value).to_string()).collect()))}
+
+async fn reformes_seuils(State(state):State<AppState>,Extension(session):Extension<SessionData>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;let keys=["seuil_nv_min","seuil_sevres_min","seuil_retours_max","seuil_ecrases_max","seuil_rang_max","seuil_chetifs_max"];let mut tx=state.pool.begin().await?;for key in keys{if let Some(value)=form_f64(&form,key).filter(|value|value.is_finite()&&*value>=0.0){sqlx::query("INSERT INTO parametre(cle,valeur) VALUES(?,?) ON CONFLICT(cle) DO UPDATE SET valeur=excluded.valeur").bind(key).bind(value.to_string()).execute(&mut *tx).await?}}tx.commit().await?;Ok(Redirect::to("/reformes").into_response())}
+async fn reformes_criteres(State(state):State<AppState>,Extension(session):Extension<SessionData>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;let allowed=["nv","sevres","retours","ecrases","rang","chetifs"];let selected=allowed.iter().filter(|code|form.contains_key(&format!("crit_{code}"))).copied().collect::<Vec<_>>();if selected.is_empty(){return Err(AppError::Invalid("Sélectionne au moins un critère".into()))}sqlx::query("INSERT INTO parametre(cle,valeur) VALUES('reforme_criteres',?) ON CONFLICT(cle) DO UPDATE SET valeur=excluded.valeur").bind(selected.join(",")).execute(&state.pool).await?;Ok(Redirect::to("/reformes").into_response())}
+async fn cochettes_criteres(State(state):State<AppState>,Extension(session):Extension<SessionData>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;let allowed=["nv","sevres","ecrases","retours","rang","chetifs","issf"];let selected=allowed.iter().filter(|code|form.contains_key(&format!("crit_{code}"))).take(4).copied().collect::<Vec<_>>();if selected.is_empty(){return Err(AppError::Invalid("Sélectionne au moins un critère".into()))}sqlx::query("INSERT INTO parametre(cle,valeur) VALUES('cochette_criteres',?) ON CONFLICT(cle) DO UPDATE SET valeur=excluded.valeur").bind(selected.join(",")).execute(&state.pool).await?;Ok(Redirect::to("/cochettes").into_response())}
+
 async fn reformes(
     State(state): State<AppState>,
     Extension(session): Extension<SessionData>,
 ) -> AppResult<Html<String>> {
-    list_page(
-        &state,
-        &session,
-        "Aide à la réforme",
-        "Truies actives classées selon les seuils enregistrés dans les paramètres.",
-        "SELECT * FROM (SELECT id,num_travail,bande_code,rang,perf_nv,perf_sevres,nb_retours,tx_chetifs,TRIM((CASE WHEN perf_nv IS NOT NULL AND perf_nv<CAST(COALESCE((SELECT valeur FROM parametre WHERE cle='seuil_nv_min'),'13') AS REAL) THEN 'nés vifs bas; ' ELSE '' END)||(CASE WHEN perf_sevres IS NOT NULL AND perf_sevres<CAST(COALESCE((SELECT valeur FROM parametre WHERE cle='seuil_sevres_min'),'11') AS REAL) THEN 'sevrés bas; ' ELSE '' END)||(CASE WHEN nb_retours IS NOT NULL AND nb_retours>CAST(COALESCE((SELECT valeur FROM parametre WHERE cle='seuil_retours_max'),'2') AS REAL) THEN 'retours élevés; ' ELSE '' END)||(CASE WHEN rang>CAST(COALESCE((SELECT valeur FROM parametre WHERE cle='seuil_rang_max'),'7') AS REAL) THEN 'rang élevé; ' ELSE '' END)) AS criteres FROM truie WHERE reformee=0) WHERE criteres<>'' ORDER BY rang DESC,num_travail",
-        &["id", "num_travail", "bande_code", "rang", "perf_nv", "perf_sevres", "nb_retours", "tx_chetifs", "criteres"],
-    )
-    .await
+    let seuils=json!({
+        "seuil_nv_min":parameter_f64(&state.pool,"seuil_nv_min",13.0).await?,
+        "seuil_sevres_min":parameter_f64(&state.pool,"seuil_sevres_min",11.0).await?,
+        "seuil_retours_max":parameter_f64(&state.pool,"seuil_retours_max",2.0).await?,
+        "seuil_ecrases_max":parameter_f64(&state.pool,"seuil_ecrases_max",4.0).await?,
+        "seuil_rang_max":parameter_f64(&state.pool,"seuil_rang_max",7.0).await?,
+        "seuil_chetifs_max":parameter_f64(&state.pool,"seuil_chetifs_max",20.0).await?,
+    });
+    let criteria=parameter_list(&state.pool,"reforme_criteres",&["nv","sevres","retours","ecrases","rang","chetifs"]).await?;
+    let raw=generic_rows(&state.pool,"SELECT id,num_travail,bande_code,rang,perf_nv,perf_sevres,nb_retours,tx_chetifs,CAST(COALESCE((SELECT SUM(p.nb) FROM perteporcelet p WHERE p.truie_id=t.id AND lower(COALESCE(p.cause,'')) LIKE '%cras%'),0) AS INTEGER) AS ecrases FROM truie t WHERE reformee=0 ORDER BY num_travail").await?;
+    let mut rows=Vec::new();
+    for mut row in raw{let object=row.as_object_mut().expect("truie objet");let mut reasons=Vec::new();let f=|key:&str|object.get(key).and_then(Value::as_f64);let i=|key:&str|object.get(key).and_then(Value::as_i64).map(|value|value as f64);if criteria.iter().any(|c|c=="nv")&&f("perf_nv").is_some_and(|v|v<seuils["seuil_nv_min"].as_f64().unwrap_or(13.0)){reasons.push("nés vifs bas")};if criteria.iter().any(|c|c=="sevres")&&f("perf_sevres").is_some_and(|v|v<seuils["seuil_sevres_min"].as_f64().unwrap_or(11.0)){reasons.push("sevrés bas")};if criteria.iter().any(|c|c=="retours")&&i("nb_retours").is_some_and(|v|v>seuils["seuil_retours_max"].as_f64().unwrap_or(2.0)){reasons.push("retours élevés")};if criteria.iter().any(|c|c=="ecrases")&&i("ecrases").is_some_and(|v|v>seuils["seuil_ecrases_max"].as_f64().unwrap_or(4.0)){reasons.push("écrasés élevés")};if criteria.iter().any(|c|c=="rang")&&i("rang").is_some_and(|v|v>seuils["seuil_rang_max"].as_f64().unwrap_or(7.0)){reasons.push("rang élevé")};if criteria.iter().any(|c|c=="chetifs")&&f("tx_chetifs").is_some_and(|v|v>seuils["seuil_chetifs_max"].as_f64().unwrap_or(20.0)){reasons.push("chétifs élevés")};if!reasons.is_empty(){object.insert("raisons".into(),json!(reasons.join(", ")));object.insert("score".into(),json!(reasons.len()));rows.push(row)}}
+    rows.sort_by_key(|row|std::cmp::Reverse(row.get("score").and_then(Value::as_u64).unwrap_or_default()));
+    let exits=generic_rows(&state.pool,"SELECT id,num_travail,date_reforme,motif_sortie,rang FROM truie WHERE reformee=1 ORDER BY date_reforme DESC,id DESC LIMIT 200").await?;
+    let mut ctx=context(&session);ctx.insert("seuils".into(),seuils);ctx.insert("criteres".into(),json!(criteria));ctx.insert("candidates".into(),Value::Array(rows));ctx.insert("sorties".into(),Value::Array(exits));render(&state,"reformes.html",Value::Object(ctx))
 }
 
 async fn cochettes(
     State(state): State<AppState>,
     Extension(session): Extension<SessionData>,
 ) -> AppResult<Html<String>> {
-    list_page(
-        &state,
-        &session,
-        "Renouvellement et cochettes",
-        "Mères désignées en premier, puis meilleures performances du cheptel actif.",
-        "SELECT id,num_travail,bande_code,mere_cochette,rang,perf_nv,perf_sevres,perf_tx_perte,nb_retours FROM truie WHERE reformee=0 AND (mere_cochette=1 OR perf_nv IS NOT NULL OR perf_sevres IS NOT NULL) ORDER BY mere_cochette DESC,COALESCE(perf_sevres,0) DESC,COALESCE(perf_nv,0) DESC",
-        &["id", "num_travail", "bande_code", "mere_cochette", "rang", "perf_nv", "perf_sevres", "perf_tx_perte", "nb_retours"],
-    )
-    .await
+    let criteria=parameter_list(&state.pool,"cochette_criteres",&["nv","sevres","ecrases","retours"]).await?;
+    let averages=generic_rows(&state.pool,"SELECT ROUND(AVG(perf_nv),2) AS nv,ROUND(AVG(perf_sevres),2) AS sevres,ROUND(AVG(issf),2) AS issf,ROUND(AVG(tx_chetifs),2) AS chetifs FROM truie WHERE reformee=0").await?.into_iter().next().unwrap_or_else(||json!({}));
+    let rows=generic_rows(&state.pool,"SELECT id,num_travail,bande_code,mere_cochette,rang,perf_nv,perf_sevres,perf_tx_perte,nb_retours,issf,tx_chetifs,CAST(COALESCE((SELECT SUM(p.nb) FROM perteporcelet p WHERE p.truie_id=t.id AND lower(COALESCE(p.cause,'')) LIKE '%cras%'),0) AS INTEGER) AS ecrases FROM truie t WHERE reformee=0 AND (perf_nv IS NOT NULL OR perf_sevres IS NOT NULL) ORDER BY num_travail").await?;
+    let threshold=criteria.len().saturating_sub(1).max(1);let mut candidates=Vec::new();let mut designated=Vec::new();
+    for mut row in rows{let is_designated=row.get("mere_cochette").and_then(Value::as_i64)==Some(1);if is_designated{designated.push(row.clone())}let object=row.as_object_mut().expect("truie objet");let mut details=Vec::new();let f=|key:&str|object.get(key).and_then(Value::as_f64);let i=|key:&str|object.get(key).and_then(Value::as_i64);if criteria.iter().any(|c|c=="nv")&&f("perf_nv").is_some_and(|v|v>=averages["nv"].as_f64().unwrap_or(0.0)){details.push("nés vifs")};if criteria.iter().any(|c|c=="sevres")&&f("perf_sevres").is_some_and(|v|v>=averages["sevres"].as_f64().unwrap_or(0.0)){details.push("capacité maternelle")};if criteria.iter().any(|c|c=="ecrases")&&i("ecrases").unwrap_or_default()<=1{details.push("peu d’écrasés")};if criteria.iter().any(|c|c=="retours")&&i("nb_retours").unwrap_or_default()<=1{details.push("fertilité")};if criteria.iter().any(|c|c=="rang")&&i("rang").unwrap_or_default()>=3{details.push("longévité")};if criteria.iter().any(|c|c=="chetifs")&&f("tx_chetifs").is_some_and(|v|v<=averages["chetifs"].as_f64().unwrap_or(v)){details.push("homogénéité")};if criteria.iter().any(|c|c=="issf")&&f("issf").is_some_and(|v|v<=averages["issf"].as_f64().unwrap_or(v)){details.push("ISSF")};if details.len()>=threshold{object.insert("score".into(),json!(details.len()));object.insert("details".into(),json!(details.join(", ")));candidates.push(row)}}
+    candidates.sort_by_key(|row|std::cmp::Reverse(row.get("score").and_then(Value::as_u64).unwrap_or_default()));let mut ctx=context(&session);ctx.insert("criteres".into(),json!(criteria));ctx.insert("moyennes".into(),averages);ctx.insert("candidates".into(),Value::Array(candidates));ctx.insert("designees".into(),Value::Array(designated));render(&state,"cochettes.html",Value::Object(ctx))
 }
 
 async fn ifip(
