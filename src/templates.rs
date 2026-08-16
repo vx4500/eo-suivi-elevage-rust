@@ -82,3 +82,11 @@ fn decimal2(value: Value) -> String {
 fn decimal3(value: Value) -> String {
     format!("{:.3}", f64::try_from(value).unwrap_or(0.0)).replace('.', ",")
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn tous_les_modeles_html_sont_valides() {
+        super::build().expect("les modèles MiniJinja doivent être valides");
+    }
+}
