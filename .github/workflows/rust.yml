@@ -21,4 +21,9 @@ jobs:
           components: rustfmt, clippy
       - run: cargo fmt
       - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
+      - name: Tests complets
+        if: runner.os != 'Windows'
+        run: cargo test
+      - name: Tests Windows (hors PBKDF2 lent, déjà testé sous Linux)
+        if: runner.os == 'Windows'
+        run: cargo test -- --skip lit_un_hash_python_v165 --skip nouveau_hash_est_verifiable
