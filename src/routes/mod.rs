@@ -2437,7 +2437,7 @@ async fn produit_inventaire(
 ) -> AppResult<Response> {
     require_writer(&session)?;
     verify_csrf(&session, &form)?;
-    let stock = if form.get("stock_illimite").is_some() {
+    let stock = if form.contains_key("stock_illimite") {
         None
     } else {
         Some(
