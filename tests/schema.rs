@@ -54,11 +54,18 @@ async fn schema_complet_et_ecritures_compatibles() -> anyhow::Result<()> {
     let present: i64 = sqlx::query_scalar("SELECT CAST(COALESCE(SUM(CASE WHEN case_dest_id=? THEN nombre ELSE -nombre END),0) AS INTEGER) FROM transfert WHERE espece='porc' AND (case_dest_id=? OR case_source_id=?)")
         .bind(pen).bind(pen).bind(pen).fetch_one(&mut *tx).await?;
     assert_eq!(present, 10);
+    sqlx::query("INSERT INTO inventairecase(case_id,date,nombre,note,cree_par) VALUES(?,'2026-08-16',10,'Stock initial','test')")
+        .bind(pen).execute(&mut *tx).await?;
     sqlx::query("INSERT INTO venteapport(date,bande_id,nb_porcs,poids_total,montant_net) VALUES('2026-08-16',?,10,900,1800)")
         .bind(band).execute(&mut *tx).await?;
     let price: f64 = sqlx::query_scalar("SELECT SUM(montant_net)/SUM(poids_total) FROM venteapport WHERE bande_id=?")
         .bind(band).fetch_one(&mut *tx).await?;
     assert!((price - 2.0).abs() < 0.0001);
+    sqlx::query("INSERT INTO valorisationapport(num_apport,date,libelle,montant,categorie) VALUES('AP-TEST','2026-08-16','Frais de groupement',-25,'retenue')")
+        .execute(&mut *tx).await?;
+    let retention: f64 = sqlx::query_scalar("SELECT CAST(SUM(ABS(montant)) AS REAL) FROM valorisationapport WHERE num_apport='AP-TEST' AND categorie='retenue'")
+        .fetch_one(&mut *tx).await?;
+    assert_eq!(retention, 25.0);
     let sale_session = sqlx::query("INSERT INTO sessionventedirecte(nom,active) VALUES('Session test',1)")
         .execute(&mut *tx).await?.last_insert_rowid();
     sqlx::query("INSERT INTO coutelevageventedirecte(session_vente_id,semence) VALUES(?,10)")
