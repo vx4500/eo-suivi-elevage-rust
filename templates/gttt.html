@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}GTTT · EO-Suivi{% endblock %}
+{% block content %}
+<h1>GTTT</h1>
+<p>Les résultats sont calculés portée par portée. Le taux de mort-nés utilise les mort-nés sur les nés totaux. La mortalité sous la mère tient compte des adoptés et retirés.</p>
+<div class="rust-grid">
+  <div class="card"><h3>Portées</h3><strong>{{ synthese.portees }}</strong></div>
+  <div class="card"><h3>Nés totaux / portée</h3><strong>{{ synthese.nes_totaux_moy or '—' }}</strong></div>
+  <div class="card"><h3>Nés vifs / portée</h3><strong>{{ synthese.nes_vifs_moy or '—' }}</strong></div>
+  <div class="card"><h3>Sevrés / portée</h3><strong>{{ synthese.sevres_moy or '—' }}</strong></div>
+  <div class="card"><h3>Taux de mort-nés</h3><strong>{{ synthese.taux_mortnes or '—' }} %</strong></div>
+  <div class="card"><h3>Mortalité sous la mère</h3><strong>{{ synthese.mortalite_allaitement or '—' }} %</strong></div>
+</div>
+<section class="card"><h2>Résultats par bande</h2><div class="rust-scroll"><table><thead><tr><th>Bande</th><th>Portées</th><th>NT</th><th>NV</th><th>Sevrés</th><th>Mort-nés</th><th>Mortalité sous mère</th></tr></thead><tbody>{% for row in bandes %}<tr><td>{{ row.bande }}</td><td>{{ row.portees }}</td><td>{{ row.nes_totaux_moy or '—' }}</td><td>{{ row.nes_vifs_moy or '—' }}</td><td>{{ row.sevres_moy or '—' }}</td><td>{{ row.taux_mortnes or '—' }} %</td><td>{{ row.mortalite_allaitement or '—' }} %</td></tr>{% else %}<tr><td colspan="7" class="rust-empty">Aucune portée rattachée à une bande</td></tr>{% endfor %}</tbody></table></div></section>
+<section class="card"><h2>Résultats par rang de portée</h2><div class="rust-scroll"><table><thead><tr><th>Rang</th><th>Portées</th><th>NT</th><th>NV</th><th>Sevrés</th><th>Mort-nés</th><th>Mortalité sous mère</th><th>Gestation</th></tr></thead><tbody>{% for row in rangs %}<tr><td>{{ row.rang }}</td><td>{{ row.portees }}</td><td>{{ row.nes_totaux_moy or '—' }}</td><td>{{ row.nes_vifs_moy or '—' }}</td><td>{{ row.sevres_moy or '—' }}</td><td>{{ row.taux_mortnes or '—' }} %</td><td>{{ row.mortalite_allaitement or '—' }} %</td><td>{{ row.gestation_moy or '—' }} j</td></tr>{% else %}<tr><td colspan="8" class="rust-empty">Aucune portée importée</td></tr>{% endfor %}</tbody></table></div></section>
+{% endblock %}
