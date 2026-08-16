@@ -36,6 +36,7 @@
   </div></div>
   <span class="grow"></span>
   <form class="rust-search" action="/recherche" method="get"><input name="q" placeholder="Rechercher…"><button type="submit">OK</button></form>
+  <div class="rust-menu"><span>Aide ▾</span><div class="rust-sub"><a href="/correctifs">Correctifs</a><a href="/apropos">À propos</a><a href="/contact">Diagnostic</a></div></div>
   <span>{{ session.nom }}</span>
   {% if session.role == 'admin' %}<a href="/utilisateurs">Utilisateurs</a>{% endif %}
   <a href="/logout">Déconnexion</a>
