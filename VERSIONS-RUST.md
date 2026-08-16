@@ -1,13 +1,31 @@
 # Historique et feuille de route EO-Suivi Rust
 
-## 2.1.3 — en préparation
+## 2.1.3 — reprise des correctifs historiques
 
 - Audit de parité Python 1.65 / Rust 2.1.2.
 - Permissions salarié remises en mode « interdit par défaut ».
 - Respect des sections personnalisées du salarié.
 - Protection des opérations puissantes réservées à l'éleveur/admin.
 - Protection uniforme des zones réservées à l'administrateur.
-- Deux tests unitaires ajoutés pour les droits par défaut et personnalisés.
+- Gestion administrateur des sections et réinitialisation sécurisée des mots de passe.
+- Import des truies en deux temps : aperçu, anomalies, doublons, confirmation ou annulation.
+- Transaction globale d'import et conservation de l'identifiant de source.
+- GTTT calculé portée par portée avec mort-nés / nés totaux et adoptions/retraits.
+- Inventaires physiques initiaux par case intégrés au calcul des effectifs.
+- Contrôles de capacité et d'effectif disponible conservés avant transfert.
+- Structure complétée : modification, ordre, RFID, capacité et suppressions protégées.
+- Espace Prestataire avec bandes affectées, consignes, poids cible et mortalités.
+- Protocoles sanitaires, actes réalisés et pharmacie avec mouvements et seuils.
+- Fiches charcutiers et traitements individuels.
+- Pilotage technique filtrable, dates réelles, IFIP modifiable, réformes et cochettes configurables.
+- Économie : avoirs négatifs, quatre écritures de signe reconnues, retenues obligatoires,
+  TMP, informations techniques et suivi mensuel.
+- Import Eau & électricité protégé par CSRF et transaction globale ; Berue/Berrue unifié.
+- Pages Correctifs, À propos et Diagnostic restaurées.
+- Les routes non portées signalent désormais clairement `501` au lieu d'un faux succès.
+- Tests étendus : droits, calculs GTTT, signes comptables, schéma, inventaires et retenues.
+- Migration validée sur une copie de la sauvegarde réelle : 96 truies, 9 bandes,
+  `PRAGMA quick_check = ok` et aucun changement de la base de production.
 
 ## 2.1.2
 
