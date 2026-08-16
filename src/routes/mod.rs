@@ -184,6 +184,9 @@ pub fn router(state: AppState) -> Router {
         .route("/vente-directe/sessions", get(vente_sessions))
         .route("/reglages", get(reglages))
         .route("/parametres", get(parametres))
+        .route("/correctifs", get(correctifs))
+        .route("/apropos", get(apropos))
+        .route("/contact", get(contact))
         .fallback(compatibility_fallback)
         .with_state(state)
 }
@@ -3284,6 +3287,10 @@ async fn parametres(
     )
     .await
 }
+
+async fn correctifs(State(state):State<AppState>,Extension(session):Extension<SessionData>)->AppResult<Html<String>>{render(&state,"correctifs.html",Value::Object(context(&session)))}
+async fn apropos(State(state):State<AppState>,Extension(session):Extension<SessionData>)->AppResult<Html<String>>{render(&state,"apropos.html",Value::Object(context(&session)))}
+async fn contact(State(state):State<AppState>,Extension(session):Extension<SessionData>)->AppResult<Html<String>>{render(&state,"contact.html",Value::Object(context(&session)))}
 
 async fn list_page(state:&AppState,session:&SessionData,title:&str,description:&str,sql:&str,columns:&[&str])->AppResult<Html<String>>{
     let rows=generic_rows(&state.pool,sql).await?;
