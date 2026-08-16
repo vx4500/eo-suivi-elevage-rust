@@ -1,0 +1,7 @@
+{% extends "base.html" %}{% block content %}
+<div class="no-print"><button onclick="window.print()">Imprimer</button> <a href="javascript:history.back()">Retour</a></div>
+<h1>Feuille de préparation — {{ session_vente.nom }}</h1>
+<p>Livraison : <b>{{ session_vente.date_livraison|date_fr }}</b> · Bande : <b>{{ session_vente.bande_reference or '—' }}</b> · {{ session_vente.nb_porcs }} porc(s) prévu(s)</p>
+<section class="card"><h2>Totaux à préparer</h2><table><thead><tr><th>Produit</th><th>Commandes</th><th>Quantité totale</th><th>Préparé</th></tr></thead><tbody>{% for p in produits %}<tr><td><b>{{ p.nom_produit }}</b></td><td>{{ p.commandes }}</td><td>{{ p.quantite }} {{ p.unite }}</td><td>☐</td></tr>{% else %}<tr><td colspan="4">Aucune commande à préparer.</td></tr>{% endfor %}</tbody></table></section>
+<section><h2>Détail par client</h2><table><thead><tr><th>Client</th><th>Commande</th><th>Notes</th><th>Statut</th><th>Prête</th></tr></thead><tbody>{% for c in commandes %}<tr><td><b>{{ c.nom_client }}</b><br>{{ c.telephone }}</td><td>{{ c.lignes }}</td><td>{{ c.notes or '—' }}</td><td>{{ c.statut }}</td><td>☐</td></tr>{% else %}<tr><td colspan="5">Aucune commande.</td></tr>{% endfor %}</tbody></table></section>
+{% endblock %}
