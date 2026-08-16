@@ -1,0 +1,12 @@
+{% extends "base.html" %}{% block content %}
+<p><a href="/vente-directe">← Retour aux commandes</a> · <a href="/vente-directe/commande/{{ commande.id }}/imprimer" target="_blank">Imprimer</a></p>
+<h1>Modifier la commande n° {{ commande.id }}</h1>
+<form class="card" method="post" action="/vente-directe/commande/{{ commande.id }}/modifier">
+  <input type="hidden" name="csrf_token" value="{{ session.csrf }}">
+  <div class="rust-grid"><label>Nom<input name="nom_client" value="{{ commande.nom_client }}" maxlength="160" required></label><label>Téléphone<input name="telephone" value="{{ commande.telephone }}" maxlength="40" required></label><label>E-mail<input type="email" name="email" value="{{ commande.email or '' }}" maxlength="200"></label><label>Session<select name="session_vente_id"><option value="">Non rattachée</option>{% for s in sessions_vente %}<option value="{{ s.id }}" {% if s.id == commande.session_vente_id %}selected{% endif %}>{{ s.nom }}</option>{% endfor %}</select></label><label>Statut<select name="statut">{% for st in ['nouvelle','validee','preparation','prete','livree','annulee'] %}<option value="{{ st }}" {% if st == commande.statut %}selected{% endif %}>{{ st }}</option>{% endfor %}</select></label></div>
+  <h2>Produits</h2><p class="muted">Le stock de l’ancienne commande est rendu pendant le recalcul. Rien n’est modifié si un produit est insuffisant.</p>
+  <div class="rust-scroll"><table><thead><tr><th>Produit</th><th>Prix</th><th>Stock actuel</th><th>Quantité commandée</th></tr></thead><tbody>{% for p in produits %}<tr><td>{{ p.nom }}{% if not p.actif %} <span class="rust-badge">inactif</span>{% endif %}</td><td>{{ p.prix|euro }}/{{ p.unite }}</td><td>{% if p.quantite_disponible is not none %}{{ p.quantite_disponible }} + {{ p.quantite_commande }} réservé{% else %}Illimité{% endif %}</td><td><input name="q_{{ p.id }}" type="number" min="0" step="0.01" value="{{ p.quantite_commande }}" style="max-width:120px"></td></tr>{% endfor %}</tbody></table></div>
+  <label>Notes<textarea name="notes" maxlength="1000">{{ commande.notes or '' }}</textarea></label>
+  <div class="rust-actions"><button>Enregistrer les modifications</button><a href="/vente-directe">Annuler</a></div>
+</form>
+{% endblock %}

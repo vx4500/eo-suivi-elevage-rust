@@ -49,6 +49,11 @@ a.link:hover{text-decoration:underline}
 .kpi{text-align:center;padding:14px}
 .kpi .v{font-size:26px;font-weight:700}
 .kpi .l{font-size:12px;color:var(--muted);margin-top:2px}
+.sale-chart{display:flex;align-items:flex-end;gap:10px;min-height:175px;overflow-x:auto;padding:18px 8px 4px;border-bottom:1px solid var(--line)}
+.sale-chart-point{display:flex;flex:1 0 72px;min-width:72px;min-height:145px;flex-direction:column;justify-content:flex-end;align-items:center;gap:5px;text-align:center}
+.sale-chart-point b{font-size:12px;color:var(--vert)}
+.sale-chart-point small{font-size:10px;color:var(--muted);white-space:nowrap}
+.sale-chart-bar{width:34px;min-height:8px;border-radius:7px 7px 2px 2px;background:linear-gradient(180deg,var(--cuivre2),var(--cuivre));box-shadow:0 2px 6px rgba(176,106,44,.22)}
 
 /* forms */
 form.inline{display:flex;flex-wrap:wrap;gap:8px;align-items:end}

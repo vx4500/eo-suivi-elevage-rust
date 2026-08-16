@@ -1,4 +1,4 @@
-# EO-Suivi Élevage — portage Rust 2.1.3
+# EO-Suivi Élevage — portage Rust 2.1.4
 
 Cette archive reprend la base EO-Suivi 1.65 sous forme d’un serveur Rust. Elle
 n’utilise plus FastAPI, SQLModel, Uvicorn ni Python pour les fonctions déjà
@@ -20,7 +20,8 @@ compatibilité avec les sauvegardes 1.55 à 1.65.
 - transferts contrôlés des porcs et truies, capacité des cases et inventaires ;
 - saisies économiques et résultats par bande (coût/porc, marge, prix net/kg) ;
 - résultats abattoir par bande et saisies sanitaires par morceau ;
-- produits, stocks, commandes, sessions et charges de vente directe ;
+- produits, inventaires, commandes modifiables et imprimables, feuilles de
+  préparation, sessions et charges de vente directe ;
 - utilisateurs, journal, structure, tâches et sauvegarde de la base ;
 - vues de consultation sanitaire, pharmacie, planning et stocks ;
 - GTTT, productivité, réformes, cochettes, repères IFIP, charcutiers,
@@ -93,5 +94,5 @@ copie de la sauvegarde réelle du 16 août 2026. Les 51 tables attendues et leur
 colonnes correspondent ; la base réelle contient en plus une ancienne table
 énergie vide, laissée intacte. Les contrôles SQLite `quick_check` et clés
 étrangères sont conformes. La version 2.0.1 a compilé et démarré sur Debian 13
-avec Rust 1.97.1 ; la 2.1.3 doit repasser les trois commandes Cargo ci-dessus
+avec Rust 1.97.1 ; la 2.1.4 doit repasser les trois commandes Cargo ci-dessus
 sur le serveur avant remplacement du binaire.
