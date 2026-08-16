@@ -1,0 +1,5 @@
+{% extends "base.html" %}{% block content %}
+<h1>Porcs charcutiers</h1>
+<form class="card rust-actions" method="get"><label>RFID, bande ou mère<input name="q" value="{{ q }}"></label><button>Rechercher</button>{% if q %}<a href="/charcutiers">Effacer</a>{% endif %}</form>
+<div class="rust-scroll"><table><thead><tr><th>RFID</th><th>Bande</th><th>Naissance</th><th>Sexe</th><th>Mère</th><th>Structure</th><th>Poids</th><th>Situation</th></tr></thead><tbody>{% for p in porcs %}<tr><td><a href="/charcutier/{{ p.id }}"><b>{{ p.rfid or ('Porc n°' ~ p.id) }}</b></a></td><td>{{ p.bande_code or '—' }}</td><td>{{ p.date_naissance|date_fr }}</td><td>{{ p.sexe or '—' }}</td><td>{{ p.mere_courante or '—' }}</td><td>{{ p.structure or '—' }}</td><td>{{ p.poids3 or p.poids2 or p.poids1 or '—' }}</td><td>{% if p.date_mort %}<span class="danger">Mort le {{ p.date_mort|date_fr }}</span>{% elif p.destination %}{{ p.destination }}{% else %}Présent{% endif %}</td></tr>{% else %}<tr><td colspan="8" class="rust-empty">Aucun porc trouvé</td></tr>{% endfor %}</tbody></table></div>
+{% endblock %}
