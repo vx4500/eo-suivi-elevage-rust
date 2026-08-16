@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Aperçu import truies · EO-Suivi{% endblock %}
+{% block content %}
+<h1>Aperçu de l'import des truies</h1>
+<p><b>Fichier :</b> {{ nom_fichier }}</p>
+<div class="rust-grid">
+  <div class="card"><h3>À ajouter</h3><strong>{{ resume.ajouter }}</strong></div>
+  <div class="card"><h3>À ignorer</h3><strong>{{ resume.ignorer }}</strong></div>
+  <div class="card"><h3>Erreurs</h3><strong>{{ resume.erreur }}</strong></div>
+</div>
+<div class="card rust-actions">
+  <form method="post" action="/truies/import/confirmer"><input type="hidden" name="csrf_token" value="{{ session.csrf }}"><input type="hidden" name="token" value="{{ token }}"><button {% if resume.erreur %}disabled title="Corrige les erreurs avant de recommencer"{% endif %}>Confirmer l'import complet</button></form>
+  <form method="post" action="/truies/import/annuler"><input type="hidden" name="csrf_token" value="{{ session.csrf }}"><input type="hidden" name="token" value="{{ token }}"><button class="ghost">Annuler</button></form>
+</div>
+<div class="rust-scroll"><table><thead><tr><th>Ligne</th><th>Action</th><th>Anomalie</th><th>N° travail</th><th>N° national</th><th>RFID</th><th>Race</th><th>Bande</th></tr></thead><tbody>{% for row in lignes %}<tr><td>{{ row.ligne }}</td><td><span class="rust-badge">{{ row.action }}</span></td><td>{{ row.anomalie or '—' }}</td><td>{{ row.num_travail or '—' }}</td><td>{{ row.num_national or '—' }}</td><td>{{ row.rfid or '—' }}</td><td>{{ row.race or '—' }}</td><td>{{ row.bande_code or '—' }}</td></tr>{% endfor %}</tbody></table></div>
+{% endblock %}
