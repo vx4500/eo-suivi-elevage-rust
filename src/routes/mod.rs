@@ -58,6 +58,8 @@ pub fn router(state: AppState) -> Router {
         .route("/truies/ajouter", post(truie_ajouter))
         .route("/truies/modele.csv", get(truies_modele_csv))
         .route("/truies/import", post(truies_import))
+        .route("/truies/import/confirmer", post(truies_import_confirmer))
+        .route("/truies/import/annuler", post(truies_import_annuler))
         .route("/truies/affecter-bande", post(truies_affecter_bande))
         .route("/truie/{id}", get(truie_detail))
         .route("/truie/{id}/imprimer", get(truie_imprimer))
@@ -1045,13 +1047,285 @@ async fn export_mise_bas(
 
 async fn truies_modele_csv()->Response{let body="\u{feff}num_travail;num_national;rfid;race;date_entree;date_naissance;bande_code;note\r\nT001;FR000000001;250000000001;Large White;2026-01-01;2025-01-01;B1.26;Exemple à supprimer\r\n";let mut headers=HeaderMap::new();headers.insert(header::CONTENT_TYPE,HeaderValue::from_static("text/csv; charset=utf-8"));headers.insert(header::CONTENT_DISPOSITION,HeaderValue::from_static("attachment; filename=modele_import_truies.csv"));(headers,body).into_response()}
 
-async fn truies_import(State(state):State<AppState>,Extension(session):Extension<SessionData>,mut multipart:Multipart)->AppResult<Response>{require_writer(&session)?;let mut data=None;while let Some(field)=multipart.next_field().await.map_err(|error|AppError::Invalid(error.to_string()))?{if field.name()==Some("fichier"){data=Some(field.bytes().await.map_err(|error|AppError::Invalid(error.to_string()))?);break}}let bytes=data.ok_or_else(||AppError::Invalid("Fichier CSV manquant".into()))?;if bytes.len()>5*1024*1024{return Err(AppError::Invalid("Fichier trop volumineux".into()))}let delimiter=if bytes.iter().take(1024).filter(|&&byte|byte==b';').count()>=bytes.iter().take(1024).filter(|&&byte|byte==b',').count(){b';'}else{b','};let mut reader=csv::ReaderBuilder::new().delimiter(delimiter).trim(csv::Trim::All).from_reader(bytes.as_ref());let headers=reader.headers().map_err(|error|AppError::Invalid(error.to_string()))?.clone();let normalized:Vec<String>=headers.iter().map(|value|value.trim().trim_start_matches('\u{feff}').to_lowercase()).collect();if !normalized.iter().any(|value|value=="num_travail"){return Err(AppError::Invalid("Colonne num_travail manquante".into()))}let mut tx=state.pool.begin().await?;let mut added=0;for record in reader.records(){let record=record.map_err(|error|AppError::Invalid(error.to_string()))?;let row:HashMap<&str,&str>=normalized.iter().map(String::as_str).zip(record.iter()).collect();let field=|key:&str|row.get(key).copied().filter(|value|!value.is_empty());let number=field("num_travail").unwrap_or("");if number.is_empty(){continue}let exists:i64=sqlx::query_scalar("SELECT COUNT(*) FROM truie WHERE lower(trim(num_travail))=lower(trim(?)) AND reformee=0").bind(number).fetch_one(&mut *tx).await?;if exists>0{continue}sqlx::query("INSERT INTO truie(num_travail,num_national,rfid,race,date_entree,date_naissance,bande_code,note,statut,rang,reformee,mere_cochette) VALUES(?,?,?,?,?,?,?,?,'active',0,0,0)").bind(number).bind(field("num_national")).bind(field("rfid")).bind(field("race")).bind(field("date_entree")).bind(field("date_naissance")).bind(field("bande_code")).bind(field("note")).execute(&mut *tx).await?;added+=1}tx.commit().await?;Ok(Redirect::to(&format!("/truies?import_ok={added}")).into_response())}
+async fn truies_import(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    mut multipart: Multipart,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    let mut data = None;
+    let mut filename = "import-truies.csv".to_string();
+    let mut csrf = None;
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|error| AppError::Invalid(error.to_string()))?
+    {
+        let field_name = field.name().map(str::to_string);
+        match field_name.as_deref() {
+            Some("csrf_token") => {
+                csrf = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|error| AppError::Invalid(error.to_string()))?,
+                );
+            }
+            Some("fichier") => {
+                filename = field
+                    .file_name()
+                    .unwrap_or("import-truies.csv")
+                    .chars()
+                    .filter(|character| character.is_alphanumeric() || ".-_ ".contains(*character))
+                    .take(180)
+                    .collect();
+                data = Some(
+                    field
+                        .bytes()
+                        .await
+                        .map_err(|error| AppError::Invalid(error.to_string()))?,
+                );
+            }
+            _ => {}
+        }
+    }
+    if csrf.as_deref() != Some(session.csrf.as_str()) {
+        return Err(AppError::Forbidden);
+    }
+    let bytes = data.ok_or_else(|| AppError::Invalid("Fichier CSV manquant".into()))?;
+    if bytes.len() > 5 * 1024 * 1024 {
+        return Err(AppError::Invalid("Fichier trop volumineux".into()));
+    }
+    let delimiter = if bytes
+        .iter()
+        .take(1024)
+        .filter(|&&byte| byte == b';')
+        .count()
+        >= bytes
+            .iter()
+            .take(1024)
+            .filter(|&&byte| byte == b',')
+            .count()
+    {
+        b';'
+    } else {
+        b','
+    };
+    let mut reader = csv::ReaderBuilder::new()
+        .delimiter(delimiter)
+        .trim(csv::Trim::All)
+        .from_reader(bytes.as_ref());
+    let headers = reader
+        .headers()
+        .map_err(|error| AppError::Invalid(error.to_string()))?
+        .clone();
+    let normalized: Vec<String> = headers
+        .iter()
+        .map(|value| value.trim().trim_start_matches('\u{feff}').to_lowercase())
+        .collect();
+    if !normalized.iter().any(|value| value == "num_travail") {
+        return Err(AppError::Invalid("Colonne num_travail manquante".into()));
+    }
+
+    let token = uuid::Uuid::new_v4().simple().to_string();
+    let mut seen = std::collections::HashSet::new();
+    let mut preview_rows = Vec::new();
+    let mut additions = 0_i64;
+    let mut ignored = 0_i64;
+    let mut errors = 0_i64;
+    let mut tx = state.pool.begin().await?;
+    sqlx::query("DELETE FROM importjournal WHERE statut='apercu' AND cree_le<datetime('now','-1 day')")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("INSERT INTO importjournal(token,type_import,nom_fichier,statut,cree_par) VALUES(?,'truies',?,'apercu',?)")
+        .bind(&token)
+        .bind(&filename)
+        .bind(session.uid)
+        .execute(&mut *tx)
+        .await?;
+
+    for (index, record) in reader.records().enumerate() {
+        let record = record.map_err(|error| AppError::Invalid(error.to_string()))?;
+        let row: HashMap<&str, &str> = normalized
+            .iter()
+            .map(String::as_str)
+            .zip(record.iter())
+            .collect();
+        let field = |key: &str| {
+            row.get(key)
+                .copied()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        };
+        let number = field("num_travail").unwrap_or("");
+        let mut action = "ajouter";
+        let mut anomaly = None;
+        if number.is_empty() {
+            action = "erreur";
+            anomaly = Some("Numéro de travail manquant".to_string());
+            errors += 1;
+        } else if !seen.insert(number.to_lowercase()) {
+            action = "ignorer";
+            anomaly = Some("Doublon dans le fichier".to_string());
+            ignored += 1;
+        } else {
+            let exists: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM truie WHERE lower(trim(num_travail))=lower(trim(?)) AND reformee=0",
+            )
+            .bind(number)
+            .fetch_one(&mut *tx)
+            .await?;
+            if exists > 0 {
+                action = "ignorer";
+                anomaly = Some("Truie active déjà présente".to_string());
+                ignored += 1;
+            } else {
+                additions += 1;
+            }
+        }
+        let payload = json!({
+            "num_travail": number,
+            "num_national": field("num_national"),
+            "rfid": field("rfid"),
+            "race": field("race"),
+            "date_entree": field("date_entree"),
+            "date_naissance": field("date_naissance"),
+            "bande_code": field("bande_code"),
+            "note": field("note"),
+        });
+        sqlx::query("INSERT INTO importligne(token,numero_ligne,action,anomalie,donnees_json) VALUES(?,?,?,?,?)")
+            .bind(&token)
+            .bind(index as i64 + 2)
+            .bind(action)
+            .bind(&anomaly)
+            .bind(payload.to_string())
+            .execute(&mut *tx)
+            .await?;
+        preview_rows.push(json!({
+            "ligne": index + 2,
+            "action": action,
+            "anomalie": anomaly,
+            "num_travail": number,
+            "num_national": field("num_national"),
+            "rfid": field("rfid"),
+            "race": field("race"),
+            "bande_code": field("bande_code"),
+        }));
+    }
+    let summary = json!({"ajouter": additions, "ignorer": ignored, "erreur": errors});
+    sqlx::query("UPDATE importjournal SET resume=? WHERE token=?")
+        .bind(summary.to_string())
+        .bind(&token)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+
+    let mut ctx = context(&session);
+    ctx.insert("token".into(), json!(token));
+    ctx.insert("nom_fichier".into(), json!(filename));
+    ctx.insert("resume".into(), summary);
+    ctx.insert("lignes".into(), Value::Array(preview_rows));
+    Ok(render(&state, "import_apercu.html", Value::Object(ctx))?.into_response())
+}
+
+async fn truies_import_confirmer(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    verify_csrf(&session, &form)?;
+    let token = form_text(&form, "token")
+        .ok_or_else(|| AppError::Invalid("Aperçu d'import manquant".into()))?;
+    let mut tx = state.pool.begin().await?;
+    let owner: Option<i64> = sqlx::query_scalar(
+        "SELECT cree_par FROM importjournal WHERE token=? AND statut='apercu' AND type_import='truies'",
+    )
+    .bind(&token)
+    .fetch_optional(&mut *tx)
+    .await?
+    .flatten();
+    if owner != Some(session.uid) && !session.est_admin() {
+        return Err(AppError::Forbidden);
+    }
+    let rows = sqlx::query_as::<_, (i64, String)>(
+        "SELECT numero_ligne,donnees_json FROM importligne WHERE token=? AND action='ajouter' ORDER BY numero_ligne",
+    )
+    .bind(&token)
+    .fetch_all(&mut *tx)
+    .await?;
+    let mut added = 0_i64;
+    for (line, raw) in rows {
+        let data: Value = serde_json::from_str(&raw)
+            .map_err(|_| AppError::Invalid(format!("Données invalides à la ligne {line}")))?;
+        let value = |key: &str| data.get(key).and_then(Value::as_str).filter(|value| !value.is_empty());
+        let number = value("num_travail")
+            .ok_or_else(|| AppError::Invalid(format!("Numéro absent à la ligne {line}")))?;
+        let exists: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM truie WHERE lower(trim(num_travail))=lower(trim(?)) AND reformee=0",
+        )
+        .bind(number)
+        .fetch_one(&mut *tx)
+        .await?;
+        if exists > 0 {
+            return Err(AppError::Invalid(format!(
+                "La truie {number} a été ajoutée depuis l'aperçu ; import entièrement annulé"
+            )));
+        }
+        sqlx::query("INSERT INTO truie(num_travail,num_national,rfid,race,date_entree,date_naissance,bande_code,note,statut,rang,reformee,mere_cochette,source_import_id) VALUES(?,?,?,?,?,?,?,?,'active',0,0,0,?)")
+            .bind(number)
+            .bind(value("num_national"))
+            .bind(value("rfid"))
+            .bind(value("race"))
+            .bind(value("date_entree"))
+            .bind(value("date_naissance"))
+            .bind(value("bande_code"))
+            .bind(value("note"))
+            .bind(&token)
+            .execute(&mut *tx)
+            .await?;
+        added += 1;
+    }
+    sqlx::query("UPDATE importjournal SET statut='applique',applique_le=CURRENT_TIMESTAMP WHERE token=?")
+        .bind(&token)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    db::journal(
+        &state.pool,
+        &session.identifiant,
+        "import",
+        "truies",
+        &format!("{added} truie(s), import {token}"),
+        "/truies/import/confirmer",
+    )
+    .await;
+    Ok(Redirect::to(&format!("/truies?import_ok={added}")).into_response())
+}
+
+async fn truies_import_annuler(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    verify_csrf(&session, &form)?;
+    let token = form_text(&form, "token")
+        .ok_or_else(|| AppError::Invalid("Aperçu d'import manquant".into()))?;
+    sqlx::query("DELETE FROM importjournal WHERE token=? AND statut='apercu' AND (cree_par=? OR ?='admin')")
+        .bind(token)
+        .bind(session.uid)
+        .bind(&session.role)
+        .execute(&state.pool)
+        .await?;
+    Ok(Redirect::to("/truies").into_response())
+}
 
 async fn truie_imprimer(State(state):State<AppState>,Extension(session):Extension<SessionData>,Path(id):Path<i64>)->AppResult<Html<String>>{let sow=generic_rows(&state.pool,&format!("SELECT num_travail,num_national,rfid,race,date_naissance,rang,bande_code,statut,note FROM truie WHERE id={id}")).await?.into_iter().next().ok_or(AppError::NotFound)?;let lines=generic_rows(&state.pool,&format!("SELECT date,type,COALESCE(resultat,produit,note,'') AS detail,nes_totaux,nes_vifs,nb_sevres FROM evenement WHERE truie_id={id} ORDER BY date DESC,id DESC")).await?;let mut ctx=context(&session);ctx.insert("title".into(),json!(format!("Fiche truie {}",sow.get("num_travail").and_then(Value::as_str).unwrap_or(""))));ctx.insert("infos".into(),sow);ctx.insert("lignes".into(),Value::Array(lines));render(&state,"impression.html",Value::Object(ctx))}
 
 async fn bande_imprimer(State(state):State<AppState>,Extension(session):Extension<SessionData>,Path(id):Path<i64>)->AppResult<Html<String>>{let band=generic_rows(&state.pool,&format!("SELECT code,num_officiel,date_mb,site,note,active FROM bande WHERE id={id}")).await?.into_iter().next().ok_or(AppError::NotFound)?;let lines=generic_rows(&state.pool,&format!("SELECT 'Truie' AS type,t.num_travail AS reference,'Rang '||t.rang AS detail,NULL AS date FROM truie t JOIN bande b ON b.code=t.bande_code WHERE b.id={id} AND t.reformee=0 UNION ALL SELECT e.type,COALESCE(t.num_travail,''),COALESCE(e.note,e.produit,e.resultat,''),e.date FROM evenement e LEFT JOIN truie t ON t.id=e.truie_id WHERE e.bande_id={id} ORDER BY date DESC,reference")).await?;let mut ctx=context(&session);ctx.insert("title".into(),json!(format!("Fiche bande {}",band.get("code").and_then(Value::as_str).unwrap_or(""))));ctx.insert("infos".into(),band);ctx.insert("lignes".into(),Value::Array(lines));render(&state,"impression.html",Value::Object(ctx))}
 
-fn ics_escape(value:&str)->String{value.replace('\\',"\\\\").replace(';',"\\;").replace(',',"\\,").replace('\r'," ").replace('\n'," ")}
+fn ics_escape(value:&str)->String{value.replace('\\',"\\\\").replace(';',"\\;").replace(',',"\\,").replace(['\r','\n']," ")}
 
 async fn calendrier_ics(State(state):State<AppState>)->AppResult<Response>{let bands=sqlx::query_as::<_,Bande>(BAND_SELECT_ACTIVE).fetch_all(&state.pool).await?;let mut lines=vec!["BEGIN:VCALENDAR".to_string(),"VERSION:2.0".into(),"PRODID:-//EO-Suivi Elevage Rust//FR".into(),"CALSCALE:GREGORIAN".into(),"METHOD:PUBLISH".into()];let stages=[("Insémination",-115),("Échographie",-87),("Entrée maternité",-5),("Mise-bas",0),("Sevrage",28),("Transfert engraissement",71),("Aliment finition",140),("Départ abattoir",215)];for band in bands{let Some(base)=band.date_mb.as_deref().and_then(|value|NaiveDate::parse_from_str(&value[..value.len().min(10)],"%Y-%m-%d").ok())else{continue};for(name,days)in stages{let day=base+Duration::days(days);lines.push("BEGIN:VEVENT".into());lines.push(format!("UID:bande-{}-{}@eo-suivi-rust",band.id,days+200));lines.push(format!("DTSTAMP:{}T000000Z",Local::now().format("%Y%m%d")));lines.push(format!("DTSTART;VALUE=DATE:{}",day.format("%Y%m%d")));lines.push(format!("SUMMARY:{}",ics_escape(&format!("{} — {}",band.code,name))));lines.push("END:VEVENT".into());}}lines.push("END:VCALENDAR".into());let body=format!("{}\r\n",lines.join("\r\n"));let mut headers=HeaderMap::new();headers.insert(header::CONTENT_TYPE,HeaderValue::from_static("text/calendar; charset=utf-8"));headers.insert(header::CONTENT_DISPOSITION,HeaderValue::from_static("attachment; filename=elevage.ics"));Ok((headers,body).into_response())}
 
