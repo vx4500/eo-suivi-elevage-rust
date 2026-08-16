@@ -83,7 +83,8 @@ CREATE TABLE IF NOT EXISTS truie (
     mere_cochette INTEGER NOT NULL DEFAULT 0,
     bande_code TEXT,
     salle_id INTEGER REFERENCES salle(id),
-    case_id INTEGER REFERENCES casesalle(id)
+    case_id INTEGER REFERENCES casesalle(id),
+    source_import_id TEXT
 );
 
 CREATE INDEX IF NOT EXISTS ix_truie_num_travail ON truie(num_travail);
@@ -671,6 +672,28 @@ CREATE TABLE IF NOT EXISTS releve_compteur (
 
 CREATE INDEX IF NOT EXISTS ix_releve_compteur_compteur ON releve_compteur(compteur_id);
 CREATE INDEX IF NOT EXISTS ix_releve_compteur_date ON releve_compteur(date_releve);
+
+CREATE TABLE IF NOT EXISTS importjournal (
+    token TEXT PRIMARY KEY,
+    type_import TEXT NOT NULL,
+    nom_fichier TEXT,
+    statut TEXT NOT NULL DEFAULT 'apercu',
+    cree_par INTEGER REFERENCES utilisateur(id),
+    cree_le TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    resume TEXT,
+    applique_le TEXT
+);
+
+CREATE TABLE IF NOT EXISTS importligne (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token TEXT NOT NULL REFERENCES importjournal(token) ON DELETE CASCADE,
+    numero_ligne INTEGER NOT NULL,
+    action TEXT NOT NULL,
+    anomalie TEXT,
+    donnees_json TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS ix_importligne_token ON importligne(token);
 
 INSERT OR IGNORE INTO reglage(cle,valeur,libelle) VALUES
 ('sevrage',28,'Sevrage'),
