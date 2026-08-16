@@ -695,6 +695,18 @@ CREATE TABLE IF NOT EXISTS importligne (
 
 CREATE INDEX IF NOT EXISTS ix_importligne_token ON importligne(token);
 
+CREATE TABLE IF NOT EXISTS inventairecase (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    case_id INTEGER NOT NULL REFERENCES casesalle(id),
+    date TEXT NOT NULL,
+    nombre INTEGER NOT NULL,
+    note TEXT,
+    cree_par TEXT,
+    cree_le TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS ix_inventairecase_case_date ON inventairecase(case_id,date);
+
 INSERT OR IGNORE INTO reglage(cle,valeur,libelle) VALUES
 ('sevrage',28,'Sevrage'),
 ('aliment_2e_age',42,'Aliment 2e âge'),
