@@ -1,0 +1,2 @@
+{% extends "base.html" %}{% block content %}<h1>Contact et diagnostic</h1><div class="card"><p>En cas de problème, relève l’heure exacte, la page concernée et l’action réalisée. Le journal du service permet ensuite de retrouver l’erreur sans exposer la base.</p><pre>journalctl -u eo-suivi-rust -n 100 --no-pager -l -o cat</pre><p>Pour vérifier le service :</p><pre>systemctl status eo-suivi-rust --no-pager
+curl -I http://127.0.0.1:8080/login</pre></div>{% endblock %}
