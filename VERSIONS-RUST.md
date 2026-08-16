@@ -1,5 +1,22 @@
 # Historique et feuille de route EO-Suivi Rust
 
+## 2.1.5 — imports économiques PDF contrôlés
+
+- Lecture native des PDF texte avec limites de taille, de pages et de
+  décompression pour les documents non fiables.
+- Détection des factures Cooperl d'aliment, produits vétérinaires, semence,
+  génétique, apports charcutiers et synthèses Uniporc.
+- Distinction des présentations d'aliment (miette, farine, granulé), reprise
+  des avoirs et montants français, lots, poids, TMP et références de frappe.
+- Classement canonique des valorisations ; équarrissage, groupement, CVEE,
+  contribution sanitaire et cotisations restent toujours des retenues.
+- Aperçu obligatoire sans écriture, détection des doublons et indication des
+  ajouts/mises à jour avant confirmation.
+- Confirmation en transaction unique, affectation facultative à une bande,
+  annulation sans effet et journal durable des imports.
+- Import puissant limité aux rôles éleveur et administrateur. Les scans et
+  photos sans couche texte sont refusés clairement en attendant l'OCR.
+
 ## 2.1.4 — pilotage et vente directe
 
 - Tableau de bord complété avec le prix net/kg annuel, la moyenne pondérée des
@@ -66,7 +83,7 @@
 
 ## Prochaines versions
 
-- 2.2.0 : imports fiables et traçables.
+- 2.2.0 : OCR des scans/photos et imports Excel spécialisés.
 - 2.3.0 : reproduction, cycles et GTTT complet.
 - 2.4.0 : effectifs, stock, transferts et bâtiments.
 - 2.5.0 : économie, abattoir et vente directe.
