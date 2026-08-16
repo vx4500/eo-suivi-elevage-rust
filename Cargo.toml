@@ -1,6 +1,6 @@
 [package]
 name = "eo-suivi-elevage"
-version = "2.1.3"
+version = "2.1.4"
 edition = "2021"
 description = "EO-Suivi Elevage - serveur Rust compatible avec les bases SQLite v1.65"
 license = "proprietary"
