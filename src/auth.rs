@@ -8,6 +8,44 @@ use rand::RngCore;
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 
+const SALARIE_DEFAUT: &[&str] = &["planning", "bandes", "truies", "charcutiers", "sanitaire"];
+
+const SALARIE_HORS_SECTION_OK: &[&str] = &[
+    "/apropos",
+    "/correctifs",
+    "/mon-compte",
+    "/api",
+    "/scan",
+    "/qr",
+    "/calendrier",
+    "/taches",
+    "/saisie-rapide",
+    "/evenement",
+    "/mesure",
+    "/perte",
+    "/declaration",
+    "/attente",
+    "/template",
+    "/export",
+    "/cahiers",
+    "/engraissement",
+    "/transfert",
+    "/transferts",
+    "/quotidien",
+];
+
+const ELEVEUR_ONLY: &[&str] = &["/import", "/import-pdf", "/pharmacie", "/objectif", "/cause"];
+
+const ADMIN_ONLY: &[&str] = &[
+    "/parametres",
+    "/reglages",
+    "/utilisateurs",
+    "/journal",
+    "/sauvegarde",
+    "/administration",
+    "/maj",
+];
+
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct SessionData {
     pub uid: i64,
@@ -55,6 +93,47 @@ pub fn new_csrf() -> String {
     uuid::Uuid::new_v4().simple().to_string()
 }
 
+fn path_has_prefix(path: &str, prefix: &str) -> bool {
+    path == prefix || path.strip_prefix(prefix).is_some_and(|rest| rest.starts_with('/'))
+}
+
+fn section_for_path(path: &str) -> Option<&'static str> {
+    match path.trim_start_matches('/').split('/').next().unwrap_or("") {
+        "planning" => Some("planning"),
+        "bandes" | "bande" => Some("bandes"),
+        "truies" | "truie" | "recherche" | "inseminations" => Some("truies"),
+        "charcutiers" | "charcutier" | "abattoir" | "traitement-charc" => Some("charcutiers"),
+        "productivite" | "gttt" => Some("productivite"),
+        "ifip" => Some("ifip"),
+        "reformes" => Some("reformes"),
+        "cochettes" => Some("cochettes"),
+        "sanitaire" => Some("sanitaire"),
+        "stock" => Some("stock"),
+        "economique" => Some("economique"),
+        "structure" | "salle" => Some("structure"),
+        "effectifs" => Some("effectifs"),
+        "archives" => Some("archives"),
+        "entretien" => Some("entretien"),
+        _ => None,
+    }
+}
+
+fn salarie_path_allowed(path: &str, sections: &[String]) -> bool {
+    if matches!(path, "/" | "/logout" | "/contact") {
+        return true;
+    }
+    if let Some(section) = section_for_path(path) {
+        return if sections.is_empty() {
+            SALARIE_DEFAUT.contains(&section)
+        } else {
+            sections.iter().any(|allowed| allowed == section)
+        };
+    }
+    SALARIE_HORS_SECTION_OK
+        .iter()
+        .any(|prefix| path_has_prefix(path, prefix))
+}
+
 pub async fn guard(State(state): State<AppState>, mut request: Request, next: Next) -> Response {
     let path = request.uri().path().to_string();
     if path.starts_with("/static") || path == "/logo" {
@@ -90,10 +169,16 @@ pub async fn guard(State(state): State<AppState>, mut request: Request, next: Ne
         {
             return Redirect::to("/engraissement").into_response();
         }
+        if !matches!(session.role.as_str(), "admin" | "eleveur")
+            && ELEVEUR_ONLY.iter().any(|prefix| path_has_prefix(&path, prefix))
+        {
+            return Redirect::to("/").into_response();
+        }
+        if session.role == "salarie" && !salarie_path_allowed(&path, &session.sections) {
+            return Redirect::to("/").into_response();
+        }
         if session.role != "admin"
-            && ["/parametres", "/utilisateurs", "/journal", "/sauvegarde", "/maj"]
-                .iter()
-                .any(|prefix| path == *prefix || path.starts_with(&format!("{prefix}/")))
+            && ADMIN_ONLY.iter().any(|prefix| path_has_prefix(&path, prefix))
         {
             return Redirect::to("/").into_response();
         }
@@ -126,5 +211,20 @@ mod tests {
         let hash = hash_password("mot-de-passe-solide");
         assert!(verify_password("mot-de-passe-solide", &hash));
         assert!(!verify_password("autre", &hash));
+    }
+
+    #[test]
+    fn salarie_est_interdit_par_defaut_hors_section() {
+        assert!(!salarie_path_allowed("/route-inconnue", &[]));
+        assert!(!salarie_path_allowed("/economique", &[]));
+        assert!(salarie_path_allowed("/bandes", &[]));
+        assert!(salarie_path_allowed("/taches", &[]));
+    }
+
+    #[test]
+    fn salarie_respecte_ses_sections_personnalisees() {
+        let sections = vec!["economique".to_string()];
+        assert!(salarie_path_allowed("/economique", &sections));
+        assert!(!salarie_path_allowed("/bandes", &sections));
     }
 }
