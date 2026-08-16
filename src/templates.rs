@@ -28,6 +28,11 @@ pub fn build() -> anyhow::Result<Environment<'static>> {
         "import_apercu.html",
         include_str!("../templates/import_apercu.html"),
     )?;
+    env.add_template(
+        "prestataire.html",
+        include_str!("../templates/prestataire.html"),
+    )?;
+    env.add_template("structure.html", include_str!("../templates/structure.html"))?;
     env.add_template("transferts.html", include_str!("../templates/transferts.html"))?;
     env.add_template("effectifs.html", include_str!("../templates/effectifs.html"))?;
     env.add_template("vente_sessions.html", include_str!("../templates/vente_sessions.html"))?;
