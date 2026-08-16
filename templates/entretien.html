@@ -1,0 +1,16 @@
+{% extends "base.html" %}{% block title %}Entretien · EO-Suivi{% endblock %}{% block content %}
+<h1>Entretien et lavage</h1>
+<div class="card"><h2>Ajouter un entretien périodique</h2>
+  <form class="inline" method="post" action="/entretien">
+    <input type="hidden" name="csrf_token" value="{{ session.csrf }}">
+    <label>Nom<input name="nom" required></label><label>Type<input name="type" placeholder="matériel, bâtiment…"></label>
+    <label>Site<input name="site"></label><label>Dernière date<input type="date" name="derniere_date" value="{{ today }}"></label>
+    <label>Fréquence (jours)<input type="number" min="1" name="frequence_jours" value="365"></label><label>Note<input name="note"></label>
+    <button type="submit">Ajouter</button>
+  </form>
+</div>
+<h2>Entretiens programmés</h2><div class="rust-scroll"><table><thead><tr><th>Nom</th><th>Type</th><th>Site</th><th>Dernière date</th><th>Prochaine date</th><th>État</th><th>Note</th><th>Actions</th></tr></thead><tbody>
+{% for row in entretiens %}<tr><td>{{ row.nom }}</td><td>{{ row.type or '—' }}</td><td>{{ row.site or '—' }}</td><td>{{ row.derniere_date or '—' }}</td><td>{{ row.prochaine_date or '—' }}</td><td>{% if row.en_retard %}<span class="rust-badge danger">En retard</span>{% else %}<span class="rust-badge">À jour</span>{% endif %}</td><td>{{ row.note or '—' }}</td><td><form class="inline" method="post" action="/entretien/{{ row.id }}/date"><input type="hidden" name="csrf_token" value="{{ session.csrf }}"><input type="date" name="derniere_date" value="{{ today }}"><button>Fait</button></form><form class="inline" method="post" action="/entretien/{{ row.id }}/supprimer"><input type="hidden" name="csrf_token" value="{{ session.csrf }}"><button class="ghost">Supprimer</button></form></td></tr>
+{% else %}<tr><td colspan="8" class="rust-empty">Aucun entretien programmé</td></tr>{% endfor %}</tbody></table></div>
+<h2>Lavage des salles</h2><div class="rust-scroll"><table><thead><tr><th>Site</th><th>Salle</th><th>Type</th><th>Dernier lavage</th><th>Jours écoulés</th></tr></thead><tbody>{% for row in salles %}<tr><td>{{ row.site }}</td><td>{{ row.nom }}</td><td>{{ row.type or '—' }}</td><td>{{ row.dernier_lavage or '—' }}</td><td>{{ row.jours_depuis_lavage or '—' }}</td></tr>{% endfor %}</tbody></table></div>
+{% endblock %}

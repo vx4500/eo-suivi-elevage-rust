@@ -1,0 +1,9 @@
+{% extends "base.html" %}{% block content %}
+<p><a href="/bandes">← Toutes les bandes</a> · <a href="/bande/{{ bande.id }}/imprimer">Imprimer la fiche</a> · <a href="/export/mise-bas/{{ bande.id }}">Exporter la liste mise-bas (CSV)</a></p><h1>Bande {{ bande.code }}</h1>
+<div class="rust-grid"><div class="card kpi"><div class="v">{{ resume.truies }}</div><div class="l">Truies</div></div><div class="card kpi"><div class="v">{{ resume.nv }}</div><div class="l">Nés vifs</div></div><div class="card kpi"><div class="v">{{ resume.sevres }}</div><div class="l">Sevrés</div></div><div class="card kpi"><div class="v">{{ resume.pertes }} %</div><div class="l">Pertes</div></div></div>
+<section class="card"><h2>Dates clés</h2><div class="rust-scroll"><table><tr><th>Étape</th><th>Date</th><th>État</th></tr>{% for d in dates %}<tr {% if d.actuelle %}style="background:#fff3cd;font-weight:700"{% endif %}><td>{{ d.nom }}</td><td>{{ d.date|date_fr }}</td><td>{{ d.etat }}</td></tr>{% endfor %}</table></div></section>
+<div class="rust-grid">
+<section class="card"><h2>Truies</h2>{% for t in truies %}<p><a href="/truie/{{ t.id }}"><b>{{ t.num_travail }}</b></a> — rang {{ t.rang }}</p>{% else %}<p class="muted">Aucune truie affectée.</p>{% endfor %}</section>
+<section class="card"><h2>Événements</h2>{% for e in evenements %}<p>{{ e.date|date_fr }} — <b>{{ e.type }}</b>{% if e.note %} — {{ e.note }}{% endif %}</p>{% else %}<p class="muted">Aucun événement.</p>{% endfor %}</section>
+</div>
+{% endblock %}

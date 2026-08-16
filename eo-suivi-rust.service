@@ -1,0 +1,21 @@
+[Unit]
+Description=EO-Suivi Elevage Rust
+After=network.target
+
+[Service]
+Type=simple
+User=eo-suivi
+WorkingDirectory=/opt/eo-suivi-rust
+Environment=ELEVAGE_DATA=/var/lib/eo-suivi
+Environment=EO_HOST=0.0.0.0
+Environment=EO_PORT=8080
+ExecStart=/opt/eo-suivi-rust/eo-suivi-elevage
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/eo-suivi
+
+[Install]
+WantedBy=multi-user.target

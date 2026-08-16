@@ -1,0 +1,63 @@
+use chrono::NaiveDate;
+use minijinja::{Environment, Error, ErrorKind, Value};
+
+pub fn build() -> anyhow::Result<Environment<'static>> {
+    let mut env = Environment::new();
+    env.add_global("app_version", env!("CARGO_PKG_VERSION"));
+    env.add_template("base.html", include_str!("../templates/base.html"))?;
+    env.add_template("login.html", include_str!("../templates/login.html"))?;
+    env.add_template("dashboard.html", include_str!("../templates/dashboard.html"))?;
+    env.add_template("bandes.html", include_str!("../templates/bandes.html"))?;
+    env.add_template("bande.html", include_str!("../templates/bande.html"))?;
+    env.add_template("truies.html", include_str!("../templates/truies.html"))?;
+    env.add_template("truie.html", include_str!("../templates/truie.html"))?;
+    env.add_template("energie.html", include_str!("../templates/energie.html"))?;
+    env.add_template("economique.html", include_str!("../templates/economique.html"))?;
+    env.add_template("vente_directe.html", include_str!("../templates/vente_directe.html"))?;
+    env.add_template("commande.html", include_str!("../templates/commande.html"))?;
+    env.add_template("utilisateurs.html", include_str!("../templates/utilisateurs.html"))?;
+    env.add_template("mot_de_passe.html", include_str!("../templates/mot_de_passe.html"))?;
+    env.add_template("liste.html", include_str!("../templates/liste.html"))?;
+    env.add_template("entretien.html", include_str!("../templates/entretien.html"))?;
+    env.add_template("abattoir.html", include_str!("../templates/abattoir.html"))?;
+    env.add_template("cahiers.html", include_str!("../templates/cahiers.html"))?;
+    env.add_template("quotidien.html", include_str!("../templates/quotidien.html"))?;
+    env.add_template("inseminations.html", include_str!("../templates/inseminations.html"))?;
+    env.add_template("transferts.html", include_str!("../templates/transferts.html"))?;
+    env.add_template("effectifs.html", include_str!("../templates/effectifs.html"))?;
+    env.add_template("vente_sessions.html", include_str!("../templates/vente_sessions.html"))?;
+    env.add_template("impression.html", include_str!("../templates/impression.html"))?;
+    env.add_filter("date_fr", date_fr);
+    env.add_filter("euro", euro);
+    env.add_filter("decimal1", decimal1);
+    env.add_filter("decimal2", decimal2);
+    env.add_filter("decimal3", decimal3);
+    Ok(env)
+}
+
+fn date_fr(value: Value) -> Result<String, Error> {
+    let raw = value.as_str().unwrap_or_default();
+    if raw.is_empty() {
+        return Ok("—".to_string());
+    }
+    NaiveDate::parse_from_str(&raw[..raw.len().min(10)], "%Y-%m-%d")
+        .map(|date| date.format("%d/%m/%Y").to_string())
+        .map_err(|_| Error::new(ErrorKind::InvalidOperation, "date invalide"))
+}
+
+fn euro(value: Value) -> String {
+    let number = f64::try_from(value).unwrap_or(0.0);
+    format!("{number:.2} €").replace('.', ",")
+}
+
+fn decimal1(value: Value) -> String {
+    format!("{:.1}", f64::try_from(value).unwrap_or(0.0)).replace('.', ",")
+}
+
+fn decimal2(value: Value) -> String {
+    format!("{:.2}", f64::try_from(value).unwrap_or(0.0)).replace('.', ",")
+}
+
+fn decimal3(value: Value) -> String {
+    format!("{:.3}", f64::try_from(value).unwrap_or(0.0)).replace('.', ",")
+}

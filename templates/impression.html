@@ -1,0 +1,5 @@
+{% extends "base.html" %}{% block content %}
+<div class="no-print"><button onclick="window.print()">Imprimer</button> <a href="javascript:history.back()">Retour</a></div><h1>{{ title }}</h1>
+<section class="card"><h2>Informations</h2><div class="rust-grid">{% for key,value in infos|items %}<div><small>{{ key|replace('_',' ') }}</small><br><b>{{ value or '—' }}</b></div>{% endfor %}</div></section>
+<section><h2>Détail et historique</h2><div class="rust-scroll"><table><thead><tr>{% if lignes %}{% for key,value in lignes[0]|items %}<th>{{ key|replace('_',' ') }}</th>{% endfor %}{% endif %}</tr></thead><tbody>{% for row in lignes %}<tr>{% for key,value in row|items %}<td>{{ value or '—' }}</td>{% endfor %}</tr>{% else %}<tr><td class="rust-empty">Aucune donnée</td></tr>{% endfor %}</tbody></table></div></section>
+{% endblock %}

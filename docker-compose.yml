@@ -1,0 +1,14 @@
+services:
+  eo-suivi:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - eo_data:/data
+    environment:
+      RUST_LOG: info
+
+volumes:
+  eo_data:
+

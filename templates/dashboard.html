@@ -1,0 +1,20 @@
+{% extends "base.html" %}{% block content %}
+<h1>Bonjour {{ session.nom }}</h1>
+<div class="rust-grid">
+  <div class="card kpi"><div class="v">{{ stats.band_active }}</div><div class="l">Bandes actives</div></div>
+  <div class="card kpi"><div class="v">{{ stats.truies }}</div><div class="l">Truies actives</div></div>
+  <div class="card kpi"><div class="v">{{ stats.porcs_vendus_annee }}</div><div class="l">Porcs vendus en {{ annee }}</div></div>
+  <div class="card kpi"><div class="v">{% if stats.prix_net_kg is not none %}{{ stats.prix_net_kg|decimal3 }} €{% else %}—{% endif %}</div><div class="l">Prix net/kg en {{ annee }}</div></div>
+  <div class="card kpi"><div class="v">{{ stats.morts_annee }}</div><div class="l">Mortalités déclarées en {{ annee }}</div></div>
+  <div class="card kpi"><div class="v">{{ stats.marge|euro }}</div><div class="l">Marge partielle cumulée</div></div>
+</div>
+<h2>Bandes en cours</h2>
+<div class="rust-scroll"><table><thead><tr><th>Bande</th><th>Mise-bas</th><th>Stade actuel</th><th>Âge</th><th>Truies</th><th>Prochaine étape</th></tr></thead><tbody>
+{% for l in bandes %}<tr><td><a href="/bande/{{ l.id }}"><b>{{ l.code }}</b></a></td><td>{{ l.date_mb|date_fr }}</td><td><span class="rust-badge">{{ l.stade }}</span></td><td>{% if l.age is not none %}J{{ l.age }}{% else %}—{% endif %}</td><td>{{ l.truies }}</td><td>{{ l.prochaine }}</td></tr>{% else %}<tr><td colspan="6" class="rust-empty">Aucune bande active</td></tr>{% endfor %}
+</tbody></table></div>
+<div class="rust-grid" style="margin-top:16px">
+  <section class="card"><h2>Inséminations à prévoir</h2>{% for i in inseminations %}<p><b>{{ i.num_travail }}</b> — {{ i.date_prevue|date_fr }}</p>{% else %}<p class="muted">Aucune alerte.</p>{% endfor %}<a href="/inseminations">Ouvrir les inséminations</a></section>
+  <section class="card"><h2>Tâches</h2>{% for t in taches %}<p><b>{{ t.titre }}</b>{% if t.echeance %} — {{ t.echeance|date_fr }}{% endif %}</p>{% else %}<p class="muted">Aucune tâche ouverte.</p>{% endfor %}<a href="/taches">Voir les tâches</a></section>
+  <section class="card"><h2>Prix net mensuel</h2><div class="rust-scroll"><table><thead><tr><th>Mois</th><th>Porcs</th><th>€/kg net</th></tr></thead><tbody>{% for p in prix_tendance %}<tr><td>{{ p.mois }}</td><td>{{ p.porcs }}</td><td>{% if p.prix_net_kg is not none %}<b>{{ p.prix_net_kg|decimal3 }}</b>{% else %}—{% endif %}</td></tr>{% else %}<tr><td colspan="3" class="rust-empty">Aucune vente</td></tr>{% endfor %}</tbody></table></div></section>
+</div>
+{% endblock %}

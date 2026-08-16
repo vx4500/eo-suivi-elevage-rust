@@ -1,0 +1,45 @@
+{% extends "base.html" %}{% block content %}
+<h1>Transferts et occupation des cases</h1>
+<p>Les effectifs sont calculés à partir des entrées, sorties et mortalités déclarées. Un transfert est refusé si la source est insuffisante ou si la capacité de la destination est dépassée.</p>
+
+{% if session.peut_modifier %}
+<div class="rust-grid">
+  <form class="card" method="post" action="/transferts/porcs">
+    <h2>Déplacer des porcs</h2>
+    <input type="hidden" name="csrf_token" value="{{ session.csrf }}">
+    <label>Source<select name="source" required>
+      <option value="">Choisir…</option>
+      <optgroup label="Bandes">
+      {% for b in bandes %}{% if b.restant > 0 %}<option value="bande:{{ b.id }}">Bande {{ b.code }} — {{ b.restant }} disponible(s)</option>{% endif %}{% endfor %}
+      </optgroup>
+      <optgroup label="Cases occupées">
+      {% for c in cases %}{% if c.porcs > 0 %}<option value="case:{{ c.case_id }}">{{ c.site }} · {{ c.salle }} · {{ c.case_nom }} — {{ c.porcs }} présent(s)</option>{% endif %}{% endfor %}
+      </optgroup>
+    </select></label>
+    <label>Destination<select name="case_dest_id" required><option value="">Choisir…</option>{% for c in cases %}<option value="{{ c.case_id }}">{{ c.site }} · {{ c.salle }} · {{ c.case_nom }}{% if c.nb_max_porcs %} ({{ c.porcs }}/{{ c.nb_max_porcs }}){% endif %}</option>{% endfor %}</select></label>
+    <div class="rust-actions"><label>Nombre<input type="number" name="nombre" min="1" required></label><label>Date<input type="date" name="date" value="{{ today }}" required></label></div>
+    <label>Note<input name="note"></label><button>Enregistrer le transfert</button>
+  </form>
+
+  <form class="card" method="post" action="/transferts/truies">
+    <h2>Déplacer des truies</h2>
+    <input type="hidden" name="csrf_token" value="{{ session.csrf }}">
+    <label>Destination<select name="case_dest_id" required><option value="">Choisir…</option>{% for c in cases %}<option value="{{ c.case_id }}">{{ c.site }} · {{ c.salle }} · {{ c.case_nom }}</option>{% endfor %}</select></label>
+    <div class="rust-scroll" style="max-height:260px"><table><thead><tr><th></th><th>Truie</th><th>Bande</th><th>Emplacement actuel</th></tr></thead><tbody>
+    {% for t in truies %}<tr><td><input type="checkbox" name="truie_{{ t.id }}" value="1"></td><td>{{ t.num_travail }}</td><td>{{ t.bande_code or '—' }}</td><td>{{ t.site or '—' }} · {{ t.salle or '—' }} · {{ t.case_nom or '—' }}</td></tr>{% endfor %}
+    </tbody></table></div>
+    <div class="rust-actions"><label>Date<input type="date" name="date" value="{{ today }}" required></label><label>Note<input name="note"></label></div><button>Déplacer les truies cochées</button>
+  </form>
+</div>
+{% endif %}
+
+<h2>Occupation actuelle</h2>
+<div class="rust-scroll"><table><thead><tr><th>Site</th><th>Salle</th><th>Case</th><th>Porcs</th><th>Capacité</th><th>Truies</th></tr></thead><tbody>
+{% for c in cases %}<tr><td>{{ c.site }}</td><td>{{ c.salle }}</td><td>{{ c.case_nom }}</td><td class="{% if c.porcs < 0 %}danger{% endif %}"><b>{{ c.porcs }}</b></td><td>{{ c.nb_max_porcs or '—' }}</td><td>{% if c.nb_truies %}{{ c.nb_truies }} — {{ c.truies }}{% else %}—{% endif %}</td></tr>{% else %}<tr><td colspan="6" class="rust-empty">Aucune case configurée</td></tr>{% endfor %}
+</tbody></table></div>
+
+<details><summary><b>Historique des 100 derniers mouvements</b></summary>
+<div class="rust-scroll"><table><thead><tr><th>Date</th><th>Type</th><th>Animal / bande</th><th>Source</th><th>Destination</th><th>Nombre</th><th>Note</th><th></th></tr></thead><tbody>
+{% for h in historique %}<tr><td>{{ h.date|date_fr }}</td><td>{{ h.espece }}</td><td>{{ h.truie or h.bande or '—' }}</td><td>{{ h.salle_source or '—' }} · {{ h.case_source or '—' }}</td><td>{{ h.salle_destination or '—' }} · {{ h.case_destination or '—' }}</td><td>{{ h.nombre or '—' }}</td><td>{{ h.note or '—' }}</td><td>{% if session.peut_modifier %}<form method="post" action="/transfert/{{ h.id }}/supprimer" onsubmit="return confirm('Annuler ce mouvement ?')"><input type="hidden" name="csrf_token" value="{{ session.csrf }}"><button class="ghost danger">Annuler</button></form>{% endif %}</td></tr>{% else %}<tr><td colspan="8" class="rust-empty">Aucun mouvement</td></tr>{% endfor %}
+</tbody></table></div></details>
+{% endblock %}

@@ -1,0 +1,13 @@
+{% extends "base.html" %}{% block content %}
+<h1>Bandes</h1>
+{% if session.peut_modifier %}<form class="card rust-actions" method="post" action="/bandes/ajouter">
+  <input type="hidden" name="csrf_token" value="{{ session.csrf }}">
+  <label>Code<input name="code" required></label><label>N° officiel<input name="num_officiel"></label>
+  <label>Mise-bas prévue<input type="date" name="date_mb"></label><label>Site<input name="site"></label><button>Ajouter</button>
+</form>{% endif %}
+<div class="rust-scroll"><table><thead><tr><th>Bande</th><th>Mise-bas</th><th>Site</th><th>Stade</th><th>Truies</th><th></th></tr></thead><tbody>
+{% for l in bandes %}<tr><td><a href="/bande/{{ l.id }}"><b>{{ l.code }}</b></a></td><td>{{ l.date_mb|date_fr }}</td><td>{{ l.site or '—' }}</td><td>{{ l.stade }}</td><td>{{ l.truies }}</td><td>{% if session.peut_modifier %}<form method="post" action="/bande/{{ l.id }}/archiver"><input type="hidden" name="csrf_token" value="{{ session.csrf }}"><button class="ghost">Archiver</button></form>{% endif %}</td></tr>{% else %}<tr><td colspan="6" class="rust-empty">Aucune bande</td></tr>{% endfor %}
+</tbody></table></div>
+<p><a href="/archives">Voir les bandes archivées</a></p>
+{% endblock %}
+

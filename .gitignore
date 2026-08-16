@@ -1,0 +1,8 @@
+/target/
+/data/
+/dist-rust/
+*.db
+*.db-shm
+*.db-wal
+*.log
+

@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{% block title %}EO-Suivi Élevage{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <style>
+    .rust-nav{display:flex;gap:8px;align-items:center;overflow:visible;padding:10px 14px;background:#173f32;color:white;position:sticky;top:0;z-index:20}
+    .rust-nav a{color:white;text-decoration:none;padding:7px 10px;border-radius:8px;white-space:nowrap}.rust-nav a:hover{background:#ffffff22}
+    .rust-nav .rust-menu{position:relative;white-space:nowrap}.rust-nav .rust-menu>span{display:block;padding:7px 10px;cursor:pointer}.rust-nav .rust-sub{display:none;position:absolute;top:100%;left:0;min-width:210px;padding:7px;background:#173f32;border-radius:0 0 10px 10px;box-shadow:0 12px 25px #0004}.rust-nav .rust-menu:hover .rust-sub{display:grid}.rust-nav .rust-sub a{padding:8px 10px}
+    .rust-search{display:flex;gap:5px;align-items:center}.rust-search input{width:150px;padding:6px 8px}.rust-search button{padding:6px 9px}
+    body{min-height:100vh;display:flex;flex-direction:column}.rust-nav .grow{flex:1}.rust-main{width:100%;max-width:1320px;margin:0 auto;padding:18px;flex:1}.rust-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+    .rust-actions{display:flex;gap:8px;align-items:end;flex-wrap:wrap}.rust-actions label{min-width:130px}.rust-empty{padding:25px;text-align:center;color:#667085}
+    .rust-badge{display:inline-block;padding:3px 8px;border-radius:99px;background:#eef7f0;color:#1e4d3a;font-size:12px}.danger{color:#b42318}.rust-scroll{overflow:auto}
+    .rust-footer{text-align:center;padding:14px 18px;color:#6b7773;font-size:12px;border-top:1px solid #e2e8e3;background:#fff}
+    @media(max-width:850px){.rust-nav{position:static;flex-wrap:wrap}.rust-nav .grow{display:none}.rust-search{order:10;width:100%}.rust-search input{flex:1}.rust-nav .rust-sub{position:fixed;left:10px;right:10px;top:auto;max-height:70vh;overflow:auto}}
+  </style>
+</head>
+<body>
+{% if session %}
+<nav class="rust-nav">
+  <a href="/">Accueil</a>
+  <div class="rust-menu"><span>Reproduction ▾</span><div class="rust-sub">
+    <a href="/bandes">Bandes</a><a href="/truies">Truies</a><a href="/inseminations">Inséminations</a><a href="/calendrier.ics">Calendrier ICS</a>
+    <a href="/gttt">GTTT</a><a href="/productivite">Productivité</a><a href="/reformes">Réformes</a><a href="/cochettes">Cochettes</a>
+  </div></div>
+  <div class="rust-menu"><span>Élevage ▾</span><div class="rust-sub">
+    <a href="/planning">Planning</a><a href="/quotidien">Quotidien</a><a href="/transferts">Transferts</a>
+    <a href="/effectifs">Effectifs</a><a href="/stock">Stocks</a><a href="/charcutiers">Charcutiers</a><a href="/engraissement">Engraissement</a>
+  </div></div>
+  <div class="rust-menu"><span>Pilotage ▾</span><div class="rust-sub">
+    <a href="/economique">Économie</a><a href="/abattoir">Abattoir</a><a href="/ifip">IFIP</a><a href="/cahiers">Cahiers des charges</a>
+    <a href="/sanitaire">Sanitaire</a><a href="/pharmacie">Pharmacie</a><a href="/entretien">Entretien</a><a href="/energie">Eau & électricité</a>
+    <a href="/vente-directe">Vente directe</a><a href="/structure">Structure</a><a href="/etat-donnees">État des données</a>
+  </div></div>
+  <span class="grow"></span>
+  <form class="rust-search" action="/recherche" method="get"><input name="q" placeholder="Rechercher…"><button type="submit">OK</button></form>
+  <span>{{ session.nom }}</span>
+  {% if session.role == 'admin' %}<a href="/utilisateurs">Utilisateurs</a>{% endif %}
+  <a href="/logout">Déconnexion</a>
+</nav>
+{% endif %}
+<main class="rust-main">
+  {% if flash %}<div class="alert">{{ flash }}</div>{% endif %}
+  {% block content %}{% endblock %}
+</main>
+<footer class="rust-footer">EO-Suivi Élevage · Version Rust {{ app_version }}</footer>
+</body>
+</html>
