@@ -1,0 +1,7 @@
+{% extends "base.html" %}{% block content %}
+<div class="no-print"><button onclick="window.print()">Imprimer</button> <a href="javascript:history.back()">Retour</a></div>
+<h1>Commande n° {{ commande.id }}</h1>
+<section class="card"><div class="rust-grid"><div><small>Client</small><br><b>{{ commande.nom_client }}</b></div><div><small>Téléphone</small><br><b>{{ commande.telephone }}</b></div><div><small>E-mail</small><br><b>{{ commande.email or '—' }}</b></div><div><small>Date</small><br><b>{{ commande.cree_le }}</b></div><div><small>Session</small><br><b>{{ commande.session_nom or '—' }}</b></div><div><small>Livraison</small><br><b>{{ commande.date_livraison|date_fr }}</b></div><div><small>Statut</small><br><b>{{ commande.statut }}</b></div></div>{% if commande.notes %}<p><b>Notes :</b> {{ commande.notes }}</p>{% endif %}</section>
+<table><thead><tr><th>Produit</th><th>Prix unitaire</th><th>Quantité</th><th>Total</th></tr></thead><tbody>{% for l in lignes %}<tr><td>{{ l.nom_produit }}</td><td>{{ l.prix_unitaire|euro }}/{{ l.unite }}</td><td>{{ l.quantite }}</td><td>{{ l.total_ligne|euro }}</td></tr>{% endfor %}<tr><th colspan="3">Total</th><th>{{ commande.total|euro }}</th></tr></tbody></table>
+<p style="margin-top:45px">Remise au client : ____________________ &nbsp;&nbsp; Règlement : ____________________</p>
+{% endblock %}
