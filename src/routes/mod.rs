@@ -88,6 +88,7 @@ pub fn router(state: AppState) -> Router {
         .route("/transfert/{id}/supprimer", post(transfert_supprimer))
         .route("/effectifs", get(effectifs))
         .route("/effectifs/inventaire", post(effectifs_inventaire))
+        .route("/effectifs/inventaire-case", post(effectifs_inventaire_case))
         .route("/etat-donnees", get(etat_donnees))
         .route("/api/bandes-actives", get(api_bandes_actives))
         .route("/api/bandes", get(api_bandes))
@@ -147,6 +148,12 @@ pub fn router(state: AppState) -> Router {
         .route("/taches/{id}/supprimer", post(tache_supprimer))
         .route("/sanitaire", get(sanitaire))
         .route("/pharmacie", get(pharmacie))
+        .route("/sanitaire/acte/ajouter", post(sanitaire_acte_ajouter))
+        .route("/sanitaire/acte/modifier", post(sanitaire_acte_modifier))
+        .route("/sanitaire/acte/supprimer", post(sanitaire_acte_supprimer))
+        .route("/sanitaire/fait", post(sanitaire_fait))
+        .route("/pharmacie/mouvement", post(pharmacie_mouvement))
+        .route("/pharmacie/regler", post(pharmacie_regler))
         .route("/planning", get(planning))
         .route("/calendrier.ics", get(calendrier_ics))
         .route("/stock", get(stock))
@@ -1698,15 +1705,34 @@ async fn transferts(
 }
 
 async fn case_pig_count(pool: &SqlitePool, case_id: i64) -> AppResult<i64> {
-    Ok(sqlx::query_scalar::<_, i64>(
-        "SELECT CAST(COALESCE((SELECT SUM(CASE WHEN case_dest_id=? THEN COALESCE(nombre,0) ELSE -COALESCE(nombre,0) END) FROM transfert WHERE espece='porc' AND (case_dest_id=? OR case_source_id=?)),0)-COALESCE((SELECT SUM(nombre) FROM declarationmort WHERE case_id=?),0) AS INTEGER)",
+    let inventory: Option<(String, i64)> = sqlx::query_as(
+        "SELECT date,nombre FROM inventairecase WHERE case_id=? ORDER BY date DESC,id DESC LIMIT 1",
+    )
+    .bind(case_id)
+    .fetch_optional(pool)
+    .await?;
+    let (date, base) = inventory
+        .map(|(date, number)| (Some(date), number))
+        .unwrap_or((None, 0));
+    let movements: i64 = sqlx::query_scalar(
+        "SELECT CAST(COALESCE(SUM(CASE WHEN case_dest_id=? THEN COALESCE(nombre,0) ELSE -COALESCE(nombre,0) END),0) AS INTEGER) FROM transfert WHERE espece='porc' AND (case_dest_id=? OR case_source_id=?) AND (? IS NULL OR date>?)",
     )
     .bind(case_id)
     .bind(case_id)
     .bind(case_id)
-    .bind(case_id)
+    .bind(&date)
+    .bind(&date)
     .fetch_one(pool)
-    .await?)
+    .await?;
+    let deaths: i64 = sqlx::query_scalar(
+        "SELECT CAST(COALESCE(SUM(nombre),0) AS INTEGER) FROM declarationmort WHERE case_id=? AND (? IS NULL OR date>?)",
+    )
+    .bind(case_id)
+    .bind(&date)
+    .bind(&date)
+    .fetch_one(pool)
+    .await?;
+    Ok((base + movements - deaths).max(0))
 }
 
 async fn remaining_band_pigs(pool: &SqlitePool, band_id: i64, code: &str) -> AppResult<i64> {
@@ -1901,6 +1927,13 @@ async fn effectifs(
     } else { Vec::new() };
     let movements = generic_rows(&state.pool,"SELECT id,date,bande_code,code_ifip,nombre,poids,montant,libelle,destination,type_saisie FROM mouvementstock WHERE est_stock=0 ORDER BY date DESC,id DESC LIMIT 80").await?;
     let losses = generic_rows(&state.pool,"SELECT bande_code,CAST(COALESCE(SUM(CASE WHEN code_ifip='39' THEN nombre ELSE 0 END),0) AS INTEGER) AS pertes_ps,CAST(COALESCE(SUM(CASE WHEN code_ifip='49' THEN nombre ELSE 0 END),0) AS INTEGER) AS pertes_engraissement FROM mouvementstock WHERE code_ifip IN('39','49') AND bande_code IS NOT NULL GROUP BY bande_code ORDER BY bande_code").await?;
+    let mut cases = generic_rows(&state.pool,"SELECT c.id,c.nom,s.nom AS salle,COALESCE(si.nom,si.code) AS site,c.nb_max_porcs FROM casesalle c JOIN salle s ON s.id=c.salle_id JOIN site si ON si.id=s.site_id ORDER BY COALESCE(si.nom,si.code),s.ordre,c.nom").await?;
+    for case in &mut cases {
+        let object=case.as_object_mut().expect("case objet");
+        let id=object.get("id").and_then(Value::as_i64).unwrap_or_default();
+        object.insert("effectif".into(),json!(case_pig_count(&state.pool,id).await?));
+    }
+    let case_inventories=generic_rows(&state.pool,"SELECT i.id,i.date,i.nombre,i.note,i.cree_par,c.nom AS case_nom,s.nom AS salle,COALESCE(si.nom,si.code) AS site FROM inventairecase i JOIN casesalle c ON c.id=i.case_id JOIN salle s ON s.id=c.salle_id JOIN site si ON si.id=s.site_id ORDER BY i.date DESC,i.id DESC LIMIT 100").await?;
     let mut bands = generic_rows(&state.pool,"SELECT id,code,date_mb,site FROM bande WHERE active=1 ORDER BY date_mb,code").await?;
     for band in &mut bands {
         let object = band.as_object_mut().expect("generic row object");
@@ -1916,6 +1949,8 @@ async fn effectifs(
     ctx.insert("mouvements".into(), Value::Array(movements));
     ctx.insert("pertes".into(), Value::Array(losses));
     ctx.insert("bandes".into(), Value::Array(bands));
+    ctx.insert("cases".into(),Value::Array(cases));
+    ctx.insert("inventaires_cases".into(),Value::Array(case_inventories));
     ctx.insert("total_animaux".into(), json!(total_animals));
     ctx.insert("total_valeur".into(), json!(total_value));
     ctx.insert("today".into(), json!(Local::now().date_naive().format("%Y-%m-%d").to_string()));
@@ -1937,6 +1972,24 @@ async fn effectifs_inventaire(
     let date = form_text(&form,"date").unwrap_or_else(||Local::now().date_naive().format("%Y-%m-%d").to_string());
     sqlx::query("INSERT INTO mouvementstock(code_ifip,date,bande_code,nombre,poids,montant,libelle,destination,type_saisie,est_stock) VALUES(NULL,?,?,?,?,?,?,NULL,'inventaire',1)")
         .bind(&date).bind(&code).bind(number).bind(form_f64(&form,"poids")).bind(form_f64(&form,"montant")).bind(form_text(&form,"libelle").unwrap_or_else(||"stock porcs".into())).execute(&state.pool).await?;
+    Ok(Redirect::to("/effectifs").into_response())
+}
+
+async fn effectifs_inventaire_case(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    verify_csrf(&session,&form)?;
+    let case_id=form_i64(&form,"case_id").ok_or_else(||AppError::Invalid("Case obligatoire".into()))?;
+    let number=form_i64(&form,"nombre").filter(|value|*value>=0).ok_or_else(||AppError::Invalid("Effectif invalide".into()))?;
+    let exists:i64=sqlx::query_scalar("SELECT COUNT(*) FROM casesalle WHERE id=?").bind(case_id).fetch_one(&state.pool).await?;
+    if exists==0{return Err(AppError::Invalid("Case introuvable".into()))}
+    sqlx::query("INSERT INTO inventairecase(case_id,date,nombre,note,cree_par) VALUES(?,?,?,?,?)")
+        .bind(case_id)
+        .bind(form_text(&form,"date").unwrap_or_else(||Local::now().date_naive().format("%Y-%m-%d").to_string()))
+        .bind(number).bind(form_text(&form,"note")).bind(&session.identifiant).execute(&state.pool).await?;
     Ok(Redirect::to("/effectifs").into_response())
 }
 
@@ -2329,8 +2382,117 @@ async fn tache_ajouter(State(state):State<AppState>,Extension(session):Extension
 async fn tache_fait(State(state):State<AppState>,Extension(session):Extension<SessionData>,Path(id):Path<i64>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{verify_csrf(&session,&form)?;sqlx::query("UPDATE tache SET fait=CASE fait WHEN 1 THEN 0 ELSE 1 END WHERE id=?").bind(id).execute(&state.pool).await?;Ok(Redirect::to("/taches").into_response())}
 async fn tache_supprimer(State(state):State<AppState>,Extension(session):Extension<SessionData>,Path(id):Path<i64>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{verify_csrf(&session,&form)?;sqlx::query("DELETE FROM tache WHERE id=?").bind(id).execute(&state.pool).await?;Ok(Redirect::to("/taches").into_response())}
 
-async fn sanitaire(State(state):State<AppState>,Extension(session):Extension<SessionData>)->AppResult<Html<String>>{list_page(&state,&session,"Plan sanitaire","Protocoles actifs","SELECT id,libelle,cible,reference,jour,produit,dose,voie,delai_attente,note FROM acteprotocole WHERE actif=1 ORDER BY cible,jour",&["id","libelle","cible","reference","jour","produit","dose","voie","delai_attente","note"]).await}
-async fn pharmacie(State(state):State<AppState>,Extension(session):Extension<SessionData>)->AppResult<Html<String>>{list_page(&state,&session,"Pharmacie","Stocks et seuils","SELECT id,produit,stock_actuel,unite,seuil_alerte,maj,note FROM produitpharmacie ORDER BY produit",&["id","produit","stock_actuel","unite","seuil_alerte","maj","note"]).await}
+async fn sanitaire(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+) -> AppResult<Html<String>> {
+    let protocols = generic_rows(&state.pool, "SELECT id,libelle,cible,reference,jour,produit,dose,unite,voie,duree_j,delai_attente,aiguille,preconisations,note FROM acteprotocole WHERE actif=1 ORDER BY cible,jour,id").await?;
+    let bands = generic_rows(&state.pool, "SELECT id,code,date_mb FROM bande WHERE active=1 ORDER BY date_mb,code").await?;
+    let completed = generic_rows(&state.pool, "SELECT ar.id,ar.date_realise,b.code AS bande,a.libelle,a.produit,ar.note FROM acterealise ar JOIN bande b ON b.id=ar.bande_id JOIN acteprotocole a ON a.id=ar.acte_id ORDER BY ar.date_realise DESC,ar.id DESC LIMIT 250").await?;
+    let mut ctx = context(&session);
+    ctx.insert("protocoles".into(), Value::Array(protocols));
+    ctx.insert("bandes".into(), Value::Array(bands));
+    ctx.insert("realises".into(), Value::Array(completed));
+    ctx.insert("today".into(), json!(Local::now().date_naive().format("%Y-%m-%d").to_string()));
+    render(&state, "sanitaire.html", Value::Object(ctx))
+}
+
+async fn sanitaire_acte_ajouter(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    verify_csrf(&session, &form)?;
+    let label = form_text(&form, "libelle").ok_or_else(|| AppError::Invalid("Libellé obligatoire".into()))?;
+    let target = form_text(&form, "cible").ok_or_else(|| AppError::Invalid("Cible obligatoire".into()))?;
+    let reference = form_text(&form, "reference").unwrap_or_else(|| "mise_bas".into());
+    let day = form_i64(&form, "jour").unwrap_or(0);
+    sqlx::query("INSERT INTO acteprotocole(libelle,cible,reference,jour,produit,dose,unite,voie,duree_j,delai_attente,aiguille,preconisations,note,actif) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,1)")
+        .bind(label).bind(target).bind(reference).bind(day)
+        .bind(form_text(&form,"produit")).bind(form_text(&form,"dose")).bind(form_text(&form,"unite"))
+        .bind(form_text(&form,"voie")).bind(form_i64(&form,"duree_j")).bind(form_i64(&form,"delai_attente"))
+        .bind(form_text(&form,"aiguille")).bind(form_text(&form,"preconisations")).bind(form_text(&form,"note"))
+        .execute(&state.pool).await?;
+    Ok(Redirect::to("/sanitaire").into_response())
+}
+
+async fn sanitaire_acte_modifier(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    verify_csrf(&session, &form)?;
+    let id = form_i64(&form, "id").ok_or_else(|| AppError::Invalid("Acte manquant".into()))?;
+    let label = form_text(&form, "libelle").ok_or_else(|| AppError::Invalid("Libellé obligatoire".into()))?;
+    sqlx::query("UPDATE acteprotocole SET libelle=?,cible=?,reference=?,jour=?,produit=?,dose=?,unite=?,voie=?,duree_j=?,delai_attente=?,aiguille=?,preconisations=?,note=? WHERE id=?")
+        .bind(label).bind(form_text(&form,"cible")).bind(form_text(&form,"reference")).bind(form_i64(&form,"jour").unwrap_or(0))
+        .bind(form_text(&form,"produit")).bind(form_text(&form,"dose")).bind(form_text(&form,"unite")).bind(form_text(&form,"voie"))
+        .bind(form_i64(&form,"duree_j")).bind(form_i64(&form,"delai_attente")).bind(form_text(&form,"aiguille"))
+        .bind(form_text(&form,"preconisations")).bind(form_text(&form,"note")).bind(id).execute(&state.pool).await?;
+    Ok(Redirect::to("/sanitaire").into_response())
+}
+
+async fn sanitaire_acte_supprimer(
+    State(state): State<AppState>, Extension(session): Extension<SessionData>, Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_writer(&session)?; verify_csrf(&session,&form)?;
+    let id=form_i64(&form,"id").ok_or_else(||AppError::Invalid("Acte manquant".into()))?;
+    sqlx::query("UPDATE acteprotocole SET actif=0 WHERE id=?").bind(id).execute(&state.pool).await?;
+    Ok(Redirect::to("/sanitaire").into_response())
+}
+
+async fn sanitaire_fait(
+    State(state): State<AppState>, Extension(session): Extension<SessionData>, Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    verify_csrf(&session,&form)?;
+    let act=form_i64(&form,"acte_id").ok_or_else(||AppError::Invalid("Acte manquant".into()))?;
+    let band=form_i64(&form,"bande_id").ok_or_else(||AppError::Invalid("Bande manquante".into()))?;
+    let date=form_text(&form,"date_realise").unwrap_or_else(||Local::now().date_naive().format("%Y-%m-%d").to_string());
+    sqlx::query("INSERT INTO acterealise(acte_id,bande_id,date_realise,note) SELECT ?,?,?,? WHERE EXISTS(SELECT 1 FROM acteprotocole WHERE id=? AND actif=1) AND EXISTS(SELECT 1 FROM bande WHERE id=?)")
+        .bind(act).bind(band).bind(date).bind(form_text(&form,"note")).bind(act).bind(band).execute(&state.pool).await?;
+    Ok(Redirect::to("/sanitaire").into_response())
+}
+
+async fn pharmacie(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+) -> AppResult<Html<String>> {
+    if !matches!(session.role.as_str(), "admin" | "eleveur") { return Err(AppError::Forbidden); }
+    let products=generic_rows(&state.pool,"SELECT id,produit,stock_actuel,unite,seuil_alerte,maj,note,CASE WHEN seuil_alerte IS NOT NULL AND stock_actuel<=seuil_alerte THEN 1 ELSE 0 END AS alerte FROM produitpharmacie ORDER BY alerte DESC,produit").await?;
+    let movements=generic_rows(&state.pool,"SELECT id,produit,date,type,quantite,bande_code,note FROM mouvementpharmacie ORDER BY date DESC,id DESC LIMIT 300").await?;
+    let bands=generic_rows(&state.pool,"SELECT code FROM bande WHERE active=1 ORDER BY date_mb,code").await?;
+    let mut ctx=context(&session);ctx.insert("produits".into(),Value::Array(products));ctx.insert("mouvements".into(),Value::Array(movements));ctx.insert("bandes".into(),Value::Array(bands));ctx.insert("today".into(),json!(Local::now().date_naive().format("%Y-%m-%d").to_string()));
+    render(&state,"pharmacie.html",Value::Object(ctx))
+}
+
+async fn pharmacie_mouvement(
+    State(state): State<AppState>, Extension(session): Extension<SessionData>, Form(form): Form<HashMap<String,String>>,
+) -> AppResult<Response> {
+    if !matches!(session.role.as_str(),"admin"|"eleveur"){return Err(AppError::Forbidden)} verify_csrf(&session,&form)?;
+    let product=form_text(&form,"produit").ok_or_else(||AppError::Invalid("Produit obligatoire".into()))?;
+    let quantity=form_f64(&form,"quantite").filter(|value|*value>=0.0).ok_or_else(||AppError::Invalid("Quantité invalide".into()))?;
+    let kind=form.get("type").map(String::as_str).unwrap_or("sortie");
+    if !matches!(kind,"entree"|"sortie"|"inventaire"){return Err(AppError::Invalid("Type de mouvement invalide".into()))}
+    let mut tx=state.pool.begin().await?;
+    sqlx::query("INSERT INTO produitpharmacie(produit,stock_actuel,unite,maj) SELECT ?,0,?,CURRENT_TIMESTAMP WHERE NOT EXISTS(SELECT 1 FROM produitpharmacie WHERE lower(produit)=lower(?))")
+        .bind(&product).bind(form_text(&form,"unite").unwrap_or_else(||"doses".into())).bind(&product).execute(&mut *tx).await?;
+    let stock: f64=sqlx::query_scalar("SELECT CAST(COALESCE(stock_actuel,0) AS REAL) FROM produitpharmacie WHERE lower(produit)=lower(?) LIMIT 1").bind(&product).fetch_one(&mut *tx).await?;
+    let new_stock=match kind{"entree"=>stock+quantity,"inventaire"=>quantity,_ if quantity<=stock=>stock-quantity,_=>return Err(AppError::Invalid(format!("Stock insuffisant : {stock}")))};
+    sqlx::query("UPDATE produitpharmacie SET stock_actuel=?,maj=CURRENT_TIMESTAMP WHERE lower(produit)=lower(?)").bind(new_stock).bind(&product).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO mouvementpharmacie(produit,date,type,quantite,note,bande_code) VALUES(?,?,?,?,?,?)").bind(&product).bind(form_text(&form,"date")).bind(kind).bind(quantity).bind(form_text(&form,"note")).bind(form_text(&form,"bande_code")).execute(&mut *tx).await?;
+    tx.commit().await?;Ok(Redirect::to("/pharmacie").into_response())
+}
+
+async fn pharmacie_regler(
+    State(state): State<AppState>, Extension(session): Extension<SessionData>, Form(form): Form<HashMap<String,String>>,
+) -> AppResult<Response> {
+    if !matches!(session.role.as_str(),"admin"|"eleveur"){return Err(AppError::Forbidden)} verify_csrf(&session,&form)?;
+    let id=form_i64(&form,"id").ok_or_else(||AppError::Invalid("Produit manquant".into()))?;
+    sqlx::query("UPDATE produitpharmacie SET unite=?,seuil_alerte=?,note=?,maj=CURRENT_TIMESTAMP WHERE id=?").bind(form_text(&form,"unite")).bind(form_f64(&form,"seuil_alerte")).bind(form_text(&form,"note")).bind(id).execute(&state.pool).await?;
+    Ok(Redirect::to("/pharmacie").into_response())
+}
 async fn planning(State(state):State<AppState>,Extension(session):Extension<SessionData>)->AppResult<Html<String>>{list_page(&state,&session,"Planning","Événements à venir et récents","SELECT e.id,e.date,e.type,t.num_travail,b.code AS bande,e.produit,e.note FROM evenement e LEFT JOIN truie t ON t.id=e.truie_id LEFT JOIN bande b ON b.id=e.bande_id ORDER BY e.date DESC LIMIT 250",&["date","type","num_travail","bande","produit","note"]).await}
 async fn stock(State(state):State<AppState>,Extension(session):Extension<SessionData>)->AppResult<Html<String>>{list_page(&state,&session,"Stocks et mouvements","Derniers mouvements enregistrés","SELECT id,date,bande_code,nombre,poids,montant,libelle,destination,type_saisie,est_stock FROM mouvementstock ORDER BY date DESC,id DESC LIMIT 500",&["date","bande_code","nombre","poids","montant","libelle","destination","type_saisie","est_stock"]).await}
 async fn journal(State(state):State<AppState>,Extension(session):Extension<SessionData>)->AppResult<Html<String>>{if!session.est_admin(){return Err(AppError::Forbidden)}list_page(&state,&session,"Journal d'activité","Traçabilité des opérations","SELECT id,horodatage,utilisateur,action,objet,detail,chemin FROM journal ORDER BY horodatage DESC,id DESC LIMIT 1000",&["horodatage","utilisateur","action","objet","detail","chemin"]).await}
