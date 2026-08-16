@@ -81,7 +81,11 @@ pub fn router(state: AppState) -> Router {
         .route("/reformes", get(reformes))
         .route("/cochettes", get(cochettes))
         .route("/ifip", get(ifip))
+        .route("/ifip/maj", post(ifip_maj))
         .route("/charcutiers", get(charcutiers))
+        .route("/charcutier/{id}", get(charcutier_detail))
+        .route("/charcutier/{id}/traitement", post(charcutier_traitement))
+        .route("/traitement-charc/{id}/supprimer", post(charcutier_traitement_supprimer))
         .route("/transferts", get(transferts))
         .route("/transferts/porcs", post(transferts_porcs))
         .route("/transferts/truies", post(transferts_truies))
@@ -1604,16 +1608,12 @@ fn gttt_rank_rows(litters: &[GtttLitter]) -> Vec<Value> {
 async fn productivite(
     State(state): State<AppState>,
     Extension(session): Extension<SessionData>,
+    Query(query): Query<HashMap<String, String>>,
 ) -> AppResult<Html<String>> {
-    list_page(
-        &state,
-        &session,
-        "Productivité par bande",
-        "Indicateurs de conduite et performances techniques enregistrées.",
-        "SELECT code,date_mb,site,cs_truies_saillies,cs_pleines,cs_truies_mb,cs_nv_portee,cs_sevres_portee,cs_total_sevres,cs_tx_pertes_nv,cs_poids_sevrage,cs_gmq_ps,cs_gmq_engr FROM bande ORDER BY COALESCE(date_mb,'9999-12-31') DESC,id DESC",
-        &["code", "date_mb", "site", "cs_truies_saillies", "cs_pleines", "cs_truies_mb", "cs_nv_portee", "cs_sevres_portee", "cs_total_sevres", "cs_tx_pertes_nv", "cs_poids_sevrage", "cs_gmq_ps", "cs_gmq_engr"],
-    )
-    .await
+    let months=query.get("mois").and_then(|value|value.parse::<i64>().ok()).filter(|value|matches!(value,6|12|24|36|60|120)).unwrap_or(24);
+    let cutoff=format!("-{months} months");
+    let rows=sqlx::query("SELECT b.id,b.code,b.date_mb,b.site,b.cs_truies_saillies,b.cs_pleines,b.cs_truies_mb,b.cs_nv_portee,b.cs_sevres_portee,b.cs_total_sevres,b.cs_tx_pertes_nv,b.cs_poids_sevrage,b.cs_gmq_ps,b.cs_gmq_engr,(SELECT MIN(e.date) FROM evenement e WHERE e.bande_id=b.id AND e.type='ia') AS premiere_ia_reelle,(SELECT MIN(e.date) FROM evenement e WHERE e.bande_id=b.id AND e.type='mise_bas' AND e.date<=date('now')) AS premiere_mb_reelle,(SELECT MAX(e.date) FROM evenement e WHERE e.bande_id=b.id AND e.type='sevrage') AS dernier_sevrage_reel,(SELECT COUNT(*) FROM evenement e WHERE e.bande_id=b.id AND e.type='echo') AS echos,(SELECT COUNT(*) FROM evenement e WHERE e.bande_id=b.id AND e.type='echo' AND lower(COALESCE(e.resultat,'')) IN('positive','positif','pleine','oui')) AS echos_positives,ROUND(100.0*(SELECT COUNT(*) FROM evenement e WHERE e.bande_id=b.id AND e.type='echo' AND lower(COALESCE(e.resultat,'')) IN('positive','positif','pleine','oui'))/NULLIF((SELECT COUNT(*) FROM evenement e WHERE e.bande_id=b.id AND e.type='echo'),0),1) AS taux_pleines_echo,ROUND(100.0*COALESCE(b.cs_truies_mb,0)/NULLIF(b.cs_truies_saillies,0),1) AS taux_mb_saillies FROM bande b WHERE b.date_mb IS NULL OR b.date_mb>=date('now',?) ORDER BY b.date_mb IS NULL,b.date_mb,b.id").bind(cutoff).fetch_all(&state.pool).await?;
+    let mut ctx=context(&session);ctx.insert("bandes".into(),Value::Array(rows_to_json(rows)?));ctx.insert("mois".into(),json!(months));render(&state,"productivite.html",Value::Object(ctx))
 }
 
 async fn reformes(
@@ -1650,16 +1650,11 @@ async fn ifip(
     State(state): State<AppState>,
     Extension(session): Extension<SessionData>,
 ) -> AppResult<Html<String>> {
-    list_page(
-        &state,
-        &session,
-        "Repères IFIP",
-        "Comparaison des valeurs de l’élevage avec les références enregistrées.",
-        "SELECT libelle,cle,annee,moyenne,tiers_sup,sens,CASE cle WHEN 'nes_vifs' THEN (SELECT ROUND(AVG(cs_nv_portee),2) FROM bande WHERE cs_nv_portee IS NOT NULL) WHEN 'sevres_portee' THEN (SELECT ROUND(AVG(cs_sevres_portee),2) FROM bande WHERE cs_sevres_portee IS NOT NULL) WHEN 'tx_pertes_allait' THEN (SELECT ROUND(AVG(cs_tx_pertes_nv),2) FROM bande WHERE cs_tx_pertes_nv IS NOT NULL) ELSE NULL END AS valeur_elevage FROM referenceifip ORDER BY ordre,id",
-        &["libelle", "annee", "valeur_elevage", "moyenne", "tiers_sup", "sens"],
-    )
-    .await
+    let references=generic_rows(&state.pool,"SELECT id,libelle,cle,annee,moyenne,tiers_sup,sens,decimales,ordre,CASE cle WHEN 'nes_vifs' THEN (SELECT ROUND(AVG(cs_nv_portee),2) FROM bande WHERE cs_nv_portee IS NOT NULL) WHEN 'sevres_portee' THEN (SELECT ROUND(AVG(cs_sevres_portee),2) FROM bande WHERE cs_sevres_portee IS NOT NULL) WHEN 'tx_pertes_allait' THEN (SELECT ROUND(AVG(cs_tx_pertes_nv),2) FROM bande WHERE cs_tx_pertes_nv IS NOT NULL) WHEN 'poids_sevrage' THEN (SELECT ROUND(AVG(cs_poids_sevrage),2) FROM bande WHERE cs_poids_sevrage IS NOT NULL) WHEN 'gmq_ps' THEN (SELECT ROUND(AVG(cs_gmq_ps),2) FROM bande WHERE cs_gmq_ps IS NOT NULL) WHEN 'gmq_engr' THEN (SELECT ROUND(AVG(cs_gmq_engr),2) FROM bande WHERE cs_gmq_engr IS NOT NULL) ELSE NULL END AS valeur_elevage FROM referenceifip ORDER BY ordre,id").await?;
+    let mut ctx=context(&session);ctx.insert("references".into(),Value::Array(references));render(&state,"ifip.html",Value::Object(ctx))
 }
+
+async fn ifip_maj(State(state):State<AppState>,Extension(session):Extension<SessionData>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;let id=form_i64(&form,"id").ok_or_else(||AppError::Invalid("Référence manquante".into()))?;let sense=match form.get("sens").map(String::as_str){Some("bas")=>"bas",_=>"haut"};sqlx::query("UPDATE referenceifip SET moyenne=?,tiers_sup=?,annee=?,sens=? WHERE id=?").bind(form_f64(&form,"moyenne")).bind(form_f64(&form,"tiers_sup")).bind(form_text(&form,"annee")).bind(sense).bind(id).execute(&state.pool).await?;Ok(Redirect::to("/ifip").into_response())}
 
 async fn charcutiers(
     State(state): State<AppState>,
@@ -1683,14 +1678,103 @@ async fn charcutiers(
             .await?;
         rows_to_json(rows)?
     };
-    render_list_page(
-        &state,
-        &session,
-        "Porcs charcutiers",
-        "Les 1 000 résultats les plus récents. Utilise la recherche globale pour cibler une RFID.",
-        rows,
-        &["id", "rfid", "bande_code", "date_naissance", "sexe", "mere_courante", "structure", "poids1", "poids2", "poids3", "date_mort", "cause_mort", "destination"],
+    let mut ctx = context(&session);
+    ctx.insert("porcs".into(), Value::Array(rows));
+    ctx.insert("q".into(), json!(q));
+    render(&state, "charcutiers.html", Value::Object(ctx))
+}
+
+async fn charcutier_detail(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Path(id): Path<i64>,
+) -> AppResult<Html<String>> {
+    let animal = generic_rows(
+        &state.pool,
+        &format!("SELECT id,rfid,date_naissance,bande_code,cahier_charges,sexe,mere_bio,mere_courante,structure,poids1,poids2,poids3,date_mort,cause_mort,type_perte,destination,note FROM porccharcutier WHERE id={id}"),
     )
+    .await?
+    .into_iter()
+    .next()
+    .ok_or(AppError::NotFound)?;
+    let treatments = generic_rows(
+        &state.pool,
+        &format!("SELECT id,date,produit,dose,motif,delai_attente,note FROM traitementcharcutier WHERE charcutier_id={id} ORDER BY date DESC,id DESC"),
+    )
+    .await?;
+    let mut ctx = context(&session);
+    ctx.insert("porc".into(), animal);
+    ctx.insert("traitements".into(), Value::Array(treatments));
+    ctx.insert(
+        "today".into(),
+        json!(Local::now().date_naive().format("%Y-%m-%d").to_string()),
+    );
+    render(&state, "charcutier.html", Value::Object(ctx))
+}
+
+async fn charcutier_traitement(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Path(id): Path<i64>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    verify_csrf(&session, &form)?;
+    let product = form_text(&form, "produit")
+        .ok_or_else(|| AppError::Invalid("Produit obligatoire".into()))?;
+    let band: Option<String> = sqlx::query_scalar("SELECT bande_code FROM porccharcutier WHERE id=?")
+        .bind(id)
+        .fetch_optional(&state.pool)
+        .await?
+        .flatten();
+    if band.is_none() {
+        let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM porccharcutier WHERE id=?")
+            .bind(id)
+            .fetch_one(&state.pool)
+            .await?;
+        if exists == 0 {
+            return Err(AppError::NotFound);
+        }
+    }
+    sqlx::query("INSERT INTO traitementcharcutier(charcutier_id,bande_code,date,produit,dose,motif,delai_attente,note) VALUES(?,?,?,?,?,?,?,?)")
+        .bind(id)
+        .bind(band)
+        .bind(form_text(&form, "date").unwrap_or_else(|| Local::now().date_naive().format("%Y-%m-%d").to_string()))
+        .bind(product)
+        .bind(form_text(&form, "dose"))
+        .bind(form_text(&form, "motif"))
+        .bind(form_i64(&form, "delai_attente").filter(|value| *value >= 0))
+        .bind(form_text(&form, "note"))
+        .execute(&state.pool)
+        .await?;
+    Ok(Redirect::to(&format!("/charcutier/{id}")).into_response())
+}
+
+async fn charcutier_traitement_supprimer(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Path(id): Path<i64>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    verify_csrf(&session, &form)?;
+    let animal: Option<i64> = sqlx::query_scalar(
+        "SELECT charcutier_id FROM traitementcharcutier WHERE id=?",
+    )
+    .bind(id)
+    .fetch_optional(&state.pool)
+    .await?
+    .flatten();
+    sqlx::query("DELETE FROM traitementcharcutier WHERE id=?")
+        .bind(id)
+        .execute(&state.pool)
+        .await?;
+    Ok(Redirect::to(
+        &animal
+            .map(|animal| format!("/charcutier/{animal}"))
+            .unwrap_or_else(|| "/charcutiers".into()),
+    )
+    .into_response())
 }
 
 async fn transferts(
