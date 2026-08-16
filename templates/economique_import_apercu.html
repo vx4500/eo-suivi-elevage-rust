@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Aperçu import économique · EO-Suivi{% endblock %}
+{% block content %}
+<h1>Aperçu de l'import économique</h1>
+<p><b>Fichier :</b> {{ nom_fichier }} · <b>Type détecté :</b> {{ type_document }}</p>
+{% if resume.avertissements %}<div class="card"><h3>Points à vérifier</h3><ul>{% for avertissement in resume.avertissements %}<li>{{ avertissement }}</li>{% endfor %}</ul></div>{% endif %}
+<div class="rust-grid">
+  <div class="card kpi"><div class="v">{{ resume.ajouter or 0 }}</div><div class="l">À ajouter</div></div>
+  <div class="card kpi"><div class="v">{{ resume.mettre_a_jour or 0 }}</div><div class="l">À mettre à jour</div></div>
+  <div class="card kpi"><div class="v">{{ resume.remplacer or 0 }}</div><div class="l">À remplacer</div></div>
+  <div class="card kpi"><div class="v">{{ resume.ignorer or 0 }}</div><div class="l">À ignorer</div></div>
+  <div class="card kpi"><div class="v">{{ resume.erreur or 0 }}</div><div class="l">Erreurs</div></div>
+</div>
+<div class="card">
+  <h2>Confirmation</h2>
+  <p>Aucune donnée économique n'a encore été modifiée. La confirmation applique toutes les lignes dans une seule transaction.</p>
+  <div class="rust-actions">
+    <form method="post" action="/economique/import/{{ token }}/confirmer">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf }}">
+      <label>Affecter le document à une bande
+        <select name="bande_id"><option value="">Non affecté</option>{% for bande in bandes %}<option value="{{ bande.id }}">{{ bande.code }}{% if bande.site %} · {{ bande.site }}{% endif %}</option>{% endfor %}</select>
+      </label>
+      <button {% if resume.erreur %}disabled title="Une erreur bloque la confirmation"{% endif %}>Confirmer l'import</button>
+    </form>
+    <form method="post" action="/economique/import/{{ token }}/annuler">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf }}">
+      <button class="ghost">Annuler sans modifier la base</button>
+    </form>
+  </div>
+</div>
+<div class="rust-scroll"><table><thead><tr><th>Ligne</th><th>Action</th><th>Type</th><th>Date</th><th>Référence</th><th>Libellé</th><th>Quantité</th><th>Prix unitaire</th><th>Montant</th><th>Anomalie</th></tr></thead><tbody>
+{% for ligne in lignes %}<tr><td>{{ ligne.ligne }}</td><td><span class="rust-badge{% if ligne.action == 'erreur' %} danger{% endif %}">{{ ligne.action|replace('_',' ') }}</span></td><td>{{ ligne.type }}</td><td>{{ ligne.date|date_fr if ligne.date else '—' }}</td><td>{{ ligne.reference or '—' }}</td><td>{{ ligne.libelle }}</td><td>{% if ligne.quantite is not none %}{{ ligne.quantite|decimal2 }}{% else %}—{% endif %}</td><td>{% if ligne.prix_unitaire is not none %}{{ ligne.prix_unitaire|decimal3 }} €{% else %}—{% endif %}</td><td>{% if ligne.montant is not none %}{{ ligne.montant|euro }}{% else %}—{% endif %}</td><td>{{ ligne.anomalie or '—' }}</td></tr>
+{% else %}<tr><td colspan="10">Aucune ligne exploitable</td></tr>{% endfor %}
+</tbody></table></div>
+{% endblock %}

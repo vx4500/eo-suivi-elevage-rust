@@ -1,6 +1,7 @@
 mod auth;
 mod config;
 mod db;
+mod economic_import;
 mod error;
 mod models;
 mod routes;

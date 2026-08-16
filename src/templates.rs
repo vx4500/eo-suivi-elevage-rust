@@ -13,6 +13,10 @@ pub fn build() -> anyhow::Result<Environment<'static>> {
     env.add_template("truie.html", include_str!("../templates/truie.html"))?;
     env.add_template("energie.html", include_str!("../templates/energie.html"))?;
     env.add_template("economique.html", include_str!("../templates/economique.html"))?;
+    env.add_template(
+        "economique_import_apercu.html",
+        include_str!("../templates/economique_import_apercu.html"),
+    )?;
     env.add_template("vente_directe.html", include_str!("../templates/vente_directe.html"))?;
     env.add_template(
         "vente_commande_modifier.html",
