@@ -66,6 +66,13 @@ async fn schema_complet_et_ecritures_compatibles() -> anyhow::Result<()> {
     let retention: f64 = sqlx::query_scalar("SELECT CAST(SUM(ABS(montant)) AS REAL) FROM valorisationapport WHERE num_apport='AP-TEST' AND categorie='retenue'")
         .fetch_one(&mut *tx).await?;
     assert_eq!(retention, 25.0);
+    sqlx::query("INSERT INTO importjournal(token,type_import,nom_fichier,statut,resume) VALUES('pdf-test','economique:aliment','facture.pdf','apercu','{\"ajouter\":1}')")
+        .execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO importligne(token,numero_ligne,action,donnees_json) VALUES('pdf-test',1,'ajouter','{\"kind\":\"aliment\"}')")
+        .execute(&mut *tx).await?;
+    let preview_lines:i64=sqlx::query_scalar("SELECT COUNT(*) FROM importligne WHERE token='pdf-test' AND action='ajouter'")
+        .fetch_one(&mut *tx).await?;
+    assert_eq!(preview_lines,1);
     let sale_session = sqlx::query("INSERT INTO sessionventedirecte(nom,active) VALUES('Session test',1)")
         .execute(&mut *tx).await?.last_insert_rowid();
     sqlx::query("INSERT INTO coutelevageventedirecte(session_vente_id,semence) VALUES(?,10)")
