@@ -1,5 +1,19 @@
 # Historique et feuille de route EO-Suivi Rust
 
+## 2.1.4 — pilotage et vente directe
+
+- Tableau de bord complété avec le prix net/kg annuel, la moyenne pondérée des
+  cinq dernières ventes et une courbe des dix derniers apports.
+- Inventaire de vente directe séparé des réglages produit pour éviter une
+  modification accidentelle du stock.
+- Modification transactionnelle des commandes : coordonnées, session, statut,
+  produits, quantités, total et stocks sont recalculés ensemble.
+- Impression d’une commande client avec lignes, total, livraison et émargement.
+- Feuille de préparation par session avec totaux par produit et détail client.
+- Modification des sessions de vente et synchronisation de la date de livraison
+  lorsqu’une session active est corrigée.
+- Journalisation des inventaires et des modifications de commande.
+
 ## 2.1.3 — reprise des correctifs historiques
 
 - Audit de parité Python 1.65 / Rust 2.1.2.
