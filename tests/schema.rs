@@ -24,7 +24,7 @@ async fn schema_complet_et_ecritures_compatibles() -> anyhow::Result<()> {
     )
     .fetch_one(&pool)
     .await?;
-    assert_eq!(tables, 53);
+    assert_eq!(tables, 54);
 
     let mut tx = pool.begin().await?;
     sqlx::query("INSERT INTO truie(num_travail,statut,reformee,rang,mere_cochette) VALUES('TEST-RUST','active',0,0,0)")
