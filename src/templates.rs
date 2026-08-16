@@ -23,6 +23,7 @@ pub fn build() -> anyhow::Result<Environment<'static>> {
     env.add_template("cahiers.html", include_str!("../templates/cahiers.html"))?;
     env.add_template("quotidien.html", include_str!("../templates/quotidien.html"))?;
     env.add_template("inseminations.html", include_str!("../templates/inseminations.html"))?;
+    env.add_template("gttt.html", include_str!("../templates/gttt.html"))?;
     env.add_template("transferts.html", include_str!("../templates/transferts.html"))?;
     env.add_template("effectifs.html", include_str!("../templates/effectifs.html"))?;
     env.add_template("vente_sessions.html", include_str!("../templates/vente_sessions.html"))?;
