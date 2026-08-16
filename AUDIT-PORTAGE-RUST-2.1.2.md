@@ -22,6 +22,20 @@ Les nombres de routes ne s'additionnent pas directement : le Rust possède aussi
 13 routes nouvelles ou renommées, notamment le module Eau & électricité. Ils donnent
 néanmoins une mesure fiable du travail restant.
 
+## Avancement réalisé dans Rust 2.1.3
+
+Le lot 2.1.3 corrige les points les plus risqués trouvés par cet audit : droits
+interdits par défaut, import des truies avec aperçu et transaction, GTTT unique,
+stock initial par case, Prestataire, Structure, Sanitaire, Pharmacie, Charcutiers,
+IFIP, Productivité, Réformes, Cochettes, signes comptables et retenues économiques,
+ainsi que l'import transactionnel Eau & électricité. La liste exacte est tenue dans
+`VERSIONS-RUST.md`.
+
+Les fonctions qui restent absentes ne renvoient plus une page vide laissant croire
+à une réussite : elles répondent explicitement « non encore portée » sans modifier
+la base. Les prochains lots restent nécessaires pour reprendre les imports PDF, les
+documents PDF/QR, la restauration depuis l'interface et les communications externes.
+
 ## Ce qui est déjà réellement présent en Rust
 
 ### Socle
