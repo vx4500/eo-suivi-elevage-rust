@@ -1,5 +1,23 @@
 # Historique et feuille de route EO-Suivi Rust
 
+## 2.1.6 — conduite, effectifs et productivité
+
+- Étapes des bandes et calendrier ICS calculés depuis les réglages de conduite
+  (`gestation`, échographie, maternité, sevrage, transfert, finition et départ).
+- Distinction des bandes planifiées, en verraterie, gestantes et en préparation
+  maternité, avec tests exacts de toutes les frontières de cycle.
+- Inventaire d'une bande ou d'une case remplaçable pour une même date afin
+  d'éviter les doubles comptages lors d'une correction.
+- Effectif restant calculé uniquement avec les morts, ventes et transferts
+  postérieurs au dernier inventaire physique.
+- Synthèse des effectifs fondée sur le dernier inventaire de chaque bande, même
+  lorsque les comptages n'ont pas tous été réalisés le même jour.
+- Productivité en trois vues : bandes/abattage, cheptel/ELD et rangs de portée.
+- Moyennes techniques d'abattage pondérées par les porcs : poids, TMP, muscle,
+  plus-value, prix net au kilo et montant net.
+- Dernière ELD connue par truie, moyenne par bande et répartition du cheptel par
+  étape de conduite.
+
 ## 2.1.5 — imports économiques PDF contrôlés
 
 - Lecture native des PDF texte avec limites de taille, de pages et de

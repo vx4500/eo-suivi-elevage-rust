@@ -450,22 +450,112 @@ struct BandView {
     truies: i64,
 }
 
-fn band_view(band: &Bande, sow_count: i64) -> BandView {
+#[derive(Clone, Copy, Debug)]
+struct BandSchedule {
+    gestation: i64,
+    echo_after_ia: i64,
+    maternity_before_farrowing: i64,
+    weaning: i64,
+    transfer_finishing: i64,
+    finishing_feed: i64,
+    departure: i64,
+}
+
+impl Default for BandSchedule {
+    fn default() -> Self {
+        Self {
+            gestation: 115,
+            echo_after_ia: 28,
+            maternity_before_farrowing: 5,
+            weaning: 28,
+            transfer_finishing: 71,
+            finishing_feed: 140,
+            departure: 215,
+        }
+    }
+}
+
+impl BandSchedule {
+    fn stages(self) -> [(&'static str, i64); 8] {
+        [
+            ("Insémination", -self.gestation),
+            ("Échographie", -self.gestation + self.echo_after_ia),
+            ("Entrée maternité", -self.maternity_before_farrowing),
+            ("Mise-bas", 0),
+            ("Sevrage", self.weaning),
+            ("Transfert engraissement", self.transfer_finishing),
+            ("Aliment finition", self.finishing_feed),
+            ("Départ abattoir", self.departure),
+        ]
+    }
+
+    fn stage(self, age: i64) -> (&'static str, &'static str) {
+        let echo_day = -self.gestation + self.echo_after_ia;
+        if age < -self.gestation {
+            ("Planifiée", "Insémination")
+        } else if age < echo_day {
+            ("Verraterie", "Échographie")
+        } else if age < -self.maternity_before_farrowing {
+            ("Gestante", "Entrée maternité")
+        } else if age < 0 {
+            ("Maternité (préparation)", "Mise-bas")
+        } else if age < self.weaning {
+            ("Maternité", "Sevrage")
+        } else if age < self.transfer_finishing {
+            ("Post-sevrage", "Transfert engraissement")
+        } else if age < self.departure {
+            ("Engraissement", "Départ abattoir")
+        } else {
+            ("Départ / terminé", "Cycle terminé")
+        }
+    }
+}
+
+async fn load_band_schedule(pool: &SqlitePool) -> AppResult<BandSchedule> {
+    let mut schedule = BandSchedule::default();
+    for row in sqlx::query(
+        "SELECT cle,valeur FROM reglage WHERE cle IN ('gestation','echo_j','passage_maternite_j','sevrage','transfert_engr','aliment_finition','depart')",
+    )
+    .fetch_all(pool)
+    .await?
+    {
+        let key: String = row.try_get("cle")?;
+        let value: i64 = row.try_get("valeur")?;
+        match key.as_str() {
+            "gestation" if (90..=140).contains(&value) => schedule.gestation = value,
+            "echo_j" if (1..=60).contains(&value) => schedule.echo_after_ia = value,
+            "passage_maternite_j" if (1..=21).contains(&value) => {
+                schedule.maternity_before_farrowing = value
+            }
+            "sevrage" if (14..=49).contains(&value) => schedule.weaning = value,
+            "transfert_engr" if (30..=140).contains(&value) => {
+                schedule.transfer_finishing = value
+            }
+            "aliment_finition" if (60..=210).contains(&value) => {
+                schedule.finishing_feed = value
+            }
+            "depart" if (100..=365).contains(&value) => schedule.departure = value,
+            _ => {}
+        }
+    }
+    schedule.transfer_finishing = schedule.transfer_finishing.max(schedule.weaning + 1);
+    schedule.departure = schedule.departure.max(schedule.transfer_finishing + 2);
+    schedule.finishing_feed = schedule
+        .finishing_feed
+        .clamp(schedule.transfer_finishing + 1, schedule.departure - 1);
+    Ok(schedule)
+}
+
+fn band_view(band: &Bande, sow_count: i64, schedule: BandSchedule) -> BandView {
     let today = Local::now().date_naive();
     let date = band
         .date_mb
         .as_deref()
         .and_then(|value| NaiveDate::parse_from_str(&value[..value.len().min(10)], "%Y-%m-%d").ok());
     let age = date.map(|date| (today - date).num_days());
-    let (stade, prochaine) = match age {
-        None => ("À renseigner", "Renseigner la date de mise-bas"),
-        Some(age) if age < -87 => ("Verraterie", "Échographie"),
-        Some(age) if age < 0 => ("Gestante", "Mise-bas"),
-        Some(age) if age < 28 => ("Maternité", "Sevrage"),
-        Some(age) if age < 71 => ("Post-sevrage", "Transfert engraissement"),
-        Some(age) if age < 215 => ("Engraissement", "Départ abattoir"),
-        Some(_) => ("Départ / terminé", "Cycle terminé"),
-    };
+    let (stade, prochaine) = age
+        .map(|age| schedule.stage(age))
+        .unwrap_or(("À renseigner", "Renseigner la date de mise-bas"));
     BandView {
         id: band.id,
         code: band.code.clone(),
@@ -488,13 +578,14 @@ async fn dashboard(
     let bands = sqlx::query_as::<_, Bande>(BAND_SELECT_ACTIVE)
         .fetch_all(&state.pool)
         .await?;
+    let schedule = load_band_schedule(&state.pool).await?;
     let mut views = Vec::new();
     for band in &bands {
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM truie WHERE bande_code=? AND reformee=0")
             .bind(&band.code)
             .fetch_one(&state.pool)
             .await?;
-        views.push(band_view(band, count));
+        views.push(band_view(band, count, schedule));
     }
     let truies: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM truie WHERE reformee=0")
         .fetch_one(&state.pool)
@@ -579,13 +670,14 @@ async fn bandes(
     let bands = sqlx::query_as::<_, Bande>(BAND_SELECT_ACTIVE)
         .fetch_all(&state.pool)
         .await?;
+    let schedule = load_band_schedule(&state.pool).await?;
     let mut views = Vec::new();
     for band in bands {
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM truie WHERE bande_code=? AND reformee=0")
             .bind(&band.code)
             .fetch_one(&state.pool)
             .await?;
-        views.push(band_view(&band, count));
+        views.push(band_view(&band, count, schedule));
     }
     let mut ctx = context(&session);
     ctx.insert("bandes".into(), serde_json::to_value(views).unwrap_or_default());
@@ -644,7 +736,8 @@ async fn bande_detail(
     } else {
         0.0
     };
-    let dates = key_dates(band.date_mb.as_deref());
+    let schedule = load_band_schedule(&state.pool).await?;
+    let dates = key_dates(band.date_mb.as_deref(), schedule);
     let mut ctx = context(&session);
     ctx.insert("bande".into(), serde_json::to_value(&band).unwrap_or_default());
     ctx.insert("truies".into(), serde_json::to_value(&sows).unwrap_or_default());
@@ -654,16 +747,12 @@ async fn bande_detail(
     render(&state, "bande.html", Value::Object(ctx))
 }
 
-fn key_dates(date_mb: Option<&str>) -> Vec<Value> {
+fn key_dates(date_mb: Option<&str>, schedule: BandSchedule) -> Vec<Value> {
     let Some(date) = date_mb.and_then(|value| NaiveDate::parse_from_str(&value[..value.len().min(10)], "%Y-%m-%d").ok()) else {
         return vec![];
     };
     let today = Local::now().date_naive();
-    let stages = [
-        ("Insémination", -115), ("Échographie", -87), ("Entrée maternité", -5),
-        ("Mise-bas", 0), ("Sevrage", 28), ("Transfert engraissement", 71),
-        ("Aliment finition", 140), ("Départ abattoir", 215),
-    ];
+    let stages = schedule.stages();
     stages
         .iter()
         .enumerate()
@@ -831,7 +920,11 @@ async fn truie_detail(
     ctx.insert("pertes".into(), Value::Array(pertes));
     ctx.insert("bandes".into(), serde_json::to_value(bands).unwrap_or_default());
     ctx.insert("cases".into(), Value::Array(cases));
-    ctx.insert("dates".into(), Value::Array(key_dates(date_mb.as_deref())));
+    let schedule = load_band_schedule(&state.pool).await?;
+    ctx.insert(
+        "dates".into(),
+        Value::Array(key_dates(date_mb.as_deref(), schedule)),
+    );
     ctx.insert("today".into(), json!(Local::now().date_naive().format("%Y-%m-%d").to_string()));
     render(&state, "truie.html", Value::Object(ctx))
 }
@@ -1414,7 +1507,57 @@ async fn bande_imprimer(State(state):State<AppState>,Extension(session):Extensio
 
 fn ics_escape(value:&str)->String{value.replace('\\',"\\\\").replace(';',"\\;").replace(',',"\\,").replace(['\r','\n']," ")}
 
-async fn calendrier_ics(State(state):State<AppState>)->AppResult<Response>{let bands=sqlx::query_as::<_,Bande>(BAND_SELECT_ACTIVE).fetch_all(&state.pool).await?;let mut lines=vec!["BEGIN:VCALENDAR".to_string(),"VERSION:2.0".into(),"PRODID:-//EO-Suivi Elevage Rust//FR".into(),"CALSCALE:GREGORIAN".into(),"METHOD:PUBLISH".into()];let stages=[("Insémination",-115),("Échographie",-87),("Entrée maternité",-5),("Mise-bas",0),("Sevrage",28),("Transfert engraissement",71),("Aliment finition",140),("Départ abattoir",215)];for band in bands{let Some(base)=band.date_mb.as_deref().and_then(|value|NaiveDate::parse_from_str(&value[..value.len().min(10)],"%Y-%m-%d").ok())else{continue};for(name,days)in stages{let day=base+Duration::days(days);lines.push("BEGIN:VEVENT".into());lines.push(format!("UID:bande-{}-{}@eo-suivi-rust",band.id,days+200));lines.push(format!("DTSTAMP:{}T000000Z",Local::now().format("%Y%m%d")));lines.push(format!("DTSTART;VALUE=DATE:{}",day.format("%Y%m%d")));lines.push(format!("SUMMARY:{}",ics_escape(&format!("{} — {}",band.code,name))));lines.push("END:VEVENT".into());}}lines.push("END:VCALENDAR".into());let body=format!("{}\r\n",lines.join("\r\n"));let mut headers=HeaderMap::new();headers.insert(header::CONTENT_TYPE,HeaderValue::from_static("text/calendar; charset=utf-8"));headers.insert(header::CONTENT_DISPOSITION,HeaderValue::from_static("attachment; filename=elevage.ics"));Ok((headers,body).into_response())}
+async fn calendrier_ics(State(state): State<AppState>) -> AppResult<Response> {
+    let bands = sqlx::query_as::<_, Bande>(BAND_SELECT_ACTIVE)
+        .fetch_all(&state.pool)
+        .await?;
+    let stages = load_band_schedule(&state.pool).await?.stages();
+    let mut lines = vec![
+        "BEGIN:VCALENDAR".to_string(),
+        "VERSION:2.0".into(),
+        "PRODID:-//EO-Suivi Elevage Rust//FR".into(),
+        "CALSCALE:GREGORIAN".into(),
+        "METHOD:PUBLISH".into(),
+    ];
+    for band in bands {
+        let Some(base) = band.date_mb.as_deref().and_then(|value| {
+            NaiveDate::parse_from_str(&value[..value.len().min(10)], "%Y-%m-%d").ok()
+        }) else {
+            continue;
+        };
+        for (name, days) in stages {
+            let day = base + Duration::days(days);
+            lines.push("BEGIN:VEVENT".into());
+            lines.push(format!(
+                "UID:bande-{}-{}@eo-suivi-rust",
+                band.id,
+                days + 400
+            ));
+            lines.push(format!(
+                "DTSTAMP:{}T000000Z",
+                Local::now().format("%Y%m%d")
+            ));
+            lines.push(format!("DTSTART;VALUE=DATE:{}", day.format("%Y%m%d")));
+            lines.push(format!(
+                "SUMMARY:{}",
+                ics_escape(&format!("{} — {}", band.code, name))
+            ));
+            lines.push("END:VEVENT".into());
+        }
+    }
+    lines.push("END:VCALENDAR".into());
+    let body = format!("{}\r\n", lines.join("\r\n"));
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/calendar; charset=utf-8"),
+    );
+    headers.insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_static("attachment; filename=elevage.ics"),
+    );
+    Ok((headers, body).into_response())
+}
 
 async fn api_bandes_actives(State(state): State<AppState>) -> AppResult<axum::Json<Value>> {
     let rows = generic_rows(&state.pool,"SELECT id,code,date_mb,site FROM bande WHERE active=1 ORDER BY date_mb").await?;
@@ -1647,10 +1790,115 @@ async fn productivite(
     Extension(session): Extension<SessionData>,
     Query(query): Query<HashMap<String, String>>,
 ) -> AppResult<Html<String>> {
-    let months=query.get("mois").and_then(|value|value.parse::<i64>().ok()).filter(|value|matches!(value,6|12|24|36|60|120)).unwrap_or(24);
-    let cutoff=format!("-{months} months");
-    let rows=sqlx::query("SELECT b.id,b.code,b.date_mb,b.site,b.cs_truies_saillies,b.cs_pleines,b.cs_truies_mb,b.cs_nv_portee,b.cs_sevres_portee,b.cs_total_sevres,b.cs_tx_pertes_nv,b.cs_poids_sevrage,b.cs_gmq_ps,b.cs_gmq_engr,(SELECT MIN(e.date) FROM evenement e WHERE e.bande_id=b.id AND e.type='ia') AS premiere_ia_reelle,(SELECT MIN(e.date) FROM evenement e WHERE e.bande_id=b.id AND e.type='mise_bas' AND e.date<=date('now')) AS premiere_mb_reelle,(SELECT MAX(e.date) FROM evenement e WHERE e.bande_id=b.id AND e.type='sevrage') AS dernier_sevrage_reel,(SELECT COUNT(*) FROM evenement e WHERE e.bande_id=b.id AND e.type='echo') AS echos,(SELECT COUNT(*) FROM evenement e WHERE e.bande_id=b.id AND e.type='echo' AND lower(COALESCE(e.resultat,'')) IN('positive','positif','pleine','oui')) AS echos_positives,ROUND(100.0*(SELECT COUNT(*) FROM evenement e WHERE e.bande_id=b.id AND e.type='echo' AND lower(COALESCE(e.resultat,'')) IN('positive','positif','pleine','oui'))/NULLIF((SELECT COUNT(*) FROM evenement e WHERE e.bande_id=b.id AND e.type='echo'),0),1) AS taux_pleines_echo,ROUND(100.0*COALESCE(b.cs_truies_mb,0)/NULLIF(b.cs_truies_saillies,0),1) AS taux_mb_saillies FROM bande b WHERE b.date_mb IS NULL OR b.date_mb>=date('now',?) ORDER BY b.date_mb IS NULL,b.date_mb,b.id").bind(cutoff).fetch_all(&state.pool).await?;
-    let mut ctx=context(&session);ctx.insert("bandes".into(),Value::Array(rows_to_json(rows)?));ctx.insert("mois".into(),json!(months));render(&state,"productivite.html",Value::Object(ctx))
+    let months = query
+        .get("mois")
+        .and_then(|value| value.parse::<i64>().ok())
+        .filter(|value| matches!(value, 6 | 12 | 24 | 36 | 60 | 120))
+        .unwrap_or(24);
+    let view = query
+        .get("vue")
+        .map(String::as_str)
+        .filter(|value| matches!(*value, "bandes" | "cheptel" | "rangs"))
+        .unwrap_or("bandes");
+    let cutoff = format!("-{months} months");
+    let rows = sqlx::query("SELECT b.id,b.code,b.date_mb,b.site,b.cs_truies_saillies,b.cs_pleines,b.cs_truies_mb,b.cs_nv_portee,b.cs_sevres_portee,b.cs_total_sevres,b.cs_tx_pertes_nv,b.cs_poids_sevrage,b.cs_gmq_ps,b.cs_gmq_engr,(SELECT MIN(e.date) FROM evenement e WHERE e.bande_id=b.id AND e.type='ia') AS premiere_ia_reelle,(SELECT MIN(e.date) FROM evenement e WHERE e.bande_id=b.id AND e.type='mise_bas' AND e.date<=date('now')) AS premiere_mb_reelle,(SELECT MAX(e.date) FROM evenement e WHERE e.bande_id=b.id AND e.type='sevrage') AS dernier_sevrage_reel,(SELECT COUNT(*) FROM evenement e WHERE e.bande_id=b.id AND e.type IN('echo','echographie')) AS echos,(SELECT COUNT(*) FROM evenement e WHERE e.bande_id=b.id AND e.type IN('echo','echographie') AND lower(COALESCE(e.resultat,'')) IN('positive','positif','pleine','oui')) AS echos_positives,ROUND(100.0*(SELECT COUNT(*) FROM evenement e WHERE e.bande_id=b.id AND e.type IN('echo','echographie') AND lower(COALESCE(e.resultat,'')) IN('positive','positif','pleine','oui'))/NULLIF((SELECT COUNT(*) FROM evenement e WHERE e.bande_id=b.id AND e.type IN('echo','echographie')),0),1) AS taux_pleines_echo,ROUND(100.0*COALESCE(b.cs_truies_mb,0)/NULLIF(b.cs_truies_saillies,0),1) AS taux_mb_saillies FROM bande b WHERE b.date_mb IS NULL OR b.date_mb>=date('now',?) ORDER BY b.date_mb IS NULL,b.date_mb,b.id")
+        .bind(&cutoff)
+        .fetch_all(&state.pool)
+        .await?;
+    let technical = sqlx::query("SELECT b.id,b.code,b.date_mb,CAST(SUM(COALESCE(v.nb_porcs,0)) AS INTEGER) AS porcs,ROUND(SUM(COALESCE(v.poids_total,0))/NULLIF(SUM(COALESCE(v.nb_porcs,0)),0),1) AS poids_moyen,ROUND(SUM(CASE WHEN v.tmp IS NOT NULL THEN v.tmp*COALESCE(v.nb_porcs,0) ELSE 0 END)/NULLIF(SUM(CASE WHEN v.tmp IS NOT NULL THEN COALESCE(v.nb_porcs,0) ELSE 0 END),0),2) AS tmp,ROUND(SUM(CASE WHEN v.muscle_lot IS NOT NULL THEN v.muscle_lot*COALESCE(v.nb_porcs,0) ELSE 0 END)/NULLIF(SUM(CASE WHEN v.muscle_lot IS NOT NULL THEN COALESCE(v.nb_porcs,0) ELSE 0 END),0),2) AS muscle_lot,ROUND(SUM(COALESCE(v.montant_net,0))/NULLIF(SUM(COALESCE(v.poids_total,0)),0),3) AS prix_net_kg,ROUND(SUM(CASE WHEN v.plus_value IS NOT NULL THEN v.plus_value*COALESCE(v.nb_porcs,0) ELSE 0 END)/NULLIF(SUM(CASE WHEN v.plus_value IS NOT NULL THEN COALESCE(v.nb_porcs,0) ELSE 0 END),0),2) AS plus_value,CAST(ROUND(SUM(COALESCE(v.montant_net,0)),2) AS REAL) AS montant_net FROM venteapport v JOIN bande b ON b.id=v.bande_id WHERE v.date IS NULL OR v.date>=date('now',?) GROUP BY b.id,b.code,b.date_mb ORDER BY b.date_mb DESC,b.id DESC")
+        .bind(&cutoff)
+        .fetch_all(&state.pool)
+        .await?;
+    let funnel = generic_rows(
+        &state.pool,
+        &format!("SELECT CAST(COALESCE(SUM(cs_truies_saillies),0) AS INTEGER) AS saillies,CAST(COALESCE(SUM(cs_pleines),0) AS INTEGER) AS pleines,CAST(COALESCE(SUM(cs_truies_mb),0) AS INTEGER) AS mises_bas,CAST(COALESCE(SUM(cs_total_sevres),0) AS INTEGER) AS sevres,CAST(COALESCE(SUM(cs_adoptes),0) AS INTEGER) AS adoptes,CAST(COALESCE(SUM(cs_retires),0) AS INTEGER) AS retires FROM bande WHERE date_mb IS NULL OR date_mb>=date('now','-{months} months')"),
+    )
+    .await?
+    .into_iter()
+    .next()
+    .unwrap_or_else(|| json!({}));
+    let active_sows: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM truie WHERE reformee=0")
+            .fetch_one(&state.pool)
+            .await?;
+    let eld_summary = generic_rows(
+        &state.pool,
+        "WITH latest AS (SELECT m.truie_id,m.eld FROM mesuretruie m JOIN truie t ON t.id=m.truie_id AND t.reformee=0 WHERE m.eld IS NOT NULL AND NOT EXISTS(SELECT 1 FROM mesuretruie n WHERE n.truie_id=m.truie_id AND n.eld IS NOT NULL AND (n.date>m.date OR (n.date=m.date AND n.id>m.id)))) SELECT COUNT(*) AS mesures,CAST(ROUND(AVG(eld),2) AS REAL) AS moyenne FROM latest",
+    )
+    .await?
+    .into_iter()
+    .next()
+    .unwrap_or_else(|| json!({}));
+    let eld_by_band = generic_rows(
+        &state.pool,
+        "WITH latest AS (SELECT m.truie_id,m.eld,m.date FROM mesuretruie m WHERE m.eld IS NOT NULL AND NOT EXISTS(SELECT 1 FROM mesuretruie n WHERE n.truie_id=m.truie_id AND n.eld IS NOT NULL AND (n.date>m.date OR (n.date=m.date AND n.id>m.id)))) SELECT b.id,b.code,COUNT(l.eld) AS truies_mesurees,CAST(ROUND(AVG(l.eld),2) AS REAL) AS eld_moyenne,MAX(l.date) AS derniere_mesure FROM bande b JOIN truie t ON t.bande_code=b.code AND t.reformee=0 JOIN latest l ON l.truie_id=t.id WHERE b.active=1 GROUP BY b.id,b.code ORDER BY b.date_mb,b.id",
+    )
+    .await?;
+    let ranks = sqlx::query("SELECT p.rang,COUNT(*) AS portees,CAST(ROUND(AVG(p.duree_gest),1) AS REAL) AS gestation,CAST(ROUND(AVG(p.nv),2) AS REAL) AS nes_vifs,CAST(ROUND(AVG(p.mn),2) AS REAL) AS mort_nes,CAST(ROUND(AVG(p.sev),2) AS REAL) AS sevres,CAST(ROUND(AVG(p.tx_pertes),1) AS REAL) AS pertes,CAST(ROUND(AVG(p.eld1),1) AS REAL) AS eld_entree,CAST(ROUND(AVG(p.eld2),1) AS REAL) AS eld_sortie FROM porteerang p LEFT JOIN bande b ON b.code=p.bande WHERE b.id IS NULL OR b.date_mb IS NULL OR b.date_mb>=date('now',?) GROUP BY p.rang ORDER BY p.rang")
+        .bind(&cutoff)
+        .fetch_all(&state.pool)
+        .await?;
+    let schedule = load_band_schedule(&state.pool).await?;
+    let today = Local::now().date_naive();
+    let stage_source = generic_rows(
+        &state.pool,
+        "SELECT b.date_mb,COUNT(t.id) AS truies FROM bande b LEFT JOIN truie t ON t.bande_code=b.code AND t.reformee=0 WHERE b.active=1 GROUP BY b.id,b.date_mb ORDER BY b.date_mb,b.id",
+    )
+    .await?;
+    let mut stage_counts: HashMap<String, i64> = HashMap::new();
+    for row in stage_source {
+        let Some(date) = row
+            .get("date_mb")
+            .and_then(Value::as_str)
+            .and_then(|value| NaiveDate::parse_from_str(&value[..value.len().min(10)], "%Y-%m-%d").ok())
+        else {
+            continue;
+        };
+        let age = (today - date).num_days();
+        let count = row.get("truies").and_then(Value::as_i64).unwrap_or_default();
+        *stage_counts.entry(schedule.stage(age).0.to_string()).or_default() += count;
+    }
+    let unassigned: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM truie WHERE reformee=0 AND (bande_code IS NULL OR trim(bande_code)='' OR NOT EXISTS(SELECT 1 FROM bande b WHERE b.code=truie.bande_code AND b.active=1))",
+    )
+    .fetch_one(&state.pool)
+    .await?;
+    if unassigned > 0 {
+        stage_counts.insert("Sans bande active".into(), unassigned);
+    }
+    let stage_order = [
+        "Planifiée",
+        "Verraterie",
+        "Gestante",
+        "Maternité (préparation)",
+        "Maternité",
+        "Post-sevrage",
+        "Engraissement",
+        "Départ / terminé",
+        "Sans bande active",
+    ];
+    let stages = stage_order
+        .into_iter()
+        .filter_map(|name| {
+            stage_counts
+                .get(name)
+                .copied()
+                .filter(|count| *count > 0)
+                .map(|count| json!({"nom":name,"truies":count}))
+        })
+        .collect::<Vec<_>>();
+    let mut ctx = context(&session);
+    ctx.insert("bandes".into(), Value::Array(rows_to_json(rows)?));
+    ctx.insert("technique".into(), Value::Array(rows_to_json(technical)?));
+    ctx.insert("entonnoir".into(), funnel);
+    ctx.insert("truies_actives".into(), json!(active_sows));
+    ctx.insert("eld_resume".into(), eld_summary);
+    ctx.insert("eld_bandes".into(), Value::Array(eld_by_band));
+    ctx.insert("stades".into(), Value::Array(stages));
+    ctx.insert("rangs".into(), Value::Array(rows_to_json(ranks)?));
+    ctx.insert("mois".into(), json!(months));
+    ctx.insert("vue".into(), json!(view));
+    render(&state, "productivite.html", Value::Object(ctx))
 }
 
 async fn parameter_f64(pool:&SqlitePool,key:&str,default:f64)->AppResult<f64>{let value:Option<String>=sqlx::query_scalar("SELECT valeur FROM parametre WHERE cle=?").bind(key).fetch_optional(pool).await?.flatten();Ok(value.and_then(|value|parse_french_number(&value)).unwrap_or(default))}
@@ -1911,21 +2159,21 @@ async fn remaining_band_pigs(pool: &SqlitePool, band_id: i64, code: &str) -> App
     .fetch_one(pool)
     .await?;
     let deaths = sqlx::query_scalar::<_, i64>(
-        "SELECT CAST(COALESCE(SUM(nombre),0) AS INTEGER) FROM declarationmort WHERE bande_code=? AND date>=?",
+        "SELECT CAST(COALESCE(SUM(nombre),0) AS INTEGER) FROM declarationmort WHERE bande_code=? AND date>?",
     )
     .bind(code)
     .bind(&stock_date)
     .fetch_one(pool)
     .await?;
     let slaughter_deaths = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM porccharcutier WHERE bande_code=? AND date_mort IS NOT NULL AND date_mort>=?",
+        "SELECT COUNT(*) FROM porccharcutier WHERE bande_code=? AND date_mort IS NOT NULL AND date_mort>?",
     )
     .bind(code)
     .bind(&stock_date)
     .fetch_one(pool)
     .await?;
     let sold = sqlx::query_scalar::<_, i64>(
-        "SELECT CAST(COALESCE(SUM(CASE WHEN lots_json IS NOT NULL AND json_valid(lots_json) AND json_array_length(lots_json)>=2 THEN (SELECT COALESCE(SUM(CAST(json_extract(j.value,'$.nb_porcs') AS INTEGER)),0) FROM json_each(v.lots_json) j WHERE COALESCE(CAST(json_extract(j.value,'$.bande_id') AS INTEGER),v.bande_id)=?) WHEN bande_id=? THEN COALESCE(nb_porcs,0) ELSE 0 END),0) AS INTEGER) FROM venteapport v WHERE date>=?",
+        "SELECT CAST(COALESCE(SUM(CASE WHEN v.bande_id=? THEN COALESCE(v.nb_porcs,0) WHEN v.bande_id IS NULL AND json_type(CASE WHEN json_valid(v.lots_json) THEN v.lots_json ELSE 'null' END)='array' THEN (SELECT COALESCE(SUM(CAST(json_extract(j.value,'$.nb_porcs') AS INTEGER)),0) FROM json_each(v.lots_json) j WHERE CAST(json_extract(j.value,'$.bande_id') AS INTEGER)=?) ELSE 0 END),0) AS INTEGER) FROM venteapport v WHERE date>?",
     )
     .bind(band_id)
     .bind(band_id)
@@ -1933,9 +2181,10 @@ async fn remaining_band_pigs(pool: &SqlitePool, band_id: i64, code: &str) -> App
     .fetch_one(pool)
     .await?;
     let transferred = sqlx::query_scalar::<_, i64>(
-        "SELECT CAST(COALESCE(SUM(nombre),0) AS INTEGER) FROM transfert WHERE espece='porc' AND bande_id=?",
+        "SELECT CAST(COALESCE(SUM(nombre),0) AS INTEGER) FROM transfert WHERE espece='porc' AND bande_id=? AND date>?",
     )
     .bind(band_id)
+    .bind(&stock_date)
     .fetch_one(pool)
     .await?;
     Ok((base - deaths - slaughter_deaths - sold - transferred).max(0))
@@ -2080,11 +2329,20 @@ async fn effectifs(
 ) -> AppResult<Html<String>> {
     let stock_date: Option<String> = sqlx::query_scalar("SELECT MAX(date) FROM mouvementstock WHERE est_stock=1")
         .fetch_one(&state.pool).await?;
-    let snapshot = if let Some(ref day) = stock_date {
-        let rows = sqlx::query("SELECT COALESCE(NULLIF(trim(REPLACE(lower(COALESCE(libelle,'stock')),'stock','')),''),'autres') AS stade,CAST(COALESCE(SUM(nombre),0) AS INTEGER) AS animaux,ROUND(COALESCE(SUM(montant),0),2) AS valeur FROM mouvementstock WHERE est_stock=1 AND date=? GROUP BY stade ORDER BY stade")
-            .bind(day).fetch_all(&state.pool).await?;
-        rows_to_json(rows)?
-    } else { Vec::new() };
+    let snapshot = if stock_date.is_some() {
+        generic_rows(
+            &state.pool,
+            "WITH latest AS (SELECT bande_code,MAX(date) AS date FROM mouvementstock WHERE est_stock=1 AND bande_code IS NOT NULL GROUP BY bande_code) SELECT COALESCE(NULLIF(trim(REPLACE(lower(COALESCE(m.libelle,'stock')),'stock','')),''),'autres') AS stade,CAST(COALESCE(SUM(m.nombre),0) AS INTEGER) AS animaux,CAST(ROUND(COALESCE(SUM(m.montant),0),2) AS REAL) AS valeur,COUNT(DISTINCT m.bande_code) AS bandes FROM mouvementstock m JOIN latest l ON l.bande_code=m.bande_code AND l.date=m.date WHERE m.est_stock=1 GROUP BY stade ORDER BY stade",
+        )
+        .await?
+    } else {
+        Vec::new()
+    };
+    let inventory_band_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(DISTINCT bande_code) FROM mouvementstock WHERE est_stock=1 AND bande_code IS NOT NULL",
+    )
+    .fetch_one(&state.pool)
+    .await?;
     let movements = generic_rows(&state.pool,"SELECT id,date,bande_code,code_ifip,nombre,poids,montant,libelle,destination,type_saisie FROM mouvementstock WHERE est_stock=0 ORDER BY date DESC,id DESC LIMIT 80").await?;
     let losses = generic_rows(&state.pool,"SELECT bande_code,CAST(COALESCE(SUM(CASE WHEN code_ifip='39' THEN nombre ELSE 0 END),0) AS INTEGER) AS pertes_ps,CAST(COALESCE(SUM(CASE WHEN code_ifip='49' THEN nombre ELSE 0 END),0) AS INTEGER) AS pertes_engraissement FROM mouvementstock WHERE code_ifip IN('39','49') AND bande_code IS NOT NULL GROUP BY bande_code ORDER BY bande_code").await?;
     let mut cases = generic_rows(&state.pool,"SELECT c.id,c.nom,s.nom AS salle,COALESCE(si.nom,si.code) AS site,c.nb_max_porcs FROM casesalle c JOIN salle s ON s.id=c.salle_id JOIN site si ON si.id=s.site_id ORDER BY COALESCE(si.nom,si.code),s.ordre,c.nom").await?;
@@ -2113,6 +2371,7 @@ async fn effectifs(
     ctx.insert("inventaires_cases".into(),Value::Array(case_inventories));
     ctx.insert("total_animaux".into(), json!(total_animals));
     ctx.insert("total_valeur".into(), json!(total_value));
+    ctx.insert("nb_bandes_inventoriees".into(), json!(inventory_band_count));
     ctx.insert("today".into(), json!(Local::now().date_naive().format("%Y-%m-%d").to_string()));
     render(&state,"effectifs.html",Value::Object(ctx))
 }
@@ -2130,8 +2389,14 @@ async fn effectifs_inventaire(
         .ok_or_else(||AppError::Invalid("Bande introuvable".into()))?;
     let number = form_i64(&form,"nombre").filter(|value|*value>=0).ok_or_else(||AppError::Invalid("Effectif invalide".into()))?;
     let date = form_text(&form,"date").unwrap_or_else(||Local::now().date_naive().format("%Y-%m-%d").to_string());
+    let label = form_text(&form,"libelle").unwrap_or_else(||"stock porcs".into());
+    let mut tx = state.pool.begin().await?;
+    sqlx::query("DELETE FROM mouvementstock WHERE est_stock=1 AND bande_code=? AND date=? AND lower(trim(COALESCE(libelle,'')))=lower(trim(?))")
+        .bind(&code).bind(&date).bind(&label).execute(&mut *tx).await?;
     sqlx::query("INSERT INTO mouvementstock(code_ifip,date,bande_code,nombre,poids,montant,libelle,destination,type_saisie,est_stock) VALUES(NULL,?,?,?,?,?,?,NULL,'inventaire',1)")
-        .bind(&date).bind(&code).bind(number).bind(form_f64(&form,"poids")).bind(form_f64(&form,"montant")).bind(form_text(&form,"libelle").unwrap_or_else(||"stock porcs".into())).execute(&state.pool).await?;
+        .bind(&date).bind(&code).bind(number).bind(form_f64(&form,"poids")).bind(form_f64(&form,"montant")).bind(&label).execute(&mut *tx).await?;
+    tx.commit().await?;
+    db::journal(&state.pool,&session.nom,"inventorier","bande",&format!("{code} · {date} · {label}"),"/effectifs/inventaire").await;
     Ok(Redirect::to("/effectifs").into_response())
 }
 
@@ -2146,10 +2411,15 @@ async fn effectifs_inventaire_case(
     let number=form_i64(&form,"nombre").filter(|value|*value>=0).ok_or_else(||AppError::Invalid("Effectif invalide".into()))?;
     let exists:i64=sqlx::query_scalar("SELECT COUNT(*) FROM casesalle WHERE id=?").bind(case_id).fetch_one(&state.pool).await?;
     if exists==0{return Err(AppError::Invalid("Case introuvable".into()))}
+    let date=form_text(&form,"date").unwrap_or_else(||Local::now().date_naive().format("%Y-%m-%d").to_string());
+    let note=form_text(&form,"note");
+    let mut tx=state.pool.begin().await?;
+    sqlx::query("DELETE FROM inventairecase WHERE case_id=? AND date=?")
+        .bind(case_id).bind(&date).execute(&mut *tx).await?;
     sqlx::query("INSERT INTO inventairecase(case_id,date,nombre,note,cree_par) VALUES(?,?,?,?,?)")
-        .bind(case_id)
-        .bind(form_text(&form,"date").unwrap_or_else(||Local::now().date_naive().format("%Y-%m-%d").to_string()))
-        .bind(number).bind(form_text(&form,"note")).bind(&session.identifiant).execute(&state.pool).await?;
+        .bind(case_id).bind(&date).bind(number).bind(note).bind(&session.identifiant).execute(&mut *tx).await?;
+    tx.commit().await?;
+    db::journal(&state.pool,&session.nom,"inventorier","case",&format!("{case_id} · {date}"),"/effectifs/inventaire-case").await;
     Ok(Redirect::to("/effectifs").into_response())
 }
 
@@ -3998,5 +4268,35 @@ mod gttt_tests {
         assert_eq!(parse_french_number("(12,34)"), Some(-12.34));
         assert_eq!(parse_french_number("−12,34"), Some(-12.34));
         assert_eq!(parse_french_number("1 234,56"), Some(1234.56));
+    }
+
+    #[test]
+    fn stades_bande_respectent_toutes_les_frontieres() {
+        let schedule = BandSchedule::default();
+        assert_eq!(schedule.stage(-116).0, "Planifiée");
+        assert_eq!(schedule.stage(-115).0, "Verraterie");
+        assert_eq!(schedule.stage(-87).0, "Gestante");
+        assert_eq!(schedule.stage(-5).0, "Maternité (préparation)");
+        assert_eq!(schedule.stage(0).0, "Maternité");
+        assert_eq!(schedule.stage(28).0, "Post-sevrage");
+        assert_eq!(schedule.stage(71).0, "Engraissement");
+        assert_eq!(schedule.stage(215).0, "Départ / terminé");
+    }
+
+    #[test]
+    fn calendrier_bande_utilise_les_reglages() {
+        let schedule = BandSchedule {
+            gestation: 114,
+            echo_after_ia: 30,
+            maternity_before_farrowing: 7,
+            weaning: 26,
+            transfer_finishing: 68,
+            finishing_feed: 135,
+            departure: 205,
+        };
+        assert_eq!(
+            schedule.stages().map(|(_, day)| day),
+            [-114, -84, -7, 0, 26, 68, 135, 205]
+        );
     }
 }

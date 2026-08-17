@@ -113,3 +113,70 @@ async fn schema_complet_et_ecritures_compatibles() -> anyhow::Result<()> {
     assert_eq!(check, "ok");
     Ok(())
 }
+
+#[tokio::test]
+async fn inventaire_est_un_point_de_depart_sans_double_comptage() -> anyhow::Result<()> {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await?;
+    sqlx::raw_sql(include_str!("../migrations/0001_schema.sql"))
+        .execute(&pool)
+        .await?;
+    let band = sqlx::query("INSERT INTO bande(code,date_mb,active) VALUES('B-STOCK','2026-08-01',1)")
+        .execute(&pool)
+        .await?
+        .last_insert_rowid();
+    sqlx::query("INSERT INTO mouvementstock(date,bande_code,nombre,libelle,type_saisie,est_stock) VALUES('2026-08-16','B-STOCK',100,'stock porcs','inventaire',1)")
+        .execute(&pool)
+        .await?;
+    sqlx::query("INSERT INTO transfert(date,espece,bande_id,nombre) VALUES('2026-08-15','porc',?,20),('2026-08-16','porc',?,10),('2026-08-17','porc',?,15)")
+        .bind(band)
+        .bind(band)
+        .bind(band)
+        .execute(&pool)
+        .await?;
+    sqlx::query("INSERT INTO declarationmort(date,bande_code,nombre) VALUES('2026-08-16','B-STOCK',2),('2026-08-18','B-STOCK',3)")
+        .execute(&pool)
+        .await?;
+    sqlx::query("INSERT INTO venteapport(date,bande_id,nb_porcs,lots_json) VALUES('2026-08-16',?,5,NULL),('2026-08-19',?,6,NULL),(NULL,NULL,99,'json-invalide')")
+        .bind(band)
+        .bind(band)
+        .execute(&pool)
+        .await?;
+    let transferred: i64 = sqlx::query_scalar("SELECT CAST(COALESCE(SUM(nombre),0) AS INTEGER) FROM transfert WHERE espece='porc' AND bande_id=? AND date>?")
+        .bind(band)
+        .bind("2026-08-16")
+        .fetch_one(&pool)
+        .await?;
+    let deaths: i64 = sqlx::query_scalar("SELECT CAST(COALESCE(SUM(nombre),0) AS INTEGER) FROM declarationmort WHERE bande_code=? AND date>?")
+        .bind("B-STOCK")
+        .bind("2026-08-16")
+        .fetch_one(&pool)
+        .await?;
+    let sold: i64 = sqlx::query_scalar("SELECT CAST(COALESCE(SUM(CASE WHEN v.bande_id=? THEN COALESCE(v.nb_porcs,0) WHEN v.bande_id IS NULL AND json_type(CASE WHEN json_valid(v.lots_json) THEN v.lots_json ELSE 'null' END)='array' THEN (SELECT COALESCE(SUM(CAST(json_extract(j.value,'$.nb_porcs') AS INTEGER)),0) FROM json_each(v.lots_json) j WHERE CAST(json_extract(j.value,'$.bande_id') AS INTEGER)=?) ELSE 0 END),0) AS INTEGER) FROM venteapport v WHERE date>?")
+        .bind(band)
+        .bind(band)
+        .bind("2026-08-16")
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!((transferred, deaths, sold), (15, 3, 6));
+    assert_eq!(100 - transferred - deaths - sold, 76);
+
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM mouvementstock WHERE est_stock=1 AND bande_code=? AND date=? AND lower(trim(COALESCE(libelle,'')))=lower(trim(?))")
+        .bind("B-STOCK")
+        .bind("2026-08-16")
+        .bind("stock porcs")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("INSERT INTO mouvementstock(date,bande_code,nombre,libelle,type_saisie,est_stock) VALUES('2026-08-16','B-STOCK',98,'stock porcs','inventaire',1)")
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    let corrected: (i64, i64) = sqlx::query_as("SELECT COUNT(*),CAST(SUM(nombre) AS INTEGER) FROM mouvementstock WHERE est_stock=1 AND bande_code='B-STOCK' AND date='2026-08-16' AND lower(trim(libelle))='stock porcs'")
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(corrected, (1, 98));
+    Ok(())
+}

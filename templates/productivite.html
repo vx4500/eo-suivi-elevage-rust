@@ -1,1 +1,57 @@
-{% extends "base.html" %}{% block content %}<h1>Pilotage technique</h1><nav class="rust-actions">{% for p in [6,12,24,36,60,120] %}<a class="{% if p == mois %}rust-badge{% endif %}" href="/productivite?mois={{ p }}">{{ p }} mois</a>{% endfor %}</nav><p>Les dates réelles saisies dans EO-Suivi sont affichées à côté des indicateurs importés, sans écraser l’historique des bandes.</p><div class="rust-scroll"><table><thead><tr><th>Bande</th><th>Site</th><th>Mise-bas prévue</th><th>1re IA réelle</th><th>1re mise-bas réelle</th><th>Dernier sevrage</th><th>Saillies</th><th>Pleines</th><th>Taux écho</th><th>Mise-bas/saillies</th><th>Nés vifs/portée</th><th>Sevrés/portée</th><th>Total sevrés</th><th>Pertes</th><th>Poids sevrage</th><th>GMQ PS</th><th>GMQ engraissement</th></tr></thead><tbody>{% for b in bandes %}<tr><td><a href="/bande/{{ b.id }}"><b>{{ b.code }}</b></a></td><td>{{ b.site or '—' }}</td><td>{{ b.date_mb|date_fr }}</td><td>{{ b.premiere_ia_reelle|date_fr }}</td><td>{{ b.premiere_mb_reelle|date_fr }}</td><td>{{ b.dernier_sevrage_reel|date_fr }}</td><td>{{ b.cs_truies_saillies or '—' }}</td><td>{{ b.cs_pleines or '—' }}</td><td>{{ b.taux_pleines_echo or '—' }}{% if b.taux_pleines_echo is not none %} %{% endif %}</td><td>{{ b.taux_mb_saillies or '—' }}{% if b.taux_mb_saillies is not none %} %{% endif %}</td><td>{{ b.cs_nv_portee or '—' }}</td><td>{{ b.cs_sevres_portee or '—' }}</td><td>{{ b.cs_total_sevres or '—' }}</td><td>{{ b.cs_tx_pertes_nv or '—' }}</td><td>{{ b.cs_poids_sevrage or '—' }}</td><td>{{ b.cs_gmq_ps or '—' }}</td><td>{{ b.cs_gmq_engr or '—' }}</td></tr>{% else %}<tr><td colspan="17" class="rust-empty">Aucune bande sur cette période</td></tr>{% endfor %}</tbody></table></div>{% endblock %}
+{% extends "base.html" %}
+{% block content %}
+<h1>Pilotage technique</h1>
+
+<nav class="rust-actions">
+  <a class="{% if vue == 'bandes' %}rust-badge{% endif %}" href="/productivite?vue=bandes&mois={{ mois }}">Bandes et abattage</a>
+  <a class="{% if vue == 'cheptel' %}rust-badge{% endif %}" href="/productivite?vue=cheptel&mois={{ mois }}">Cheptel et ELD</a>
+  <a class="{% if vue == 'rangs' %}rust-badge{% endif %}" href="/productivite?vue=rangs&mois={{ mois }}">Rangs de portée</a>
+</nav>
+<nav class="rust-actions">
+  <span>Période :</span>
+  {% for p in [6,12,24,36,60,120] %}<a class="{% if p == mois %}rust-badge{% endif %}" href="/productivite?vue={{ vue }}&mois={{ p }}">{{ p }} mois</a>{% endfor %}
+</nav>
+
+{% if vue == 'bandes' %}
+<p>Les dates réelles saisies dans EO-Suivi sont affichées à côté des indicateurs importés, sans écraser l’historique.</p>
+<div class="rust-grid">
+  <div class="card"><span class="rust-badge">Saillies</span><h2>{{ entonnoir.saillies }}</h2></div>
+  <div class="card"><span class="rust-badge">Pleines</span><h2>{{ entonnoir.pleines }}</h2></div>
+  <div class="card"><span class="rust-badge">Mises-bas</span><h2>{{ entonnoir.mises_bas }}</h2></div>
+  <div class="card"><span class="rust-badge">Sevrés</span><h2>{{ entonnoir.sevres }}</h2><p>{{ entonnoir.adoptes }} adopté(s) · {{ entonnoir.retires }} retiré(s)</p></div>
+</div>
+<h2>Résultats des bandes</h2>
+<div class="rust-scroll"><table><thead><tr><th>Bande</th><th>Site</th><th>Mise-bas prévue</th><th>1re IA réelle</th><th>1re mise-bas réelle</th><th>Dernier sevrage</th><th>Saillies</th><th>Pleines</th><th>Taux écho</th><th>Mise-bas/saillies</th><th>Nés vifs/portée</th><th>Sevrés/portée</th><th>Total sevrés</th><th>Pertes</th><th>Poids sevrage</th><th>GMQ PS</th><th>GMQ engraissement</th></tr></thead><tbody>
+{% for b in bandes %}<tr><td><a href="/bande/{{ b.id }}"><b>{{ b.code }}</b></a></td><td>{{ b.site or '—' }}</td><td>{{ b.date_mb|date_fr }}</td><td>{{ b.premiere_ia_reelle|date_fr }}</td><td>{{ b.premiere_mb_reelle|date_fr }}</td><td>{{ b.dernier_sevrage_reel|date_fr }}</td><td>{{ b.cs_truies_saillies or '—' }}</td><td>{{ b.cs_pleines or '—' }}</td><td>{{ b.taux_pleines_echo or '—' }}{% if b.taux_pleines_echo is not none %} %{% endif %}</td><td>{{ b.taux_mb_saillies or '—' }}{% if b.taux_mb_saillies is not none %} %{% endif %}</td><td>{{ b.cs_nv_portee or '—' }}</td><td>{{ b.cs_sevres_portee or '—' }}</td><td>{{ b.cs_total_sevres or '—' }}</td><td>{{ b.cs_tx_pertes_nv or '—' }}</td><td>{{ b.cs_poids_sevrage or '—' }}</td><td>{{ b.cs_gmq_ps or '—' }}</td><td>{{ b.cs_gmq_engr or '—' }}</td></tr>
+{% else %}<tr><td colspan="17" class="rust-empty">Aucune bande sur cette période</td></tr>{% endfor %}
+</tbody></table></div>
+
+<h2>Résultats techniques d’abattage par bande</h2>
+<p>Les moyennes TMP, muscle et plus-value sont pondérées par le nombre de porcs.</p>
+<div class="rust-scroll"><table><thead><tr><th>Bande</th><th>Porcs</th><th>Poids moyen</th><th>TMP</th><th>Muscle lot</th><th>Plus-value</th><th>Prix net/kg</th><th>Montant net</th></tr></thead><tbody>
+{% for t in technique %}<tr><td><a href="/bande/{{ t.id }}"><b>{{ t.code }}</b></a></td><td>{{ t.porcs }}</td><td>{{ t.poids_moyen or '—' }}{% if t.poids_moyen is not none %} kg{% endif %}</td><td>{{ t.tmp or '—' }}</td><td>{{ t.muscle_lot or '—' }}</td><td>{{ t.plus_value or '—' }}</td><td>{{ t.prix_net_kg or '—' }}{% if t.prix_net_kg is not none %} €/kg{% endif %}</td><td>{{ t.montant_net|euro }}</td></tr>
+{% else %}<tr><td colspan="8" class="rust-empty">Aucun apport relié à une bande sur cette période</td></tr>{% endfor %}
+</tbody></table></div>
+
+{% elif vue == 'cheptel' %}
+<div class="rust-grid">
+  <div class="card"><span class="rust-badge">Truies actives</span><h2>{{ truies_actives }}</h2></div>
+  <div class="card"><span class="rust-badge">ELD la plus récente</span><h2>{{ eld_resume.moyenne or '—' }}{% if eld_resume.moyenne is not none %} mm{% endif %}</h2><p>{{ eld_resume.mesures }} truie(s) mesurée(s)</p></div>
+  {% for s in stades %}<div class="card"><span class="rust-badge">{{ s.nom }}</span><h2>{{ s.truies }}</h2><p>truie(s)</p></div>{% endfor %}
+</div>
+<h2>ELD par bande active</h2>
+<p>Pour chaque truie, seule sa mesure ELD la plus récente est retenue.</p>
+<div class="rust-scroll"><table><thead><tr><th>Bande</th><th>Truies mesurées</th><th>ELD moyenne</th><th>Dernière mesure</th></tr></thead><tbody>
+{% for e in eld_bandes %}<tr><td><a href="/bande/{{ e.id }}"><b>{{ e.code }}</b></a></td><td>{{ e.truies_mesurees }}</td><td>{{ e.eld_moyenne }} mm</td><td>{{ e.derniere_mesure|date_fr }}</td></tr>
+{% else %}<tr><td colspan="4" class="rust-empty">Aucune mesure ELD disponible pour les bandes actives</td></tr>{% endfor %}
+</tbody></table></div>
+
+{% else %}
+<h2>Performances par rang de portée</h2>
+<p>Les résultats proviennent de l’historique GTTT importé et respectent la période sélectionnée quand la bande est identifiable.</p>
+<div class="rust-scroll"><table><thead><tr><th>Rang</th><th>Portées</th><th>Gestation</th><th>Nés vifs</th><th>Mort-nés</th><th>Sevrés</th><th>Pertes</th><th>ELD entrée</th><th>ELD sortie</th></tr></thead><tbody>
+{% for r in rangs %}<tr><td><b>{{ r.rang }}</b></td><td>{{ r.portees }}</td><td>{{ r.gestation or '—' }}{% if r.gestation is not none %} j{% endif %}</td><td>{{ r.nes_vifs or '—' }}</td><td>{{ r.mort_nes or '—' }}</td><td>{{ r.sevres or '—' }}</td><td>{{ r.pertes or '—' }}{% if r.pertes is not none %} %{% endif %}</td><td>{{ r.eld_entree or '—' }}</td><td>{{ r.eld_sortie or '—' }}</td></tr>
+{% else %}<tr><td colspan="9" class="rust-empty">Aucune donnée par rang de portée</td></tr>{% endfor %}
+</tbody></table></div>
+{% endif %}
+{% endblock %}
