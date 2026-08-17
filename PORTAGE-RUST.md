@@ -2,10 +2,10 @@
 
 La 1.65 d’origine contient 215 routes HTTP et environ 8 200 lignes dans son
 fichier principal. Le changement Python → Rust est une réécriture du moteur,
-pas une conversion automatique. La version 2.1.6 relie explicitement plus de 124
+pas une conversion automatique. La version 2.1.7 relie explicitement plus de 127
 chemins Rust ; certaines déclarations gèrent plusieurs verbes HTTP.
 
-## Fonctions opérationnelles en Rust 2.1.6
+## Fonctions opérationnelles en Rust 2.1.7
 
 | Domaine | État |
 | --- | --- |
@@ -16,7 +16,7 @@ chemins Rust ; certaines déclarations gèrent plusieurs verbes HTTP.
 | Tableau de bord | Bandes, tâches, IA, ventes annuelles, mortalité, prix annuel et courbe des dernières ventes |
 | Économie | Aliment, véto, semence, génétique, ventes, résultat par bande et import PDF avec aperçu |
 | Abattoir | Apports, synthèse par bande et saisies sanitaires |
-| Productivité | Bandes, étapes paramétrées, ELD du cheptel, rangs de portée et résultats techniques d'abattage |
+| Productivité | GTTT centralisé par période/bande, sevrés par truie productive/an, objectifs pondérés, ELD, rangs et abattage |
 | Vente directe | Produits, inventaires, commandes modifiables/imprimables, préparation, sessions, coûts et charges |
 | Eau et électricité | Compteurs, relevés, alertes, remplacement et import CSV |
 | Exports | CSV mise-bas, modèle/import truies, calendrier ICS et fiches imprimables |
@@ -26,7 +26,7 @@ chemins Rust ; certaines déclarations gèrent plusieurs verbes HTTP.
 
 - OCR des scans/photos et imports Excel spécialisés ;
 - génération PDF serveur et QR codes (les fiches HTML sont imprimables) ;
-- objectifs GTTT/IFIP avancés et écrans de personnalisation historiques ;
+- imports automatiques de nouveaux référentiels techniques externes ;
 - fiches charcutier complètes, pharmacie et protocoles sanitaires en écriture ;
 - contrôles quotidiens salle par salle et écrans secondaires de l’engraisseur ;
 - newsletter Brevo, SMS et historique complet des communications ;
@@ -47,5 +47,5 @@ Une écriture non portée renvoie volontairement `501 Not Implemented`. Cela
   impressions exécutées sur une copie ;
 - aucune donnée personnelle ni copie de la base n’est incluse dans l’archive ;
 - la 2.0.1 a compilé et démarré avec Rust 1.97.1 sur Debian 13 ;
-- la 2.1.6 doit être validée par `cargo fmt --check`, `cargo clippy`,
+- la 2.1.7 doit être validée par `cargo fmt --check`, `cargo clippy`,
   `cargo test` et `cargo build --release` sur le serveur de recette.

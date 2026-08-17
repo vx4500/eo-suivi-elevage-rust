@@ -25,6 +25,14 @@ async fn schema_complet_et_ecritures_compatibles() -> anyhow::Result<()> {
     .fetch_one(&pool)
     .await?;
     assert_eq!(tables, 54);
+    let objectives: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM objectif")
+        .fetch_one(&pool)
+        .await?;
+    let references: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM referenceifip")
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(objectives, 15);
+    assert_eq!(references, 10);
 
     let mut tx = pool.begin().await?;
     sqlx::query("INSERT INTO truie(num_travail,statut,reformee,rang,mere_cochette) VALUES('TEST-RUST','active',0,0,0)")
