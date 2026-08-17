@@ -1,5 +1,20 @@
 # Historique et feuille de route EO-Suivi Rust
 
+## 2.1.9 — consolidation et mises à jour réversibles
+
+- Tous les correctifs fonctionnels, SQLite, imports, sécurité et portabilité de
+  la série 2.1.x sont regroupés sous un numéro de version unique.
+- Mise à jour Debian 13 automatisée depuis le dépôt GitHub privé avec verrou
+  anti-double lancement et refus des modifications Git locales.
+- Contrôles Cargo exécutés avant toute interruption du service : `check`,
+  Clippy, tests et compilation release.
+- Sauvegarde SQLite native contrôlée par `PRAGMA quick_check`, avec conservation
+  de l'ancien binaire et de l'unité systemd.
+- Remplacement atomique du binaire, contrôle HTTP du numéro installé et retour
+  arrière automatique en cas d'échec du démarrage ou du contrôle de santé.
+- GitHub Actions limité aux branches utiles et validation de la syntaxe des
+  scripts sur Linux, en plus des tests Windows et du binaire statique musl.
+
 ## 2.1.8 — robustesse, sécurité et portabilité
 
 - Connexions SQLite configurées en WAL, clés étrangères actives, synchronisation
