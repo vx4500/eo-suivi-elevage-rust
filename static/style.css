@@ -277,3 +277,4 @@ nav .grp .sous a:hover{background:rgba(200,130,63,.3);color:#fff}
 .bande-truies-resume>div{display:flex;align-items:center;gap:12px}
 .bande-truies-count{display:flex;align-items:center;justify-content:center;min-width:48px;height:48px;padding:0 10px;border-radius:12px;background:#166534;color:#fff;font-size:1.35rem;font-weight:800}
 @media(max-width:600px){.bande-truies-resume{align-items:stretch;flex-direction:column}.bande-truies-resume>a{text-align:center}}
+.rust-sortable{cursor:pointer;user-select:none}.rust-sortable::after{content:' ↕';color:#7b8984;font-size:.8em}.rust-sortable[data-sort="asc"]::after{content:' ↑'}.rust-sortable[data-sort="desc"]::after{content:' ↓'}

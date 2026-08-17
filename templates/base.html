@@ -30,7 +30,7 @@
     <a href="/effectifs">Effectifs</a><a href="/stock">Stocks</a><a href="/charcutiers">Charcutiers</a><a href="/engraissement">Prestataire</a>
   </div></div>
   <div class="rust-menu"><span>Pilotage ▾</span><div class="rust-sub">
-    <a href="/economique">Économie</a><a href="/abattoir">Abattoir</a><a href="/ifip">IFIP</a><a href="/cahiers">Cahiers des charges</a>
+    <a href="/economique">Économie</a><a href="/abattoir">Abattoir</a><a href="/ifip">IFIP</a>
     <a href="/sanitaire">Sanitaire</a><a href="/pharmacie">Pharmacie</a><a href="/entretien">Entretien</a><a href="/energie">Eau & électricité</a>
     <a href="/vente-directe">Vente directe</a><a href="/vente-directe/communications">Communications clients</a><a href="/structure">Structure</a><a href="/etat-donnees">État des données</a>
   </div></div>
@@ -57,6 +57,7 @@
     <button type="button" class="fab-t" data-type="chaleur">Chaleur</button>
     <button type="button" class="fab-t" data-type="perte">Perte porcelet</button>
     <button type="button" class="fab-t" data-type="sortie">Sortie truie</button>
+    <button type="button" class="fab-t" data-type="mouvement">Mouvement</button>
   </div>
   <form method="post" action="/saisie-rapide" id="fab-form">
     <input type="hidden" name="csrf_token" value="{{ session.csrf }}">
@@ -120,6 +121,16 @@
         <select name="motif" disabled><option>Morte</option><option>Euthanasie</option><option>Vente / réforme</option><option>Boiterie / accident</option><option>Non fécondée / infertile</option><option>Âge / usure</option><option>Sanitaire</option><option>Autre</option></select>
       </label>
     </div>
+    <div class="fab-f" data-for="mouvement" hidden>
+      <label>De (bande ou unité)
+        <select name="source" id="fab-source" disabled required><option value="">Chargement…</option></select>
+      </label>
+      <label>Vers (bâtiment · salle · case)
+        <select name="case_dest_id" id="fab-destination" disabled required><option value="">Chargement…</option></select>
+      </label>
+      <label>Nombre de porcs<input name="nombre" type="number" min="1" value="1" disabled required></label>
+      <p><a href="/transferts">Sélectionner et déplacer plusieurs truies</a></p>
+    </div>
     <label id="fab-note-wrap">Observation<input name="note" id="fab-note" placeholder="Observation facultative"></label>
     <button type="submit" class="fab-ok">Valider</button>
   </form>
@@ -136,6 +147,14 @@
   var band=document.getElementById('fab-bande');
   var noteWrap=document.getElementById('fab-note-wrap');
   var note=document.getElementById('fab-note');
+  var source=document.getElementById('fab-source');
+  var destination=document.getElementById('fab-destination');
+  var movementBands=[], movementCases=[];
+  function refreshMovementSources(){
+    source.replaceChildren(new Option('— sélectionner —',''));
+    movementBands.forEach(function(row){source.add(new Option('Bande · '+text(row.code)+(row.site?' · '+text(row.site):''),'bande:'+text(row.id)));});
+    movementCases.forEach(function(row){source.add(new Option('Unité · '+[row.site,row.salle,row.nom].filter(Boolean).join(' · '),'case:'+text(row.id)));});
+  }
   function setOpen(open){
     panel.classList.toggle('open',open); panel.setAttribute('aria-hidden',String(!open));
     button.setAttribute('aria-expanded',String(open)); if(open){window.setTimeout(function(){sow.focus();},0);}
@@ -153,10 +172,16 @@
   }).catch(function(){sow.replaceChildren(new Option('Liste indisponible',''));});
   fetch('/api/bandes-actives').then(function(response){return response.json();}).then(function(rows){
     fillSelect(band,rows,function(row){return text(row.code)+(row.site?' · '+text(row.site):'');});
+    movementBands=rows; refreshMovementSources();
   }).catch(function(){band.replaceChildren(new Option('Liste indisponible',''));});
   fetch('/api/cases').then(function(response){return response.json();}).then(function(rows){
     var select=document.getElementById('fab-case'); select.replaceChildren(new Option('— aucune / sous la mère —',''));
-    rows.forEach(function(row){select.add(new Option([row.site,row.salle,row.nom].filter(Boolean).join(' · '),text(row.id)));});
+    destination.replaceChildren(new Option('— sélectionner —','')); movementCases=rows; refreshMovementSources();
+    rows.forEach(function(row){
+      var label=[row.site,row.salle,row.nom].filter(Boolean).join(' · ');
+      select.add(new Option(label,text(row.id)));
+      destination.add(new Option(label,text(row.id)));
+    });
   }).catch(function(){});
   var now=new Date(); now.setMinutes(now.getMinutes()-now.getTimezoneOffset());
   document.getElementById('fab-date').value=now.toISOString().slice(0,10);
@@ -167,7 +192,10 @@
       var active=section.dataset.for===type; section.hidden=!active;
       section.querySelectorAll('input,select,textarea,button').forEach(function(field){field.disabled=!active;});
     });
-    var loss=type==='perte'; sow.required=!loss; sowLabel.textContent=loss?'Truie sous la mère (facultatif)':'Truie';
+    var loss=type==='perte', movement=type==='mouvement';
+    form.action=movement?'/transferts/porcs':'/saisie-rapide';
+    sow.disabled=movement; sow.required=!loss&&!movement; document.getElementById('fab-truie-wrap').hidden=movement;
+    sowLabel.textContent=loss?'Truie sous la mère (facultatif)':'Truie';
     band.disabled=!loss; band.required=loss; noteWrap.hidden=type==='sortie'; note.disabled=type==='sortie';
   }
   document.querySelectorAll('.fab-t').forEach(function(item){item.addEventListener('click',function(){chooseType(item.dataset.type,item);});});
@@ -184,6 +212,28 @@
 })();
 </script>
 {% endif %}
+<script>
+(function(){
+  function comparable(value){
+    var raw=value.trim(), french=raw.replace(/\s/g,'').replace(',','.').replace(/[^0-9.\-]/g,'');
+    if(/^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4}$/.test(raw)){var p=raw.split(/[\/\-]/);return {kind:'number',value:+new Date(p[2]+'-'+p[1]+'-'+p[0])};}
+    if(raw!==''&&french!==''&&!Number.isNaN(Number(french))){return {kind:'number',value:Number(french)};}
+    return {kind:'text',value:raw.toLocaleLowerCase('fr')};
+  }
+  document.querySelectorAll('table:not([data-no-sort])').forEach(function(table){
+    var body=table.tBodies[0], headerRow=table.tHead?table.tHead.rows[0]:table.rows[0]; if(!body||!headerRow||table.rows.length<2){return;}
+    Array.from(headerRow.cells).forEach(function(header,index){
+      header.classList.add('rust-sortable'); header.title='Trier cette colonne'; header.tabIndex=0;
+      function sort(){
+        var direction=header.dataset.sort==='asc'?'desc':'asc';
+        Array.from(table.querySelectorAll('th')).forEach(function(h){delete h.dataset.sort;}); header.dataset.sort=direction;
+        Array.from(body.rows).filter(function(row){return row!==headerRow;}).sort(function(a,b){var x=comparable(a.cells[index]?.textContent||''),y=comparable(b.cells[index]?.textContent||'');var result=x.kind===y.kind?(x.value<y.value?-1:x.value>y.value?1:0):String(x.value).localeCompare(String(y.value),'fr');return direction==='asc'?result:-result;}).forEach(function(row){body.appendChild(row);});
+      }
+      header.addEventListener('click',sort); header.addEventListener('keydown',function(event){if(event.key==='Enter'||event.key===' '){event.preventDefault();sort();}});
+    });
+  });
+})();
+</script>
 <footer class="rust-footer">EO-Suivi Élevage · Version Rust {{ app_version }}</footer>
 </body>
 </html>

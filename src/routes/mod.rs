@@ -51,6 +51,7 @@ pub fn router(state: AppState) -> Router {
         .route("/bandes", get(bandes))
         .route("/bandes/ajouter", post(bande_ajouter))
         .route("/bande/{id}", get(bande_detail))
+        .route("/bande/{id}/marquage", post(bande_marquage))
         .route("/bande/{id}/imprimer", get(bande_imprimer))
         .route("/export/mise-bas/{id}", get(export_mise_bas))
         .route("/bande/{id}/archiver", post(bande_archiver))
@@ -861,11 +862,33 @@ async fn bande_detail(
     };
     let schedule = load_band_schedule(&state.pool).await?;
     let dates = key_dates(band.date_mb.as_deref(), schedule);
+    let porcs_presents = total_band_pigs(&state.pool, band.id, &band.code).await?;
+    let emplacements = generic_rows(
+        &state.pool,
+        &format!("SELECT t.date,si.code AS batiment,s.nom AS salle,c.nom AS unite,t.nombre FROM transfert t JOIN casesalle c ON c.id=t.case_dest_id JOIN salle s ON s.id=c.salle_id JOIN site si ON si.id=s.site_id WHERE t.espece='porc' AND t.bande_id={} ORDER BY t.date DESC,t.id DESC LIMIT 10", band.id),
+    ).await?;
+    let vente_reelle: Option<String> = sqlx::query_scalar(
+        "SELECT MAX(date) FROM venteapport v WHERE v.bande_id=? OR (json_type(CASE WHEN json_valid(v.lots_json) THEN v.lots_json ELSE 'null' END)='array' AND EXISTS(SELECT 1 FROM json_each(v.lots_json) j WHERE CAST(json_extract(j.value,'$.bande_id') AS INTEGER)=?))",
+    ).bind(band.id).bind(band.id).fetch_one(&state.pool).await?;
+    let depart_prevu = band.date_mb.as_deref().and_then(parse_stored_date).map(|date| date + Duration::days(schedule.departure));
+    let reference = vente_reelle.as_deref().and_then(parse_stored_date).unwrap_or_else(|| Local::now().date_naive());
+    let ecart_vente = depart_prevu.map(|date| (reference-date).num_days());
+    let statut_vente = match (vente_reelle.is_some(), ecart_vente) {
+        (true, Some(value)) if value < 0 => format!("Vendu avec {} jour(s) d’avance", -value),
+        (true, Some(value)) if value > 0 => format!("Vendu avec {value} jour(s) de retard"),
+        (true, Some(_)) => "Vendu à la date prévue".to_string(),
+        (false, Some(value)) if value > 0 && porcs_presents > 0 => format!("En retard de {value} jour(s)"),
+        (false, Some(value)) if value <= 0 => format!("Départ prévu dans {} jour(s)", -value),
+        (false, Some(_)) => "Date de départ dépassée, aucun porc présent".to_string(),
+        _ => "Date de mise-bas à renseigner".to_string(),
+    };
     let mut ctx = context(&session);
     ctx.insert("bande".into(), serde_json::to_value(&band).unwrap_or_default());
     ctx.insert("truies".into(), serde_json::to_value(&sows).unwrap_or_default());
     ctx.insert("evenements".into(), serde_json::to_value(&events).unwrap_or_default());
     ctx.insert("dates".into(), Value::Array(dates));
+    ctx.insert("emplacements".into(), Value::Array(emplacements));
+    ctx.insert("suivi_porcs".into(), json!({"presents":porcs_presents,"depart_prevu":depart_prevu.map(|d|d.format("%Y-%m-%d").to_string()),"vente_reelle":vente_reelle,"statut":statut_vente,"ecart_jours":ecart_vente}));
     ctx.insert(
         "resume".into(),
         json!({
@@ -880,6 +903,18 @@ async fn bande_detail(
         }),
     );
     render(&state, "bande.html", Value::Object(ctx))
+}
+
+async fn bande_marquage(
+    State(state): State<AppState>, Extension(session): Extension<SessionData>, Path(id): Path<i64>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    verify_csrf(&session, &form)?;
+    let number = form_text(&form, "num_marquage").ok_or_else(|| AppError::Invalid("Numéro de marquage obligatoire".into()))?;
+    sqlx::query("UPDATE bande SET num_officiel=?,updated_at=CURRENT_TIMESTAMP WHERE id=?")
+        .bind(number.trim().to_uppercase()).bind(id).execute(&state.pool).await?;
+    Ok(Redirect::to(&format!("/bande/{id}")).into_response())
 }
 
 fn key_dates(date_mb: Option<&str>, schedule: BandSchedule) -> Vec<Value> {
@@ -2830,6 +2865,18 @@ async fn remaining_band_pigs(pool: &SqlitePool, band_id: i64, code: &str) -> App
     Ok((base - deaths - slaughter_deaths - sold - transferred).max(0))
 }
 
+async fn total_band_pigs(pool: &SqlitePool, band_id: i64, code: &str) -> AppResult<i64> {
+    let unassigned = remaining_band_pigs(pool, band_id, code).await?;
+    let stock_date: Option<String> = sqlx::query_scalar(
+        "SELECT MAX(date) FROM mouvementstock WHERE est_stock=1 AND bande_code=?",
+    ).bind(code).fetch_one(pool).await?;
+    let Some(stock_date) = stock_date else { return Ok(unassigned) };
+    let placed: i64 = sqlx::query_scalar(
+        "SELECT CAST(COALESCE(SUM(nombre),0) AS INTEGER) FROM transfert WHERE espece='porc' AND bande_id=? AND date>?",
+    ).bind(band_id).bind(stock_date).fetch_one(pool).await?;
+    Ok(unassigned + placed)
+}
+
 async fn transferts_porcs(
     State(state): State<AppState>,
     Extension(session): Extension<SessionData>,
@@ -4222,10 +4269,12 @@ async fn sanitaire(
     let protocols = generic_rows(&state.pool, "SELECT id,libelle,cible,reference,jour,produit,dose,unite,voie,duree_j,delai_attente,aiguille,preconisations,note FROM acteprotocole WHERE actif=1 ORDER BY cible,jour,id").await?;
     let bands = generic_rows(&state.pool, "SELECT id,code,date_mb FROM bande WHERE active=1 ORDER BY date_mb,code").await?;
     let completed = generic_rows(&state.pool, "SELECT ar.id,ar.date_realise,b.code AS bande,a.libelle,a.produit,ar.note FROM acterealise ar JOIN bande b ON b.id=ar.bande_id JOIN acteprotocole a ON a.id=ar.acte_id ORDER BY ar.date_realise DESC,ar.id DESC LIMIT 250").await?;
+    let treated_pigs = generic_rows(&state.pool, "SELECT tc.id,tc.date,COALESCE(NULLIF(p.rfid,''),'Porc #'||p.id) AS animal,COALESCE(tc.bande_code,p.bande_code) AS bande,tc.produit,tc.dose,tc.motif,tc.delai_attente,tc.note FROM traitementcharcutier tc JOIN porccharcutier p ON p.id=tc.charcutier_id WHERE lower(COALESCE(tc.motif,'')) NOT LIKE '%vaccin%' AND lower(COALESCE(tc.produit,'')) NOT LIKE '%vaccin%' ORDER BY tc.date DESC,tc.id DESC LIMIT 500").await?;
     let mut ctx = context(&session);
     ctx.insert("protocoles".into(), Value::Array(protocols));
     ctx.insert("bandes".into(), Value::Array(bands));
     ctx.insert("realises".into(), Value::Array(completed));
+    ctx.insert("porcs_traites".into(), Value::Array(treated_pigs));
     ctx.insert("today".into(), json!(Local::now().date_naive().format("%Y-%m-%d").to_string()));
     render(&state, "sanitaire.html", Value::Object(ctx))
 }

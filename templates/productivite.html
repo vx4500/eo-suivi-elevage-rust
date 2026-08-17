@@ -42,13 +42,6 @@
   <div class="card"><span class="rust-badge">ELD la plus récente</span><h2>{{ eld_resume.moyenne or '—' }}{% if eld_resume.moyenne is not none %} mm{% endif %}</h2><p>{{ eld_resume.mesures }} truie(s) mesurée(s)</p></div>
   {% for s in stades %}<div class="card"><span class="rust-badge">{{ s.nom }}</span><h2>{{ s.truies }}</h2><p>truie(s)</p></div>{% endfor %}
 </div>
-<h2>ELD par bande active</h2>
-<p>Pour chaque truie, seule sa mesure ELD la plus récente est retenue.</p>
-<div class="rust-scroll"><table><thead><tr><th>Bande</th><th>Truies mesurées</th><th>ELD moyenne</th><th>Dernière mesure</th></tr></thead><tbody>
-{% for e in eld_bandes %}<tr><td><a href="/bande/{{ e.id }}"><b>{{ e.code }}</b></a></td><td>{{ e.truies_mesurees }}</td><td>{{ e.eld_moyenne }} mm</td><td>{{ e.derniere_mesure|date_fr }}</td></tr>
-{% else %}<tr><td colspan="4" class="rust-empty">Aucune mesure ELD disponible pour les bandes actives</td></tr>{% endfor %}
-</tbody></table></div>
-
 {% else %}
 <h2>Performances par rang de portée</h2>
 <p>Les résultats proviennent de l’historique GTTT importé et respectent la période sélectionnée quand la bande est identifiable.</p>

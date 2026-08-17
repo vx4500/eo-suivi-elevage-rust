@@ -2,7 +2,7 @@
 <h1>Bandes</h1>
 {% if session.peut_modifier %}<form class="card rust-actions" method="post" action="/bandes/ajouter">
   <input type="hidden" name="csrf_token" value="{{ session.csrf }}">
-  <label>Code<input name="code" required></label><label>N° officiel<input name="num_officiel"></label>
+  <label>Code<input name="code" required></label><label>N° marquage<input name="num_officiel" placeholder="ex. FR35G6K07"></label>
   <label>Mise-bas prévue<input type="date" name="date_mb"></label><label>Site<input name="site"></label><button>Ajouter</button>
 </form>{% endif %}
 <div class="rust-scroll"><table><thead><tr><th>Bande</th><th>Mise-bas</th><th>Site</th><th>Stade</th><th>Truies</th><th></th></tr></thead><tbody>
@@ -10,4 +10,3 @@
 </tbody></table></div>
 <p><a href="/archives">Voir les bandes archivées</a></p>
 {% endblock %}
-

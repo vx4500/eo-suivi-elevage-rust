@@ -111,3 +111,16 @@ fn la_saisie_rapide_est_accessible_depuis_toutes_les_pages_connectees() {
         assert!(base.contains(marker), "élément de saisie rapide absent: {marker}");
     }
 }
+
+#[test]
+fn la_version_222_couvre_les_demandes_de_suivi() {
+    let base = include_str!("../templates/base.html");
+    let band = include_str!("../templates/bande.html");
+    let sanitary = include_str!("../templates/sanitaire.html");
+    assert!(base.contains("data-type=\"mouvement\""));
+    assert!(base.contains("/transferts/porcs"));
+    assert!(base.contains("rust-sortable"));
+    assert!(band.contains("N° marquage"));
+    assert!(band.contains("Avance / retard"));
+    assert!(sanitary.contains("Porcs traités hors vaccins"));
+}
