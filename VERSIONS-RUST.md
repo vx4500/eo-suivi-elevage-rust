@@ -1,5 +1,24 @@
 # Historique et feuille de route EO-Suivi Rust
 
+## 2.2.0 — parité des 68 routes historiques
+
+- Les 68 chemins Python 1.65 encore absents sont maintenant enregistrés et
+  vérifiés par un test de parité dédié.
+- Actions de reproduction par truie et par bande : chaleur, IA, écho,
+  mise-bas, sevrage, traitement, sortie, portée et reclassement verrat.
+- Saisie rapide, truies en attente, scanner RFID/numéros, QR, registre PDF et
+  export PDF des mises-bas.
+- Inventaires et transferts de bande, mortalité, lavage des salles, causes de
+  perte, protocole généré hors vaccins et conversion des achats en doses.
+- Rattachement économique manuel, multi-bandes, par site et automatique sur
+  des fenêtres de cycle explicites, sans inventer les dates absentes.
+- Écrans dédiés Planning, Stocks, Journal, Paramètres, Mise à jour, Scanner,
+  Communications et détail d’une session de vente.
+- Plans d’alimentation, réglages de conduite, démonstration à manifeste,
+  sauvegarde préalable et validation SQLite avant restauration.
+- Consentements clients, désinscription publique, Brevo courriel/SMS et
+  journal de chaque envoi ; les secrets ne sont jamais réaffichés.
+
 ## 2.1.9 — consolidation et mises à jour réversibles
 
 - Tous les correctifs fonctionnels, SQLite, imports, sécurité et portabilité de

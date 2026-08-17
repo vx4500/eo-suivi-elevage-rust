@@ -33,7 +33,7 @@ async fn schema_complet_et_ecritures_compatibles() -> anyhow::Result<()> {
     )
     .fetch_one(&pool)
     .await?;
-    assert_eq!(tables, 54);
+    assert_eq!(tables, 55);
     let objectives: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM objectif")
         .fetch_one(&pool)
         .await?;

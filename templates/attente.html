@@ -1,0 +1,4 @@
+{% extends "base.html" %}{% block title %}Truies en attente · EO-Suivi{% endblock %}{% block content %}
+<h1>Truies en attente d’affectation</h1><p>Truies actives qui ne sont rattachées à aucune bande active. Aucune date n’est inventée lorsqu’un événement est absent.</p>
+<div class="rust-scroll"><table><tr><th>N° travail</th><th>N° national</th><th>RFID</th><th>Race</th><th>Rang</th><th>Dernier événement</th><th>Date</th></tr>{% for t in truies %}<tr><td><a href="/truie/{{ t.id }}"><b>{{ t.num_travail }}</b></a></td><td>{{ t.num_national or '—' }}</td><td>{{ t.rfid or '—' }}</td><td>{{ t.race or '—' }}</td><td>{{ t.rang }}</td><td>{{ t.dernier_evenement or 'Aucun' }}</td><td>{% if t.derniere_date %}{{ t.derniere_date|date_fr }}{% else %}Date inconnue{% endif %}</td></tr>{% else %}<tr><td colspan="7" class="rust-empty">Aucune truie en attente</td></tr>{% endfor %}</table></div>
+{% endblock %}

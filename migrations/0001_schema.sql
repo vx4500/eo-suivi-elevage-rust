@@ -709,6 +709,15 @@ CREATE TABLE IF NOT EXISTS inventairecase (
 
 CREATE INDEX IF NOT EXISTS ix_inventairecase_case_date ON inventairecase(case_id,date);
 
+-- Les données de démonstration sont supprimées à partir de ce manifeste uniquement.
+-- Aucune ligne d'élevage réelle n'est reconnue ou supprimée par son nom.
+CREATE TABLE IF NOT EXISTS demoobjet (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    table_name TEXT NOT NULL,
+    row_id INTEGER NOT NULL,
+    UNIQUE(table_name,row_id)
+);
+
 WITH defaults(cle,libelle,valeur,sens,decimales,ordre) AS (VALUES
 ('cs_truies_saillies','Truies saillies',NULL,'haut',0,1),
 ('cs_pleines','Pleines à l''écho',NULL,'haut',0,2),

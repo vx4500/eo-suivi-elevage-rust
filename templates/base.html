@@ -22,7 +22,7 @@
 <nav class="rust-nav">
   <a href="/">Accueil</a>
   <div class="rust-menu"><span>Reproduction ▾</span><div class="rust-sub">
-    <a href="/bandes">Bandes</a><a href="/truies">Truies</a><a href="/inseminations">Inséminations</a><a href="/calendrier.ics">Calendrier ICS</a>
+    <a href="/bandes">Bandes</a><a href="/truies">Truies</a><a href="/attente">En attente</a><a href="/inseminations">Inséminations</a><a href="/scan">Scanner</a><a href="/calendrier.ics">Calendrier ICS</a>
     <a href="/gttt">GTTT</a><a href="/productivite">Productivité</a><a href="/reformes">Réformes</a><a href="/cochettes">Cochettes</a>
   </div></div>
   <div class="rust-menu"><span>Élevage ▾</span><div class="rust-sub">
@@ -32,13 +32,13 @@
   <div class="rust-menu"><span>Pilotage ▾</span><div class="rust-sub">
     <a href="/economique">Économie</a><a href="/abattoir">Abattoir</a><a href="/ifip">IFIP</a><a href="/cahiers">Cahiers des charges</a>
     <a href="/sanitaire">Sanitaire</a><a href="/pharmacie">Pharmacie</a><a href="/entretien">Entretien</a><a href="/energie">Eau & électricité</a>
-    <a href="/vente-directe">Vente directe</a><a href="/structure">Structure</a><a href="/etat-donnees">État des données</a>
+    <a href="/vente-directe">Vente directe</a><a href="/vente-directe/communications">Communications clients</a><a href="/structure">Structure</a><a href="/etat-donnees">État des données</a>
   </div></div>
   <span class="grow"></span>
   <form class="rust-search" action="/recherche" method="get"><input name="q" placeholder="Rechercher…"><button type="submit">OK</button></form>
   <div class="rust-menu"><span>Aide ▾</span><div class="rust-sub"><a href="/correctifs">Correctifs</a><a href="/apropos">À propos</a><a href="/contact">Diagnostic</a></div></div>
   <span>{{ session.nom }}</span>
-  {% if session.role == 'admin' %}<a href="/utilisateurs">Utilisateurs</a>{% endif %}
+  {% if session.role == 'admin' %}<div class="rust-menu"><span>Administration ▾</span><div class="rust-sub"><a href="/utilisateurs">Utilisateurs</a><a href="/parametres">Paramètres</a><a href="/journal">Journal</a><a href="/maj">Mise à jour</a></div></div>{% endif %}
   <a href="/logout">Déconnexion</a>
 </nav>
 {% endif %}
