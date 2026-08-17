@@ -1,5 +1,22 @@
 # Historique et feuille de route EO-Suivi Rust
 
+## 2.1.7 — GTTT centralisé et objectifs fiables
+
+- Une seule méthode GTTT alimente la page GTTT, la productivité, les fiches
+  de bandes et les repères IFIP.
+- Filtres par période et par bande ; une portée sans date n'est jamais
+  rattachée artificiellement à une campagne.
+- Taux de mort-nés calculé avec les mort-nés sur les nés totaux, sans
+  inclure les momifiés dans le numérateur.
+- Mortalité sous la mère calculée sur les nés vifs, adoptés et retirés
+  avant comparaison avec les sevrés.
+- Sevrés et portées par truie productive/an annualisés sur la durée
+  réellement couverte par les bandes observées.
+- Objectifs techniques modifiables, ajoutables et supprimables, comparés à
+  des résultats pondérés plutôt qu'à une moyenne de moyennes.
+- Objectifs et repères IFIP initiaux ajoutés sans écraser les réglages
+  existants.
+
 ## 2.1.6 — conduite, effectifs et productivité
 
 - Étapes des bandes et calendrier ICS calculés depuis les réglages de conduite

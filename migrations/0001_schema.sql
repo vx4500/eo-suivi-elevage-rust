@@ -707,6 +707,41 @@ CREATE TABLE IF NOT EXISTS inventairecase (
 
 CREATE INDEX IF NOT EXISTS ix_inventairecase_case_date ON inventairecase(case_id,date);
 
+WITH defaults(cle,libelle,valeur,sens,decimales,ordre) AS (VALUES
+('cs_truies_saillies','Truies saillies',NULL,'haut',0,1),
+('cs_pleines','Pleines à l''écho',NULL,'haut',0,2),
+('cs_truies_mb','Truies mises-bas',NULL,'haut',0,3),
+('cs_nt_portee','NT / portée',18,'haut',1,4),
+('cs_nv_portee','NV / portée',17,'haut',2,5),
+('cs_mn_portee','Mort-nés / portée',1,'bas',2,6),
+('cs_sevres_portee','Sevrés / portée',14,'haut',2,7),
+('cs_tx_pertes_nv','Taux pertes / nés vifs (%)',15,'bas',1,8),
+('cs_total_sevres','Total sevrés',300,'haut',0,9),
+('cs_poids_sevrage','Poids au sevrage (kg)',NULL,'haut',1,10),
+('cs_gmq_ps','GMQ post-sevrage (g/j)',NULL,'haut',0,11),
+('cs_gmq_engr','GMQ engraissement (g/j)',NULL,'haut',0,12),
+('cs_gmq_nv','GMQ naissance-vente (g/j)',NULL,'haut',0,13),
+('sevres_truie_an','Sevrés / truie productive / an',33.5,'haut',1,14),
+('portees_truie_an','Portées / truie productive / an',2.35,'haut',2,15))
+INSERT INTO objectif(cle,libelle,valeur,sens,decimales,ordre,actif)
+SELECT d.cle,d.libelle,d.valeur,d.sens,d.decimales,d.ordre,1 FROM defaults d
+WHERE NOT EXISTS(SELECT 1 FROM objectif o WHERE o.cle=d.cle);
+
+WITH defaults(cle,libelle,moyenne,tiers_sup,sens,decimales,annee,ordre) AS (VALUES
+('sevres_truie_an','Sevrés / truie productive / an',33.5,35.8,'haut',1,'GTTT 2024',1),
+('nes_vifs','Nés vivants / portée',15.8,NULL,'haut',1,'GTTT 2024',2),
+('sevres_portee','Sevrés / portée',13.4,NULL,'haut',1,'GTTT 2024',3),
+('tx_pertes_allait','Taux pertes / nés vivants (%)',14.8,NULL,'bas',1,'GTTT 2024',4),
+('imb','Intervalle mise-bas (j)',146.5,NULL,'bas',1,'GTTT 2024',5),
+('age_sevrage','Âge au sevrage (j)',23.5,NULL,'bas',1,'GTTT 2024',6),
+('tx_fecondation','Fécondation 1re saillie (%)',91.8,NULL,'haut',1,'GTTT 2024',7),
+('tx_renouvellement','Renouvellement (%)',45,NULL,'bas',0,'GTTT 2024',8),
+('porcs_truie_an','Porcs produits / truie présente / an',25.3,NULL,'haut',1,'GTE 2023',9),
+('tx_pertes_engr','Pertes sevrage → vente (%)',6.4,NULL,'bas',1,'GTE 2023',10))
+INSERT INTO referenceifip(cle,libelle,moyenne,tiers_sup,sens,decimales,annee,ordre)
+SELECT d.cle,d.libelle,d.moyenne,d.tiers_sup,d.sens,d.decimales,d.annee,d.ordre FROM defaults d
+WHERE NOT EXISTS(SELECT 1 FROM referenceifip r WHERE r.cle=d.cle);
+
 INSERT OR IGNORE INTO reglage(cle,valeur,libelle) VALUES
 ('sevrage',28,'Sevrage'),
 ('aliment_2e_age',42,'Aliment 2e âge'),

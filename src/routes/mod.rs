@@ -79,6 +79,9 @@ pub fn router(state: AppState) -> Router {
         .route("/recherche", get(recherche))
         .route("/gttt", get(gttt))
         .route("/productivite", get(productivite))
+        .route("/objectif/maj", post(objectifs_maj))
+        .route("/objectif/ajouter", post(objectif_ajouter))
+        .route("/objectif/{id}/supprimer", post(objectif_supprimer))
         .route("/reformes", get(reformes))
         .route("/reformes/seuils", post(reformes_seuils))
         .route("/reformes/criteres", post(reformes_criteres))
@@ -729,12 +732,11 @@ async fn bande_detail(
         .bind(id)
         .fetch_all(&state.pool)
         .await?;
-    let nv: i64 = events.iter().map(|e| e.nes_vifs.unwrap_or(0)).sum();
-    let sevres: i64 = events.iter().map(|e| e.nb_sevres.unwrap_or(0)).sum();
-    let pertes = if nv > 0 {
-        (((nv - sevres).max(0) as f64 / nv as f64) * 100.0 * 10.0).round() / 10.0
+    let litters = load_gttt_litters(&state.pool, Some(&band.code)).await?;
+    let technical_summary = if litters.is_empty() {
+        gttt_band_fallback(&band, &events)
     } else {
-        0.0
+        gttt_summary(&litters)
     };
     let schedule = load_band_schedule(&state.pool).await?;
     let dates = key_dates(band.date_mb.as_deref(), schedule);
@@ -743,7 +745,19 @@ async fn bande_detail(
     ctx.insert("truies".into(), serde_json::to_value(&sows).unwrap_or_default());
     ctx.insert("evenements".into(), serde_json::to_value(&events).unwrap_or_default());
     ctx.insert("dates".into(), Value::Array(dates));
-    ctx.insert("resume".into(), json!({"truies": sows.len(), "nv": nv, "sevres": sevres, "pertes": pertes}));
+    ctx.insert(
+        "resume".into(),
+        json!({
+            "truies": sows.len(),
+            "portees": technical_summary.portees,
+            "nv": technical_summary.total_nes_vifs,
+            "sevres": technical_summary.total_sevres,
+            "pertes": technical_summary.mortalite_allaitement,
+            "nv_portee": technical_summary.nes_vifs_moy,
+            "sevres_portee": technical_summary.sevres_moy,
+            "mortnes": technical_summary.taux_mortnes,
+        }),
+    );
     render(&state, "bande.html", Value::Object(ctx))
 }
 
@@ -1058,8 +1072,8 @@ async fn truie_cochette(
     Ok(Redirect::to(&format!("/truie/{id}")).into_response())
 }
 
-const EVENT_SELECT_BY_SOW: &str = "SELECT id,type,date,truie_id,bande_id,nes_totaux,nes_vifs,mort_nes,momifies,nb_sevres,poids_moyen,produit,motif,resultat,note FROM evenement WHERE truie_id=? ORDER BY date DESC,id DESC";
-const EVENT_SELECT_BY_BAND: &str = "SELECT id,type,date,truie_id,bande_id,nes_totaux,nes_vifs,mort_nes,momifies,nb_sevres,poids_moyen,produit,motif,resultat,note FROM evenement WHERE bande_id=? ORDER BY date DESC,id DESC";
+const EVENT_SELECT_BY_SOW: &str = "SELECT id,type,date,truie_id,bande_id,nes_totaux,nes_vifs,mort_nes,momifies,nb_sevres,poids_moyen,adoptes,retires,produit,motif,resultat,note FROM evenement WHERE truie_id=? ORDER BY date DESC,id DESC";
+const EVENT_SELECT_BY_BAND: &str = "SELECT id,type,date,truie_id,bande_id,nes_totaux,nes_vifs,mort_nes,momifies,nb_sevres,poids_moyen,adoptes,retires,produit,motif,resultat,note FROM evenement WHERE bande_id=? ORDER BY date DESC,id DESC";
 
 async fn evenement_ajouter(
     State(state): State<AppState>, Extension(session): Extension<SessionData>, Form(form): Form<HashMap<String,String>>,
@@ -1631,34 +1645,82 @@ async fn recherche(
 async fn gttt(
     State(state): State<AppState>,
     Extension(session): Extension<SessionData>,
+    Query(query): Query<HashMap<String, String>>,
 ) -> AppResult<Html<String>> {
-    let litters = load_gttt_litters(&state.pool, None).await?;
+    let months = query
+        .get("mois")
+        .and_then(|value| value.parse::<i64>().ok())
+        .filter(|value| matches!(value, 6 | 12 | 24 | 36 | 60 | 120))
+        .unwrap_or(24);
+    let selected_band = query
+        .get("bande")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let all_litters = load_gttt_litters(&state.pool, None).await?;
+    let undated = all_litters
+        .iter()
+        .filter(|litter| litter.farrowing_date.is_none())
+        .count();
+    let period_start = Local::now().date_naive()
+        - Duration::days((months as f64 * 30.44).round() as i64);
+    let period_litters = all_litters
+        .into_iter()
+        .filter(|litter| litter.farrowing_date.is_some_and(|date| date >= period_start))
+        .collect::<Vec<_>>();
+    let mut band_codes = period_litters
+        .iter()
+        .filter_map(|litter| litter.band.clone())
+        .collect::<Vec<_>>();
+    band_codes.sort();
+    band_codes.dedup();
+    let litters = period_litters
+        .iter()
+        .filter(|litter| {
+            selected_band
+                .as_deref()
+                .is_none_or(|band| litter.band.as_deref() == Some(band))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
     let summary = gttt_summary(&litters);
     let rank_rows = gttt_rank_rows(&litters);
-    let band_codes = sqlx::query_scalar::<_, String>(
-        "SELECT DISTINCT bande FROM porteerang WHERE bande IS NOT NULL AND trim(bande)<>'' ORDER BY bande",
-    )
-    .fetch_all(&state.pool)
-    .await?;
     let mut band_rows = Vec::with_capacity(band_codes.len());
-    for code in band_codes {
-        let rows = load_gttt_litters(&state.pool, Some(&code)).await?;
-        let mut value = gttt_summary(&rows);
-        value
-            .as_object_mut()
-            .expect("résumé GTTT objet")
-            .insert("bande".into(), json!(code));
-        band_rows.push(value);
+    for code in &band_codes {
+        let rows = period_litters
+            .iter()
+            .filter(|litter| litter.band.as_deref() == Some(code.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut value = serde_json::to_value(gttt_summary(&rows)).unwrap_or_default();
+        value.as_object_mut().expect("résumé GTTT objet").insert(
+            "bande".into(),
+            json!(code),
+        );
+        band_rows.push(value)
     }
     let mut ctx = context(&session);
-    ctx.insert("synthese".into(), summary);
+    ctx.insert(
+        "synthese".into(),
+        serde_json::to_value(summary).unwrap_or_default(),
+    );
     ctx.insert("rangs".into(), Value::Array(rank_rows));
     ctx.insert("bandes".into(), Value::Array(band_rows));
+    ctx.insert("codes_bandes".into(), json!(band_codes));
+    ctx.insert("bande_selectionnee".into(), json!(selected_band));
+    ctx.insert("mois".into(), json!(months));
+    ctx.insert("portees_sans_date".into(), json!(undated));
+    ctx.insert(
+        "periode_debut".into(),
+        json!(period_start.format("%Y-%m-%d").to_string()),
+    );
     render(&state, "gttt.html", Value::Object(ctx))
 }
 
 #[derive(Clone, Debug)]
 struct GtttLitter {
+    sow_number: String,
+    band: Option<String>,
+    farrowing_date: Option<NaiveDate>,
     rank: i64,
     gestation: Option<f64>,
     live_born: Option<f64>,
@@ -1669,15 +1731,35 @@ struct GtttLitter {
     removed: Option<f64>,
 }
 
+#[derive(Clone, Debug, Default, serde::Serialize)]
+struct GtttSummary {
+    portees: usize,
+    nes_totaux_moy: Option<f64>,
+    nes_vifs_moy: Option<f64>,
+    sevres_moy: Option<f64>,
+    taux_mortnes: Option<f64>,
+    mortalite_allaitement: Option<f64>,
+    total_nes_vifs: i64,
+    total_sevres: i64,
+    gestation_moy: Option<f64>,
+    truies_productives: usize,
+    periode_jours: Option<i64>,
+    portees_truie_an: Option<f64>,
+    sevres_truie_an: Option<f64>,
+}
+
 async fn load_gttt_litters(pool: &SqlitePool, band: Option<&str>) -> AppResult<Vec<GtttLitter>> {
     let sql = if band.is_some() {
-        "SELECT rang,duree_gest,nv,mn,tx_mn_nt,sev,ad,re FROM porteerang WHERE bande=? ORDER BY rang,id"
+        "SELECT p.num_travail,p.bande,(SELECT b.date_mb FROM bande b WHERE b.code=p.bande ORDER BY b.active DESC,b.id DESC LIMIT 1),p.rang,p.duree_gest,p.nv,p.mn,p.tx_mn_nt,p.sev,p.ad,p.re FROM porteerang p WHERE p.bande=? ORDER BY p.rang,p.id"
     } else {
-        "SELECT rang,duree_gest,nv,mn,tx_mn_nt,sev,ad,re FROM porteerang ORDER BY rang,id"
+        "SELECT p.num_travail,p.bande,(SELECT b.date_mb FROM bande b WHERE b.code=p.bande ORDER BY b.active DESC,b.id DESC LIMIT 1),p.rang,p.duree_gest,p.nv,p.mn,p.tx_mn_nt,p.sev,p.ad,p.re FROM porteerang p ORDER BY p.rang,p.id"
     };
     let mut query = sqlx::query_as::<
         _,
         (
+            String,
+            Option<String>,
+            Option<String>,
             i64,
             Option<f64>,
             Option<f64>,
@@ -1696,14 +1778,19 @@ async fn load_gttt_litters(pool: &SqlitePool, band: Option<&str>) -> AppResult<V
         .await?
         .into_iter()
         .map(|row| GtttLitter {
-            rank: row.0,
-            gestation: row.1,
-            live_born: row.2,
-            stillborn: row.3,
-            stillborn_rate: row.4,
-            weaned: row.5,
-            adopted: row.6,
-            removed: row.7,
+            sow_number: row.0,
+            band: row.1,
+            farrowing_date: row.2.as_deref().and_then(|value| {
+                NaiveDate::parse_from_str(&value[..value.len().min(10)], "%Y-%m-%d").ok()
+            }),
+            rank: row.3,
+            gestation: row.4,
+            live_born: row.5,
+            stillborn: row.6,
+            stillborn_rate: row.7,
+            weaned: row.8,
+            adopted: row.9,
+            removed: row.10,
         })
         .collect())
 }
@@ -1718,7 +1805,7 @@ fn gttt_real_total(litter: &GtttLitter) -> f64 {
     }
 }
 
-fn gttt_summary(litters: &[GtttLitter]) -> Value {
+fn gttt_summary(litters: &[GtttLitter]) -> GtttSummary {
     let valid: Vec<&GtttLitter> = litters
         .iter()
         .filter(|litter| litter.live_born.is_some())
@@ -1751,16 +1838,171 @@ fn gttt_summary(litters: &[GtttLitter]) -> Value {
                 - litter.weaned.unwrap_or(0.0)
         })
         .sum::<f64>();
-    json!({
-        "portees": valid.len(),
-        "nes_totaux_moy": mean(valid.iter().map(|litter| gttt_real_total(litter)).collect::<Vec<_>>()).map(|value| (value * 100.0).round() / 100.0),
-        "nes_vifs_moy": mean(valid.iter().filter_map(|litter| litter.live_born).collect::<Vec<_>>()).map(|value| (value * 100.0).round() / 100.0),
-        "sevres_moy": mean(litters.iter().filter_map(|litter| litter.weaned).collect::<Vec<_>>()).map(|value| (value * 100.0).round() / 100.0),
-        "taux_mortnes": (total_real > 0.0).then(|| (total_stillborn / total_real * 1000.0).round() / 10.0),
-        "mortalite_allaitement": (available > 0.0).then(|| ((losses.max(0.0) / available) * 1000.0).round() / 10.0),
-        "total_sevres": litters.iter().map(|litter| litter.weaned.unwrap_or(0.0)).sum::<f64>().round() as i64,
-        "gestation_moy": mean(litters.iter().filter_map(|litter| litter.gestation).collect::<Vec<_>>()).map(|value| (value * 10.0).round() / 10.0),
-    })
+    let total_weaned = litters
+        .iter()
+        .map(|litter| litter.weaned.unwrap_or(0.0))
+        .sum::<f64>();
+    let productive_sows = valid
+        .iter()
+        .map(|litter| litter.sow_number.as_str())
+        .filter(|number| !number.is_empty())
+        .collect::<HashSet<_>>();
+    let mut dates = valid
+        .iter()
+        .filter_map(|litter| litter.farrowing_date)
+        .collect::<Vec<_>>();
+    dates.sort_unstable();
+    dates.dedup();
+    let mut intervals = dates
+        .windows(2)
+        .map(|pair| (pair[1] - pair[0]).num_days())
+        .filter(|days| *days > 0)
+        .collect::<Vec<_>>();
+    intervals.sort_unstable();
+    let typical_interval = intervals.get(intervals.len() / 2).copied();
+    let observation_days = match (dates.first(), dates.last(), typical_interval) {
+        (Some(first), Some(last), Some(interval)) => Some((*last - *first).num_days() + interval),
+        _ => None,
+    };
+    let annual_factor = observation_days
+        .filter(|days| *days > 0)
+        .map(|days| 365.0 / days as f64);
+    let sow_count = productive_sows.len();
+    GtttSummary {
+        portees: valid.len(),
+        nes_totaux_moy: mean(
+            valid
+                .iter()
+                .map(|litter| gttt_real_total(litter))
+                .collect::<Vec<_>>(),
+        )
+        .map(|value| (value * 100.0).round() / 100.0),
+        nes_vifs_moy: mean(
+            valid
+                .iter()
+                .filter_map(|litter| litter.live_born)
+                .collect::<Vec<_>>(),
+        )
+        .map(|value| (value * 100.0).round() / 100.0),
+        sevres_moy: mean(
+            litters
+                .iter()
+                .filter_map(|litter| litter.weaned)
+                .collect::<Vec<_>>(),
+        )
+        .map(|value| (value * 100.0).round() / 100.0),
+        taux_mortnes: (total_real > 0.0)
+            .then(|| (total_stillborn / total_real * 1000.0).round() / 10.0),
+        mortalite_allaitement: (available > 0.0)
+            .then(|| ((losses.max(0.0) / available) * 1000.0).round() / 10.0),
+        total_nes_vifs: valid
+            .iter()
+            .map(|litter| litter.live_born.unwrap_or(0.0))
+            .sum::<f64>()
+            .round() as i64,
+        total_sevres: total_weaned.round() as i64,
+        gestation_moy: mean(
+            litters
+                .iter()
+                .filter_map(|litter| litter.gestation)
+                .collect::<Vec<_>>(),
+        )
+        .map(|value| (value * 10.0).round() / 10.0),
+        truies_productives: sow_count,
+        periode_jours: observation_days,
+        portees_truie_an: if sow_count > 0 {
+            annual_factor
+                .map(|factor| valid.len() as f64 / sow_count as f64 * factor)
+                .map(|value| (value * 100.0).round() / 100.0)
+        } else {
+            None
+        },
+        sevres_truie_an: if sow_count > 0 {
+            annual_factor
+                .map(|factor| total_weaned / sow_count as f64 * factor)
+                .map(|value| (value * 10.0).round() / 10.0)
+        } else {
+            None
+        },
+    }
+}
+
+fn gttt_band_fallback(band: &Bande, events: &[Evenement]) -> GtttSummary {
+    if band.cs_nv_portee.is_some()
+        || band.cs_sevres_portee.is_some()
+        || band.cs_truies_mb.is_some()
+    {
+        let litters = band.cs_truies_mb.unwrap_or_default().max(0) as usize;
+        let total_weaned = band.cs_total_sevres.unwrap_or_else(|| {
+            (band.cs_sevres_portee.unwrap_or(0.0) * litters as f64).round() as i64
+        });
+        return GtttSummary {
+            portees: litters,
+            nes_totaux_moy: band.cs_nt_portee,
+            nes_vifs_moy: band.cs_nv_portee,
+            sevres_moy: band.cs_sevres_portee,
+            taux_mortnes: match (band.cs_mn_portee, band.cs_nt_portee) {
+                (Some(stillborn), Some(total)) if total > 0.0 => {
+                    Some((stillborn / total * 1000.0).round() / 10.0)
+                }
+                _ => None,
+            },
+            mortalite_allaitement: band.cs_tx_pertes_nv,
+            total_nes_vifs: (band.cs_nv_portee.unwrap_or_default() * litters as f64).round()
+                as i64,
+            total_sevres: total_weaned,
+            ..GtttSummary::default()
+        };
+    }
+    let births = events
+        .iter()
+        .filter(|event| event.r#type == "mise_bas")
+        .collect::<Vec<_>>();
+    let total_live = births
+        .iter()
+        .map(|event| event.nes_vifs.unwrap_or_default())
+        .sum::<i64>();
+    let total_real = births
+        .iter()
+        .map(|event| event.nes_totaux.unwrap_or_default())
+        .sum::<i64>();
+    let total_stillborn = births
+        .iter()
+        .map(|event| event.mort_nes.unwrap_or_default())
+        .sum::<i64>();
+    let total_weaned = events
+        .iter()
+        .map(|event| event.nb_sevres.unwrap_or_default())
+        .sum::<i64>();
+    let adopted = events
+        .iter()
+        .map(|event| event.adoptes.unwrap_or_default())
+        .sum::<i64>();
+    let removed = events
+        .iter()
+        .map(|event| event.retires.unwrap_or_default())
+        .sum::<i64>();
+    let available = total_live + adopted - removed;
+    let mean_i64 = |values: Vec<i64>| {
+        (!values.is_empty())
+            .then(|| values.iter().sum::<i64>() as f64 / values.len() as f64)
+            .map(|value| (value * 100.0).round() / 100.0)
+    };
+    GtttSummary {
+        portees: births.len(),
+        nes_totaux_moy: mean_i64(births.iter().filter_map(|event| event.nes_totaux).collect()),
+        nes_vifs_moy: mean_i64(births.iter().filter_map(|event| event.nes_vifs).collect()),
+        sevres_moy: mean_i64(events.iter().filter_map(|event| event.nb_sevres).collect()),
+        taux_mortnes: (total_real > 0)
+            .then(|| (total_stillborn as f64 / total_real as f64 * 1000.0).round() / 10.0),
+        mortalite_allaitement: (available > 0).then(|| {
+            ((available - total_weaned).max(0) as f64 / available as f64 * 1000.0).round()
+                / 10.0
+        }),
+        total_nes_vifs: total_live,
+        total_sevres: total_weaned,
+        ..GtttSummary::default()
+    }
 }
 
 fn gttt_rank_rows(litters: &[GtttLitter]) -> Vec<Value> {
@@ -1775,7 +2017,7 @@ fn gttt_rank_rows(litters: &[GtttLitter]) -> Vec<Value> {
                 .filter(|litter| litter.rank == rank)
                 .cloned()
                 .collect::<Vec<_>>();
-            let mut value = gttt_summary(&selected);
+            let mut value = serde_json::to_value(gttt_summary(&selected)).unwrap_or_default();
             value
                 .as_object_mut()
                 .expect("résumé GTTT objet")
@@ -1783,6 +2025,241 @@ fn gttt_rank_rows(litters: &[GtttLitter]) -> Vec<Value> {
             value
         })
         .collect()
+}
+
+const OBJECTIVE_INDICATORS: [(&str, &str, i64); 17] = [
+    ("cs_truies_saillies", "Truies saillies", 0),
+    ("cs_pleines", "Pleines à l'écho", 0),
+    ("cs_truies_mb", "Truies mises-bas", 0),
+    ("cs_nt_portee", "NT / portée", 1),
+    ("cs_nv_portee", "NV / portée", 2),
+    ("cs_mn_portee", "Mort-nés / portée", 2),
+    ("cs_sevres_portee", "Sevrés / portée", 2),
+    ("cs_tx_pertes_nv", "Taux pertes / nés vifs (%)", 1),
+    ("cs_total_sevres", "Total sevrés", 0),
+    ("cs_poids_sevrage", "Poids au sevrage (kg)", 1),
+    ("cs_gmq_ps", "GMQ post-sevrage (g/j)", 0),
+    ("cs_gmq_engr", "GMQ engraissement (g/j)", 0),
+    ("cs_gmq_nv", "GMQ naissance-vente (g/j)", 0),
+    ("cs_adoptes", "Adoptés (total bandes)", 0),
+    ("cs_retires", "Retirés (total bandes)", 0),
+    ("sevres_truie_an", "Sevrés / truie productive / an", 1),
+    ("portees_truie_an", "Portées / truie productive / an", 2),
+];
+
+fn objective_definition(key: &str) -> Option<(&'static str, i64)> {
+    OBJECTIVE_INDICATORS
+        .iter()
+        .find(|(candidate, _, _)| *candidate == key)
+        .map(|(_, label, decimals)| (*label, *decimals))
+}
+
+fn objective_sql_expression(key: &str) -> Option<&'static str> {
+    match key {
+        "cs_truies_saillies" => Some("SUM(cs_truies_saillies)"),
+        "cs_pleines" => Some("SUM(cs_pleines)"),
+        "cs_truies_mb" => Some("SUM(cs_truies_mb)"),
+        "cs_total_sevres" => Some("SUM(cs_total_sevres)"),
+        "cs_adoptes" => Some("SUM(cs_adoptes)"),
+        "cs_retires" => Some("SUM(cs_retires)"),
+        "cs_nt_portee" => Some("SUM(cs_nt_portee*CASE WHEN cs_truies_mb>0 THEN cs_truies_mb ELSE 1 END)/NULLIF(SUM(CASE WHEN cs_nt_portee IS NOT NULL THEN CASE WHEN cs_truies_mb>0 THEN cs_truies_mb ELSE 1 END ELSE 0 END),0)"),
+        "cs_nv_portee" => Some("SUM(cs_nv_portee*CASE WHEN cs_truies_mb>0 THEN cs_truies_mb ELSE 1 END)/NULLIF(SUM(CASE WHEN cs_nv_portee IS NOT NULL THEN CASE WHEN cs_truies_mb>0 THEN cs_truies_mb ELSE 1 END ELSE 0 END),0)"),
+        "cs_mn_portee" => Some("SUM(cs_mn_portee*CASE WHEN cs_truies_mb>0 THEN cs_truies_mb ELSE 1 END)/NULLIF(SUM(CASE WHEN cs_mn_portee IS NOT NULL THEN CASE WHEN cs_truies_mb>0 THEN cs_truies_mb ELSE 1 END ELSE 0 END),0)"),
+        "cs_sevres_portee" => Some("SUM(cs_sevres_portee*CASE WHEN cs_truies_mb>0 THEN cs_truies_mb ELSE 1 END)/NULLIF(SUM(CASE WHEN cs_sevres_portee IS NOT NULL THEN CASE WHEN cs_truies_mb>0 THEN cs_truies_mb ELSE 1 END ELSE 0 END),0)"),
+        "cs_tx_pertes_nv" => Some("SUM(cs_tx_pertes_nv*COALESCE(cs_nv_portee,1)*CASE WHEN cs_truies_mb>0 THEN cs_truies_mb ELSE 1 END)/NULLIF(SUM(CASE WHEN cs_tx_pertes_nv IS NOT NULL THEN COALESCE(cs_nv_portee,1)*CASE WHEN cs_truies_mb>0 THEN cs_truies_mb ELSE 1 END ELSE 0 END),0)"),
+        "cs_poids_sevrage" => Some("SUM(cs_poids_sevrage*CASE WHEN cs_total_sevres>0 THEN cs_total_sevres ELSE 1 END)/NULLIF(SUM(CASE WHEN cs_poids_sevrage IS NOT NULL THEN CASE WHEN cs_total_sevres>0 THEN cs_total_sevres ELSE 1 END ELSE 0 END),0)"),
+        "cs_gmq_ps" => Some("AVG(cs_gmq_ps)"),
+        "cs_gmq_engr" => Some("AVG(cs_gmq_engr)"),
+        "cs_gmq_nv" => Some("AVG(cs_gmq_nv)"),
+        _ => None,
+    }
+}
+
+async fn productivite_objectives(
+    pool: &SqlitePool,
+    cutoff: &str,
+    gttt: &GtttSummary,
+) -> AppResult<(Vec<Value>, Vec<Value>)> {
+    let mut objectives = generic_rows(
+        pool,
+        "SELECT id,cle,libelle,valeur,sens,decimales,ordre FROM objectif WHERE actif=1 ORDER BY ordre,id",
+    )
+    .await?;
+    let mut used = HashSet::new();
+    for objective in &mut objectives {
+        let object = objective.as_object_mut().expect("objectif objet");
+        let key = object
+            .get("cle")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        used.insert(key.clone());
+        let actual = match key.as_str() {
+            "sevres_truie_an" => gttt.sevres_truie_an,
+            "portees_truie_an" => gttt.portees_truie_an,
+            _ => {
+                if let Some(expression) = objective_sql_expression(&key) {
+                    let sql = format!(
+                        "SELECT CAST(({expression}) AS REAL) FROM bande WHERE date_mb>=date('now',?)"
+                    );
+                    sqlx::query_scalar::<_, Option<f64>>(&sql)
+                        .bind(cutoff)
+                        .fetch_one(pool)
+                        .await?
+                } else {
+                    None
+                }
+            }
+        };
+        let target = object.get("valeur").and_then(|value| {
+            value
+                .as_f64()
+                .or_else(|| value.as_i64().map(|number| number as f64))
+                .or_else(|| value.as_u64().map(|number| number as f64))
+        });
+        let sense = object
+            .get("sens")
+            .and_then(Value::as_str)
+            .unwrap_or("haut");
+        let reached = match (actual, target) {
+            (Some(actual), Some(target)) if sense == "bas" => Some(actual <= target),
+            (Some(actual), Some(target)) => Some(actual >= target),
+            _ => None,
+        };
+        object.insert("valeur_elevage".into(), json!(actual));
+        object.insert("atteint".into(), json!(reached));
+        object.insert(
+            "ecart".into(),
+            json!(actual.zip(target).map(|(actual, target)| {
+                ((actual - target) * 100.0).round() / 100.0
+            })),
+        );
+    }
+    let available = OBJECTIVE_INDICATORS
+        .iter()
+        .filter(|(key, _, _)| !used.contains(*key))
+        .map(|(key, label, decimals)| {
+            json!({"cle":key,"libelle":label,"decimales":decimals})
+        })
+        .collect::<Vec<_>>();
+    Ok((objectives, available))
+}
+
+async fn objectifs_maj(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    verify_csrf(&session, &form)?;
+    let ids = sqlx::query_scalar::<_, i64>("SELECT id FROM objectif")
+        .fetch_all(&state.pool)
+        .await?;
+    let mut tx = state.pool.begin().await?;
+    for id in ids {
+        let key = format!("obj_{id}");
+        if let Some(raw) = form.get(&key) {
+            let value = if raw.trim().is_empty() {
+                None
+            } else {
+                parse_french_number(raw).filter(|value| value.is_finite())
+            };
+            sqlx::query("UPDATE objectif SET valeur=? WHERE id=?")
+                .bind(value)
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+        }
+    }
+    tx.commit().await?;
+    db::journal(
+        &state.pool,
+        &session.nom,
+        "modifier",
+        "objectifs",
+        "Objectifs de productivité",
+        "/objectif/maj",
+    )
+    .await;
+    Ok(Redirect::to("/productivite").into_response())
+}
+
+async fn objectif_ajouter(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    verify_csrf(&session, &form)?;
+    let key = form_text(&form, "cle")
+        .ok_or_else(|| AppError::Invalid("Indicateur obligatoire".into()))?;
+    let Some((default_label, default_decimals)) = objective_definition(&key) else {
+        return Err(AppError::Invalid("Indicateur inconnu".into()));
+    };
+    let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM objectif WHERE cle=? AND actif=1")
+        .bind(&key)
+        .fetch_one(&state.pool)
+        .await?;
+    if exists > 0 {
+        return Err(AppError::Invalid("Cet objectif existe déjà".into()));
+    }
+    let value = form.get("valeur").and_then(|raw| {
+        if raw.trim().is_empty() {
+            None
+        } else {
+            parse_french_number(raw).filter(|value| value.is_finite())
+        }
+    });
+    let sense = if form.get("sens").map(String::as_str) == Some("bas") {
+        "bas"
+    } else {
+        "haut"
+    };
+    let decimals = form_i64(&form, "decimales")
+        .unwrap_or(default_decimals)
+        .clamp(0, 3);
+    sqlx::query("INSERT INTO objectif(cle,libelle,valeur,sens,decimales,ordre,actif) VALUES(?,?,?,?,?,(SELECT COALESCE(MAX(ordre),0)+1 FROM objectif),1)")
+        .bind(&key)
+        .bind(form_text(&form,"libelle").unwrap_or_else(||default_label.to_string()))
+        .bind(value)
+        .bind(sense)
+        .bind(decimals)
+        .execute(&state.pool)
+        .await?;
+    db::journal(
+        &state.pool,
+        &session.nom,
+        "créer",
+        "objectif",
+        default_label,
+        "/objectif/ajouter",
+    )
+    .await;
+    Ok(Redirect::to("/productivite").into_response())
+}
+
+async fn objectif_supprimer(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Path(id): Path<i64>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    verify_csrf(&session, &form)?;
+    sqlx::query("DELETE FROM objectif WHERE id=?")
+        .bind(id)
+        .execute(&state.pool)
+        .await?;
+    db::journal(
+        &state.pool,
+        &session.nom,
+        "supprimer",
+        "objectif",
+        &id.to_string(),
+        "/objectif/supprimer",
+    )
+    .await;
+    Ok(Redirect::to("/productivite").into_response())
 }
 
 async fn productivite(
@@ -1801,7 +2278,17 @@ async fn productivite(
         .filter(|value| matches!(*value, "bandes" | "cheptel" | "rangs"))
         .unwrap_or("bandes");
     let cutoff = format!("-{months} months");
-    let rows = sqlx::query("SELECT b.id,b.code,b.date_mb,b.site,b.cs_truies_saillies,b.cs_pleines,b.cs_truies_mb,b.cs_nv_portee,b.cs_sevres_portee,b.cs_total_sevres,b.cs_tx_pertes_nv,b.cs_poids_sevrage,b.cs_gmq_ps,b.cs_gmq_engr,(SELECT MIN(e.date) FROM evenement e WHERE e.bande_id=b.id AND e.type='ia') AS premiere_ia_reelle,(SELECT MIN(e.date) FROM evenement e WHERE e.bande_id=b.id AND e.type='mise_bas' AND e.date<=date('now')) AS premiere_mb_reelle,(SELECT MAX(e.date) FROM evenement e WHERE e.bande_id=b.id AND e.type='sevrage') AS dernier_sevrage_reel,(SELECT COUNT(*) FROM evenement e WHERE e.bande_id=b.id AND e.type IN('echo','echographie')) AS echos,(SELECT COUNT(*) FROM evenement e WHERE e.bande_id=b.id AND e.type IN('echo','echographie') AND lower(COALESCE(e.resultat,'')) IN('positive','positif','pleine','oui')) AS echos_positives,ROUND(100.0*(SELECT COUNT(*) FROM evenement e WHERE e.bande_id=b.id AND e.type IN('echo','echographie') AND lower(COALESCE(e.resultat,'')) IN('positive','positif','pleine','oui'))/NULLIF((SELECT COUNT(*) FROM evenement e WHERE e.bande_id=b.id AND e.type IN('echo','echographie')),0),1) AS taux_pleines_echo,ROUND(100.0*COALESCE(b.cs_truies_mb,0)/NULLIF(b.cs_truies_saillies,0),1) AS taux_mb_saillies FROM bande b WHERE b.date_mb IS NULL OR b.date_mb>=date('now',?) ORDER BY b.date_mb IS NULL,b.date_mb,b.id")
+    let period_start = Local::now().date_naive()
+        - Duration::days((months as f64 * 30.44).round() as i64);
+    let gttt_litters = load_gttt_litters(&state.pool, None)
+        .await?
+        .into_iter()
+        .filter(|litter| litter.farrowing_date.is_some_and(|date| date >= period_start))
+        .collect::<Vec<_>>();
+    let gttt_period = gttt_summary(&gttt_litters);
+    let (objectives, available_objectives) =
+        productivite_objectives(&state.pool, &cutoff, &gttt_period).await?;
+    let rows = sqlx::query("SELECT b.id,b.code,b.date_mb,b.site,b.cs_truies_saillies,b.cs_pleines,b.cs_truies_mb,b.cs_nv_portee,b.cs_sevres_portee,b.cs_total_sevres,b.cs_tx_pertes_nv,b.cs_poids_sevrage,b.cs_gmq_ps,b.cs_gmq_engr,(SELECT MIN(e.date) FROM evenement e WHERE e.bande_id=b.id AND e.type='ia') AS premiere_ia_reelle,(SELECT MIN(e.date) FROM evenement e WHERE e.bande_id=b.id AND e.type='mise_bas' AND e.date<=date('now')) AS premiere_mb_reelle,(SELECT MAX(e.date) FROM evenement e WHERE e.bande_id=b.id AND e.type='sevrage') AS dernier_sevrage_reel,(SELECT COUNT(*) FROM evenement e WHERE e.bande_id=b.id AND e.type IN('echo','echographie')) AS echos,(SELECT COUNT(*) FROM evenement e WHERE e.bande_id=b.id AND e.type IN('echo','echographie') AND lower(COALESCE(e.resultat,'')) IN('positive','positif','pleine','oui')) AS echos_positives,ROUND(100.0*(SELECT COUNT(*) FROM evenement e WHERE e.bande_id=b.id AND e.type IN('echo','echographie') AND lower(COALESCE(e.resultat,'')) IN('positive','positif','pleine','oui'))/NULLIF((SELECT COUNT(*) FROM evenement e WHERE e.bande_id=b.id AND e.type IN('echo','echographie')),0),1) AS taux_pleines_echo,ROUND(100.0*COALESCE(b.cs_truies_mb,0)/NULLIF(b.cs_truies_saillies,0),1) AS taux_mb_saillies FROM bande b WHERE b.date_mb>=date('now',?) ORDER BY b.date_mb,b.id")
         .bind(&cutoff)
         .fetch_all(&state.pool)
         .await?;
@@ -1811,7 +2298,7 @@ async fn productivite(
         .await?;
     let funnel = generic_rows(
         &state.pool,
-        &format!("SELECT CAST(COALESCE(SUM(cs_truies_saillies),0) AS INTEGER) AS saillies,CAST(COALESCE(SUM(cs_pleines),0) AS INTEGER) AS pleines,CAST(COALESCE(SUM(cs_truies_mb),0) AS INTEGER) AS mises_bas,CAST(COALESCE(SUM(cs_total_sevres),0) AS INTEGER) AS sevres,CAST(COALESCE(SUM(cs_adoptes),0) AS INTEGER) AS adoptes,CAST(COALESCE(SUM(cs_retires),0) AS INTEGER) AS retires FROM bande WHERE date_mb IS NULL OR date_mb>=date('now','-{months} months')"),
+        &format!("SELECT CAST(COALESCE(SUM(cs_truies_saillies),0) AS INTEGER) AS saillies,CAST(COALESCE(SUM(cs_pleines),0) AS INTEGER) AS pleines,CAST(COALESCE(SUM(cs_truies_mb),0) AS INTEGER) AS mises_bas,CAST(COALESCE(SUM(cs_total_sevres),0) AS INTEGER) AS sevres,CAST(COALESCE(SUM(cs_adoptes),0) AS INTEGER) AS adoptes,CAST(COALESCE(SUM(cs_retires),0) AS INTEGER) AS retires FROM bande WHERE date_mb>=date('now','-{months} months')"),
     )
     .await?
     .into_iter()
@@ -1834,10 +2321,7 @@ async fn productivite(
         "WITH latest AS (SELECT m.truie_id,m.eld,m.date FROM mesuretruie m WHERE m.eld IS NOT NULL AND NOT EXISTS(SELECT 1 FROM mesuretruie n WHERE n.truie_id=m.truie_id AND n.eld IS NOT NULL AND (n.date>m.date OR (n.date=m.date AND n.id>m.id)))) SELECT b.id,b.code,COUNT(l.eld) AS truies_mesurees,CAST(ROUND(AVG(l.eld),2) AS REAL) AS eld_moyenne,MAX(l.date) AS derniere_mesure FROM bande b JOIN truie t ON t.bande_code=b.code AND t.reformee=0 JOIN latest l ON l.truie_id=t.id WHERE b.active=1 GROUP BY b.id,b.code ORDER BY b.date_mb,b.id",
     )
     .await?;
-    let ranks = sqlx::query("SELECT p.rang,COUNT(*) AS portees,CAST(ROUND(AVG(p.duree_gest),1) AS REAL) AS gestation,CAST(ROUND(AVG(p.nv),2) AS REAL) AS nes_vifs,CAST(ROUND(AVG(p.mn),2) AS REAL) AS mort_nes,CAST(ROUND(AVG(p.sev),2) AS REAL) AS sevres,CAST(ROUND(AVG(p.tx_pertes),1) AS REAL) AS pertes,CAST(ROUND(AVG(p.eld1),1) AS REAL) AS eld_entree,CAST(ROUND(AVG(p.eld2),1) AS REAL) AS eld_sortie FROM porteerang p LEFT JOIN bande b ON b.code=p.bande WHERE b.id IS NULL OR b.date_mb IS NULL OR b.date_mb>=date('now',?) GROUP BY p.rang ORDER BY p.rang")
-        .bind(&cutoff)
-        .fetch_all(&state.pool)
-        .await?;
+    let ranks = gttt_rank_rows(&gttt_litters);
     let schedule = load_band_schedule(&state.pool).await?;
     let today = Local::now().date_naive();
     let stage_source = generic_rows(
@@ -1895,7 +2379,16 @@ async fn productivite(
     ctx.insert("eld_resume".into(), eld_summary);
     ctx.insert("eld_bandes".into(), Value::Array(eld_by_band));
     ctx.insert("stades".into(), Value::Array(stages));
-    ctx.insert("rangs".into(), Value::Array(rows_to_json(ranks)?));
+    ctx.insert("rangs".into(), Value::Array(ranks));
+    ctx.insert("objectifs".into(), Value::Array(objectives));
+    ctx.insert(
+        "objectifs_disponibles".into(),
+        Value::Array(available_objectives),
+    );
+    ctx.insert(
+        "gttt_periode".into(),
+        serde_json::to_value(gttt_period).unwrap_or_default(),
+    );
     ctx.insert("mois".into(), json!(months));
     ctx.insert("vue".into(), json!(view));
     render(&state, "productivite.html", Value::Object(ctx))
@@ -1945,7 +2438,19 @@ async fn ifip(
     State(state): State<AppState>,
     Extension(session): Extension<SessionData>,
 ) -> AppResult<Html<String>> {
-    let references=generic_rows(&state.pool,"SELECT id,libelle,cle,annee,moyenne,tiers_sup,sens,decimales,ordre,CASE cle WHEN 'nes_vifs' THEN (SELECT ROUND(AVG(cs_nv_portee),2) FROM bande WHERE cs_nv_portee IS NOT NULL) WHEN 'sevres_portee' THEN (SELECT ROUND(AVG(cs_sevres_portee),2) FROM bande WHERE cs_sevres_portee IS NOT NULL) WHEN 'tx_pertes_allait' THEN (SELECT ROUND(AVG(cs_tx_pertes_nv),2) FROM bande WHERE cs_tx_pertes_nv IS NOT NULL) WHEN 'poids_sevrage' THEN (SELECT ROUND(AVG(cs_poids_sevrage),2) FROM bande WHERE cs_poids_sevrage IS NOT NULL) WHEN 'gmq_ps' THEN (SELECT ROUND(AVG(cs_gmq_ps),2) FROM bande WHERE cs_gmq_ps IS NOT NULL) WHEN 'gmq_engr' THEN (SELECT ROUND(AVG(cs_gmq_engr),2) FROM bande WHERE cs_gmq_engr IS NOT NULL) ELSE NULL END AS valeur_elevage FROM referenceifip ORDER BY ordre,id").await?;
+    let mut references=generic_rows(&state.pool,"SELECT id,libelle,cle,annee,moyenne,tiers_sup,sens,decimales,ordre,CASE cle WHEN 'poids_sevrage' THEN (SELECT ROUND(AVG(cs_poids_sevrage),2) FROM bande WHERE cs_poids_sevrage IS NOT NULL) WHEN 'gmq_ps' THEN (SELECT ROUND(AVG(cs_gmq_ps),2) FROM bande WHERE cs_gmq_ps IS NOT NULL) WHEN 'gmq_engr' THEN (SELECT ROUND(AVG(cs_gmq_engr),2) FROM bande WHERE cs_gmq_engr IS NOT NULL) ELSE NULL END AS valeur_elevage FROM referenceifip ORDER BY ordre,id").await?;
+    let gttt = gttt_summary(&load_gttt_litters(&state.pool,None).await?);
+    for reference in &mut references {
+        let object=reference.as_object_mut().expect("référence IFIP objet");
+        let value=match object.get("cle").and_then(Value::as_str){
+            Some("sevres_truie_an")=>gttt.sevres_truie_an,
+            Some("nes_vifs")=>gttt.nes_vifs_moy,
+            Some("sevres_portee")=>gttt.sevres_moy,
+            Some("tx_pertes_allait")=>gttt.mortalite_allaitement,
+            _=>continue,
+        };
+        object.insert("valeur_elevage".into(),json!(value));
+    }
     let mut ctx=context(&session);ctx.insert("references".into(),Value::Array(references));render(&state,"ifip.html",Value::Object(ctx))
 }
 
@@ -4238,6 +4743,9 @@ mod gttt_tests {
         removed: f64,
     ) -> GtttLitter {
         GtttLitter {
+            sow_number: "T1".into(),
+            band: Some("B1".into()),
+            farrowing_date: Some(NaiveDate::from_ymd_opt(2026, 1, 1).unwrap()),
             rank: 1,
             gestation: Some(115.0),
             live_born: Some(live_born),
@@ -4252,13 +4760,29 @@ mod gttt_tests {
     #[test]
     fn taux_mortnes_utilise_mortnes_sur_nes_totaux() {
         let summary = gttt_summary(&[litter(13.0, 1.0, None, 11.0, 0.0, 0.0)]);
-        assert_eq!(summary["taux_mortnes"], json!(7.1));
+        assert_eq!(summary.taux_mortnes, Some(7.1));
     }
 
     #[test]
     fn mortalite_allaitement_tient_compte_adoptions_retraits() {
         let summary = gttt_summary(&[litter(13.0, 1.0, None, 11.0, 2.0, 1.0)]);
-        assert_eq!(summary["mortalite_allaitement"], json!(21.4));
+        assert_eq!(summary.mortalite_allaitement, Some(21.4));
+    }
+
+    #[test]
+    fn sevres_truie_an_utilise_la_periode_reellement_couverte() {
+        let first_sow = litter(13.0, 1.0, None, 11.0, 0.0, 0.0);
+        let mut second_sow = first_sow.clone();
+        second_sow.sow_number = "T2".into();
+        let mut first_sow_next = first_sow.clone();
+        first_sow_next.farrowing_date = Some(NaiveDate::from_ymd_opt(2026, 7, 1).unwrap());
+        let mut second_sow_next = second_sow.clone();
+        second_sow_next.farrowing_date = first_sow_next.farrowing_date;
+        let summary = gttt_summary(&[first_sow, second_sow, first_sow_next, second_sow_next]);
+        assert_eq!(summary.truies_productives, 2);
+        assert_eq!(summary.periode_jours, Some(362));
+        assert_eq!(summary.portees_truie_an, Some(2.02));
+        assert_eq!(summary.sevres_truie_an, Some(22.2));
     }
 
     #[test]

@@ -78,6 +78,8 @@ pub struct Evenement {
     pub momifies: Option<i64>,
     pub nb_sevres: Option<i64>,
     pub poids_moyen: Option<f64>,
+    pub adoptes: Option<i64>,
+    pub retires: Option<i64>,
     pub produit: Option<String>,
     pub motif: Option<String>,
     pub resultat: Option<String>,
