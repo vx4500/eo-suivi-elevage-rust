@@ -1,5 +1,23 @@
 # Historique et feuille de route EO-Suivi Rust
 
+## 2.1.8 — robustesse, sécurité et portabilité
+
+- Connexions SQLite configurées en WAL, clés étrangères actives, synchronisation
+  normale et attente de 5 secondes lors d'une écriture concurrente.
+- Champs SQL facultatifs conservés en `Option<T>` et tests de décodage avec des
+  valeurs `NULL`.
+- Dates des formulaires et imports validées strictement au format ISO
+  `AAAA-MM-JJ`; une valeur incorrecte est refusée avant toute écriture.
+- Nombres français, cellules vides et valeurs `NaN`/infinies gérés sans panique;
+  les divisions économiques restent conditionnées à un dénominateur positif.
+- Hachage et vérification PBKDF2 exécutés dans `spawn_blocking` afin de ne pas
+  bloquer les workers HTTP.
+- Jetons de session/CSRF générés avec 256 bits aléatoires; cookies de production
+  `HttpOnly`, `SameSite=Lax` et `Secure`.
+- Rendu des dates absentes ou historiques invalides remplacé par un tiret au
+  lieu d'une erreur HTTP 500.
+- Scripts Windows forcés en UTF-8 et cible Linux statique musl ajoutée à la CI.
+
 ## 2.1.7 — GTTT centralisé et objectifs fiables
 
 - Une seule méthode GTTT alimente la page GTTT, la productivité, les fiches

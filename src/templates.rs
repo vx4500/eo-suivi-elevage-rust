@@ -1,5 +1,5 @@
 use chrono::NaiveDate;
-use minijinja::{Environment, Error, ErrorKind, Value};
+use minijinja::{Environment, Value};
 
 pub fn build() -> anyhow::Result<Environment<'static>> {
     let mut env = Environment::new();
@@ -72,14 +72,15 @@ pub fn build() -> anyhow::Result<Environment<'static>> {
     Ok(env)
 }
 
-fn date_fr(value: Value) -> Result<String, Error> {
+fn date_fr(value: Value) -> String {
     let raw = value.as_str().unwrap_or_default();
     if raw.is_empty() {
-        return Ok("—".to_string());
+        return "—".to_string();
     }
-    NaiveDate::parse_from_str(&raw[..raw.len().min(10)], "%Y-%m-%d")
+    let prefix = raw.get(..10).unwrap_or(raw);
+    NaiveDate::parse_from_str(prefix, "%Y-%m-%d")
         .map(|date| date.format("%d/%m/%Y").to_string())
-        .map_err(|_| Error::new(ErrorKind::InvalidOperation, "date invalide"))
+        .unwrap_or_else(|_| "—".to_string())
 }
 
 fn euro(value: Value) -> String {
@@ -101,8 +102,17 @@ fn decimal3(value: Value) -> String {
 
 #[cfg(test)]
 mod tests {
+    use minijinja::Value;
+
     #[test]
     fn tous_les_modeles_html_sont_valides() {
-        super::build().expect("les modèles MiniJinja doivent être valides");
+        assert!(super::build().is_ok(), "les modèles MiniJinja doivent être valides");
+    }
+
+    #[test]
+    fn une_date_absente_ou_invalide_ne_casse_pas_le_rendu() {
+        assert_eq!(super::date_fr(Value::UNDEFINED), "—");
+        assert_eq!(super::date_fr(Value::from("31/12/2026")), "—");
+        assert_eq!(super::date_fr(Value::from("2026-12-31")), "31/12/2026");
     }
 }

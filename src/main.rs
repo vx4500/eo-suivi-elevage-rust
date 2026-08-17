@@ -10,7 +10,9 @@ mod templates;
 use axum::middleware;
 use config::Config;
 use routes::AppState;
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
+use sqlx::sqlite::{
+    SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous,
+};
 use std::str::FromStr;
 use tower_http::compression::CompressionLayer;
 use tower_http::services::ServeDir;
@@ -31,7 +33,8 @@ async fn main() -> anyhow::Result<()> {
         .create_if_missing(true)
         .foreign_keys(true)
         .journal_mode(SqliteJournalMode::Wal)
-        .busy_timeout(std::time::Duration::from_secs(30));
+        .synchronous(SqliteSynchronous::Normal)
+        .busy_timeout(std::time::Duration::from_secs(5));
     let pool = SqlitePoolOptions::new()
         .max_connections(8)
         .connect_with(options)
@@ -57,15 +60,19 @@ async fn main() -> anyhow::Result<()> {
 
 async fn shutdown_signal() {
     let ctrl_c = async {
-        tokio::signal::ctrl_c().await.expect("signal Ctrl+C");
+        if let Err(error) = tokio::signal::ctrl_c().await {
+            tracing::warn!(%error, "écoute du signal Ctrl+C impossible");
+        }
     };
 
     #[cfg(unix)]
     let terminate = async {
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("signal SIGTERM")
-            .recv()
-            .await;
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            Err(error) => tracing::warn!(%error, "écoute du signal SIGTERM impossible"),
+        }
     };
 
     #[cfg(not(unix))]

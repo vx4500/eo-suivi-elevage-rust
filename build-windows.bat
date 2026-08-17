@@ -1,4 +1,5 @@
 @echo off
+chcp 65001 >nul
 setlocal
 cd /d "%~dp0"
 
@@ -28,4 +29,3 @@ copy /y README.md dist-rust\README.md >nul
 echo.
 echo Termine : dist-rust\EO-Suivi-Rust.exe
 pause
-

@@ -5,6 +5,14 @@ use std::path::PathBuf;
 pub struct Config {
     pub bind: SocketAddr,
     pub db_path: PathBuf,
+    pub secure_cookies: bool,
+}
+
+fn env_flag(name: &str, default: bool) -> bool {
+    std::env::var(name)
+        .ok()
+        .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on" | "oui"))
+        .unwrap_or(default)
 }
 
 impl Config {
@@ -27,6 +35,7 @@ impl Config {
         Ok(Self {
             bind: SocketAddr::new(host, port),
             db_path,
+            secure_cookies: env_flag("EO_SECURE_COOKIES", false),
         })
     }
 }

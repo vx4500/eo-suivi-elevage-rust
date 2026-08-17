@@ -1,4 +1,4 @@
-# EO-Suivi Élevage — portage Rust 2.1.7
+# EO-Suivi Élevage — portage Rust 2.1.8
 
 Cette archive reprend la base EO-Suivi 1.65 sous forme d’un serveur Rust. Elle
 n’utilise plus FastAPI, SQLModel, Uvicorn ni Python pour les fonctions déjà
@@ -84,6 +84,7 @@ La base est conservée dans le volume `eo_data`.
 | `ELEVAGE_DATA` | `data` | dossier de `elevage.db` |
 | `EO_HOST` | `0.0.0.0` | adresse d’écoute |
 | `EO_PORT` | `8080` | port HTTP |
+| `EO_SECURE_COOKIES` | `false` | mettre `true` lorsque le site est servi en HTTPS |
 | `RUST_LOG` | `info` | niveau du journal |
 
 ## Vérifications
@@ -94,10 +95,18 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
+Pour produire un binaire Linux x86-64 statique, installable sans dépendre de
+la version de glibc du serveur :
+
+```bash
+sudo apt-get install musl-tools
+./scripts/build-linux-musl.sh
+```
+
 Le schéma SQLite de l’archive a été exécuté sur une base vierge, puis sur une
 copie de la sauvegarde réelle du 16 août 2026. Les 51 tables attendues et leurs
 colonnes correspondent ; la base réelle contient en plus une ancienne table
 énergie vide, laissée intacte. Les contrôles SQLite `quick_check` et clés
 étrangères sont conformes. La version 2.0.1 a compilé et démarré sur Debian 13
-avec Rust 1.97.1 ; la 2.1.7 doit repasser les trois commandes Cargo ci-dessus
+avec Rust 1.97.1 ; la 2.1.8 doit repasser les trois commandes Cargo ci-dessus
 sur le serveur avant remplacement du binaire.

@@ -259,6 +259,48 @@ fn form_f64(form: &HashMap<String, String>, key: &str) -> Option<f64> {
     parse_french_number(&form_text(form, key)?)
 }
 
+fn today_iso() -> String {
+    Local::now().date_naive().format("%Y-%m-%d").to_string()
+}
+
+fn parse_iso_date(raw: &str) -> Option<String> {
+    if raw.len() != 10 {
+        return None;
+    }
+    NaiveDate::parse_from_str(raw, "%Y-%m-%d")
+        .ok()
+        .map(|date| date.format("%Y-%m-%d").to_string())
+}
+
+fn parse_stored_date(raw: &str) -> Option<NaiveDate> {
+    let prefix = raw.get(..10).unwrap_or(raw);
+    NaiveDate::parse_from_str(prefix, "%Y-%m-%d").ok()
+}
+
+fn form_date(form: &HashMap<String, String>, key: &str) -> AppResult<Option<String>> {
+    form_text(form, key)
+        .map(|raw| {
+            parse_iso_date(&raw).ok_or_else(|| {
+                AppError::Invalid(format!(
+                    "Date invalide pour {key} : utilise le format AAAA-MM-JJ"
+                ))
+            })
+        })
+        .transpose()
+}
+
+fn form_date_or_today(form: &HashMap<String, String>, key: &str) -> AppResult<String> {
+    Ok(form_date(form, key)?.unwrap_or_else(today_iso))
+}
+
+fn json_object_mut<'a>(value: &'a mut Value, label: &str) -> AppResult<&'a mut Map<String, Value>> {
+    value.as_object_mut().ok_or_else(|| {
+        AppError::Internal(anyhow::anyhow!(
+            "structure JSON inattendue pendant la préparation de {label}"
+        ))
+    })
+}
+
 fn parse_french_number(input: &str) -> Option<f64> {
     let mut normalized = input
         .trim()
@@ -274,6 +316,9 @@ fn parse_french_number(input: &str) -> Option<f64> {
         .trim_matches(|character| matches!(character, '-' | '(' | ')'))
         .to_string();
     let value = normalized.parse::<f64>().ok()?.abs();
+    if !value.is_finite() {
+        return None;
+    }
     Some(if negative { -value } else { value })
 }
 
@@ -339,12 +384,12 @@ async fn login_post(
     .await?;
 
     if let Some(user) = user {
-        if auth::verify_password(&password, &user.hash_mdp) {
+        if auth::verify_password_async(password.clone(), user.hash_mdp.clone()).await? {
             sqlx::query("UPDATE utilisateur SET tentatives_echec=0,bloque_jusqu=NULL WHERE id=?")
                 .bind(user.id)
                 .execute(&state.pool)
                 .await?;
-            let session_id = uuid::Uuid::new_v4().simple().to_string();
+            let session_id = auth::new_secure_token();
             let full_name = format!(
                 "{} {}",
                 user.prenom.clone().unwrap_or_default(),
@@ -376,6 +421,7 @@ async fn login_post(
                 .path("/")
                 .http_only(true)
                 .same_site(SameSite::Lax)
+                .secure(state.config.secure_cookies)
                 .build();
             let target = if user.doit_changer_mdp {
                 "/mon-compte/mdp?force=1"
@@ -403,6 +449,8 @@ async fn logout(State(state): State<AppState>, jar: CookieJar) -> Response {
     let cookie = Cookie::build(("eo_session", ""))
         .path("/")
         .http_only(true)
+        .same_site(SameSite::Lax)
+        .secure(state.config.secure_cookies)
         .build();
     (jar.remove(cookie), Redirect::to("/login")).into_response()
 }
@@ -428,8 +476,9 @@ async fn password_post(
     if password.len() < 8 || form.get("mdp2") != Some(&password) {
         return Ok(Redirect::to("/mon-compte/mdp?err=confirmation-ou-longueur").into_response());
     }
+    let hash = auth::hash_password_async(password).await?;
     sqlx::query("UPDATE utilisateur SET hash_mdp=?,doit_changer_mdp=0 WHERE id=?")
-        .bind(auth::hash_password(&password))
+        .bind(hash)
         .bind(session.uid)
         .execute(&state.pool)
         .await?;
@@ -554,7 +603,7 @@ fn band_view(band: &Bande, sow_count: i64, schedule: BandSchedule) -> BandView {
     let date = band
         .date_mb
         .as_deref()
-        .and_then(|value| NaiveDate::parse_from_str(&value[..value.len().min(10)], "%Y-%m-%d").ok());
+        .and_then(parse_stored_date);
     let age = date.map(|date| (today - date).num_days());
     let (stade, prochaine) = age
         .map(|age| schedule.stage(age))
@@ -705,7 +754,7 @@ async fn bande_ajouter(
     sqlx::query("INSERT INTO bande(code,num_officiel,date_mb,site,active) VALUES(?,?,?,?,1)")
         .bind(&code)
         .bind(form_text(&form, "num_officiel"))
-        .bind(form_text(&form, "date_mb"))
+        .bind(form_date(&form, "date_mb")?)
         .bind(form_text(&form, "site"))
         .execute(&state.pool)
         .await?;
@@ -762,7 +811,7 @@ async fn bande_detail(
 }
 
 fn key_dates(date_mb: Option<&str>, schedule: BandSchedule) -> Vec<Value> {
-    let Some(date) = date_mb.and_then(|value| NaiveDate::parse_from_str(&value[..value.len().min(10)], "%Y-%m-%d").ok()) else {
+    let Some(date) = date_mb.and_then(parse_stored_date) else {
         return vec![];
     };
     let today = Local::now().date_naive();
@@ -850,7 +899,7 @@ async fn truie_ajouter(
     if duplicate > 0 { return Err(AppError::Invalid("Ce numéro de travail existe déjà".into())); }
     let result = sqlx::query("INSERT INTO truie(num_travail,num_national,rfid,race,date_entree,bande_code,statut,reformee,rang,mere_cochette) VALUES(?,?,?,?,?,?,'active',0,0,0)")
         .bind(&number).bind(form_text(&form,"num_national")).bind(form_text(&form,"rfid"))
-        .bind(form_text(&form,"race")).bind(form_text(&form,"date_entree")).bind(form_text(&form,"bande_code"))
+        .bind(form_text(&form,"race")).bind(form_date(&form,"date_entree")?).bind(form_text(&form,"bande_code"))
         .execute(&state.pool).await?;
     Ok(Redirect::to(&format!("/truie/{}", result.last_insert_rowid())).into_response())
 }
@@ -955,7 +1004,7 @@ async fn truie_reformer(
     State(state): State<AppState>, Extension(session): Extension<SessionData>, Path(id): Path<i64>, Form(form): Form<HashMap<String,String>>,
 ) -> AppResult<Response> {
     require_writer(&session)?; verify_csrf(&session,&form)?;
-    let date = form_text(&form,"date").unwrap_or_else(|| Local::now().date_naive().format("%Y-%m-%d").to_string());
+    let date = form_date_or_today(&form, "date")?;
     sqlx::query("UPDATE truie SET reformee=1,statut='reformee',date_reforme=?,motif_sortie=?,updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(date).bind(form_text(&form,"motif")).bind(id).execute(&state.pool).await?;
     Ok(Redirect::to("/truies").into_response())
 }
@@ -976,8 +1025,7 @@ async fn truie_mesure(
 ) -> AppResult<Response> {
     require_writer(&session)?;
     verify_csrf(&session, &form)?;
-    let date = form_text(&form, "date")
-        .unwrap_or_else(|| Local::now().date_naive().format("%Y-%m-%d").to_string());
+    let date = form_date_or_today(&form, "date")?;
     sqlx::query("INSERT INTO mesuretruie(truie_id,date,eld,poids,nec,note,periode) VALUES(?,?,?,?,?,?,?)")
         .bind(id)
         .bind(date)
@@ -1031,7 +1079,7 @@ async fn truie_perte(
         .bind(form_i64(&form, "age_j"))
         .bind(nb)
         .bind(form_text(&form, "cause"))
-        .bind(form_text(&form, "date").unwrap_or_else(|| Local::now().date_naive().format("%Y-%m-%d").to_string()))
+        .bind(form_date_or_today(&form, "date")?)
         .execute(&state.pool)
         .await?;
     Ok(Redirect::to(&format!("/truie/{id}#pertes")).into_response())
@@ -1080,7 +1128,7 @@ async fn evenement_ajouter(
 ) -> AppResult<Response> {
     require_writer(&session)?; verify_csrf(&session,&form)?;
     let kind = form_text(&form,"type").ok_or_else(|| AppError::Invalid("Type obligatoire".into()))?;
-    let date = form_text(&form,"date").ok_or_else(|| AppError::Invalid("Date obligatoire".into()))?;
+    let date = form_date(&form, "date")?.ok_or_else(|| AppError::Invalid("Date obligatoire".into()))?;
     let sow_id = form_i64(&form,"truie_id");
     let mut band_id = form_i64(&form,"bande_id");
     if band_id.is_none() {
@@ -1136,9 +1184,8 @@ async fn evenement_ajouter(
         .execute(&state.pool).await?;
     if kind == "mise_bas" {
         if let Some(sow_id) = sow_id {
-            let completed = NaiveDate::parse_from_str(&date[..date.len().min(10)], "%Y-%m-%d")
-                .map(|value| value <= Local::now().date_naive())
-                .unwrap_or(false);
+            let completed = parse_stored_date(&date)
+                .is_some_and(|value| value <= Local::now().date_naive());
             sqlx::query("UPDATE truie SET bande_code=COALESCE((SELECT code FROM bande WHERE id=?),bande_code),rang=rang+?,updated_at=CURRENT_TIMESTAMP WHERE id=?")
                 .bind(band_id).bind(if completed { 1 } else { 0 }).bind(sow_id).execute(&state.pool).await?;
         }
@@ -1155,7 +1202,7 @@ async fn evenement_supprimer(
     let mut tx=state.pool.begin().await?;
     sqlx::query("DELETE FROM evenement WHERE id=?").bind(id).execute(&mut *tx).await?;
     if let Some((Some(sow_id),kind,date))=&event {
-        if kind=="mise_bas"&&NaiveDate::parse_from_str(&date[..date.len().min(10)],"%Y-%m-%d").map(|value|value<=Local::now().date_naive()).unwrap_or(false){sqlx::query("UPDATE truie SET rang=MAX(rang-1,0),updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(sow_id).execute(&mut *tx).await?;}
+        if kind=="mise_bas"&&parse_stored_date(date).is_some_and(|value|value<=Local::now().date_naive()){sqlx::query("UPDATE truie SET rang=MAX(rang-1,0),updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(sow_id).execute(&mut *tx).await?;}
     }
     tx.commit().await?;
     let sow=event.and_then(|value|value.0);
@@ -1189,8 +1236,7 @@ async fn inseminations_enregistrer(
     if ids.is_empty() {
         return Err(AppError::Invalid("Sélectionne au moins une truie".into()));
     }
-    let date = form_text(&form, "date")
-        .unwrap_or_else(|| Local::now().date_naive().format("%Y-%m-%d").to_string());
+    let date = form_date_or_today(&form, "date")?;
     let mut tx = state.pool.begin().await?;
     for id in ids {
         let band_id: Option<i64> = sqlx::query_scalar(
@@ -1233,7 +1279,7 @@ async fn export_mise_bas(
     let band_header=format!("Bande : {}",band.0);let date_header=format!("MB théorique : {}",band.1.unwrap_or_default());
     writer.write_record(["Liste des truies à la mise-bas",band_header.as_str(),date_header.as_str()]).map_err(|error|AppError::Internal(error.into()))?;
     writer.write_record(["N° travail","Rang","Race","NT","NV","Mort-nés","Momifiés","Sevrés"]).map_err(|error|AppError::Internal(error.into()))?;
-    for row in rows { let object=row.as_object().expect("generic row object");writer.write_record([csv_value(object.get("num_travail")),csv_value(object.get("rang")),csv_value(object.get("race")),csv_value(object.get("nes_totaux")),csv_value(object.get("nes_vifs")),csv_value(object.get("mort_nes")),csv_value(object.get("momifies")),csv_value(object.get("nb_sevres"))]).map_err(|error|AppError::Internal(error.into()))?; }
+    for row in rows { let object=row.as_object().ok_or_else(||AppError::Internal(anyhow::anyhow!("ligne CSV inattendue")))?;writer.write_record([csv_value(object.get("num_travail")),csv_value(object.get("rang")),csv_value(object.get("race")),csv_value(object.get("nes_totaux")),csv_value(object.get("nes_vifs")),csv_value(object.get("mort_nes")),csv_value(object.get("momifies")),csv_value(object.get("nb_sevres"))]).map_err(|error|AppError::Internal(error.into()))?; }
     writer.flush().map_err(|error|AppError::Internal(error.into()))?;
     let mut bytes=vec![0xEF,0xBB,0xBF];bytes.extend(writer.into_inner().map_err(|error|AppError::Internal(error.into_error().into()))?);
     let mut headers=HeaderMap::new();headers.insert(header::CONTENT_TYPE,HeaderValue::from_static("text/csv; charset=utf-8"));headers.insert(header::CONTENT_DISPOSITION,HeaderValue::from_str(&format!("attachment; filename=liste_mise_bas_{}.csv",band.0.replace(' ',"_"))).map_err(|error|AppError::Internal(error.into()))?);Ok((headers,bytes).into_response())
@@ -1352,11 +1398,21 @@ async fn truies_import(
                 .filter(|value| !value.is_empty())
         };
         let number = field("num_travail").unwrap_or("");
+        let date_entree_raw = field("date_entree");
+        let date_naissance_raw = field("date_naissance");
+        let date_entree = date_entree_raw.and_then(parse_iso_date);
+        let date_naissance = date_naissance_raw.and_then(parse_iso_date);
+        let invalid_date = date_entree_raw.is_some() && date_entree.is_none()
+            || date_naissance_raw.is_some() && date_naissance.is_none();
         let mut action = "ajouter";
         let mut anomaly = None;
         if number.is_empty() {
             action = "erreur";
             anomaly = Some("Numéro de travail manquant".to_string());
+            errors += 1;
+        } else if invalid_date {
+            action = "erreur";
+            anomaly = Some("Date invalide : format attendu AAAA-MM-JJ".to_string());
             errors += 1;
         } else if !seen.insert(number.to_lowercase()) {
             action = "ignorer";
@@ -1382,8 +1438,8 @@ async fn truies_import(
             "num_national": field("num_national"),
             "rfid": field("rfid"),
             "race": field("race"),
-            "date_entree": field("date_entree"),
-            "date_naissance": field("date_naissance"),
+            "date_entree": date_entree,
+            "date_naissance": date_naissance,
             "bande_code": field("bande_code"),
             "note": field("note"),
         });
@@ -1455,6 +1511,19 @@ async fn truies_import_confirmer(
         let value = |key: &str| data.get(key).and_then(Value::as_str).filter(|value| !value.is_empty());
         let number = value("num_travail")
             .ok_or_else(|| AppError::Invalid(format!("Numéro absent à la ligne {line}")))?;
+        let checked_date = |key: &str| -> AppResult<Option<String>> {
+            value(key)
+                .map(|raw| {
+                    parse_iso_date(raw).ok_or_else(|| {
+                        AppError::Invalid(format!(
+                            "Date {key} invalide à la ligne {line} : format AAAA-MM-JJ attendu"
+                        ))
+                    })
+                })
+                .transpose()
+        };
+        let date_entree = checked_date("date_entree")?;
+        let date_naissance = checked_date("date_naissance")?;
         let exists: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM truie WHERE lower(trim(num_travail))=lower(trim(?)) AND reformee=0",
         )
@@ -1471,8 +1540,8 @@ async fn truies_import_confirmer(
             .bind(value("num_national"))
             .bind(value("rfid"))
             .bind(value("race"))
-            .bind(value("date_entree"))
-            .bind(value("date_naissance"))
+            .bind(date_entree)
+            .bind(date_naissance)
             .bind(value("bande_code"))
             .bind(value("note"))
             .bind(&token)
@@ -1534,9 +1603,7 @@ async fn calendrier_ics(State(state): State<AppState>) -> AppResult<Response> {
         "METHOD:PUBLISH".into(),
     ];
     for band in bands {
-        let Some(base) = band.date_mb.as_deref().and_then(|value| {
-            NaiveDate::parse_from_str(&value[..value.len().min(10)], "%Y-%m-%d").ok()
-        }) else {
+        let Some(base) = band.date_mb.as_deref().and_then(parse_stored_date) else {
             continue;
         };
         for (name, days) in stages {
@@ -1683,7 +1750,7 @@ async fn gttt(
         .cloned()
         .collect::<Vec<_>>();
     let summary = gttt_summary(&litters);
-    let rank_rows = gttt_rank_rows(&litters);
+    let rank_rows = gttt_rank_rows(&litters)?;
     let mut band_rows = Vec::with_capacity(band_codes.len());
     for code in &band_codes {
         let rows = period_litters
@@ -1692,7 +1759,7 @@ async fn gttt(
             .cloned()
             .collect::<Vec<_>>();
         let mut value = serde_json::to_value(gttt_summary(&rows)).unwrap_or_default();
-        value.as_object_mut().expect("résumé GTTT objet").insert(
+        json_object_mut(&mut value, "la synthèse GTTT")?.insert(
             "bande".into(),
             json!(code),
         );
@@ -1780,9 +1847,7 @@ async fn load_gttt_litters(pool: &SqlitePool, band: Option<&str>) -> AppResult<V
         .map(|row| GtttLitter {
             sow_number: row.0,
             band: row.1,
-            farrowing_date: row.2.as_deref().and_then(|value| {
-                NaiveDate::parse_from_str(&value[..value.len().min(10)], "%Y-%m-%d").ok()
-            }),
+            farrowing_date: row.2.as_deref().and_then(parse_stored_date),
             rank: row.3,
             gestation: row.4,
             live_born: row.5,
@@ -2005,24 +2070,22 @@ fn gttt_band_fallback(band: &Bande, events: &[Evenement]) -> GtttSummary {
     }
 }
 
-fn gttt_rank_rows(litters: &[GtttLitter]) -> Vec<Value> {
+fn gttt_rank_rows(litters: &[GtttLitter]) -> AppResult<Vec<Value>> {
     let mut ranks: Vec<i64> = litters.iter().map(|litter| litter.rank).collect();
     ranks.sort_unstable();
     ranks.dedup();
     ranks
         .into_iter()
-        .map(|rank| {
+        .map(|rank| -> AppResult<Value> {
             let selected = litters
                 .iter()
                 .filter(|litter| litter.rank == rank)
                 .cloned()
                 .collect::<Vec<_>>();
             let mut value = serde_json::to_value(gttt_summary(&selected)).unwrap_or_default();
-            value
-                .as_object_mut()
-                .expect("résumé GTTT objet")
+            json_object_mut(&mut value, "la synthèse GTTT par rang")?
                 .insert("rang".into(), json!(rank));
-            value
+            Ok(value)
         })
         .collect()
 }
@@ -2087,7 +2150,7 @@ async fn productivite_objectives(
     .await?;
     let mut used = HashSet::new();
     for objective in &mut objectives {
-        let object = objective.as_object_mut().expect("objectif objet");
+        let object = json_object_mut(objective, "les objectifs")?;
         let key = object
             .get("cle")
             .and_then(Value::as_str)
@@ -2321,7 +2384,7 @@ async fn productivite(
         "WITH latest AS (SELECT m.truie_id,m.eld,m.date FROM mesuretruie m WHERE m.eld IS NOT NULL AND NOT EXISTS(SELECT 1 FROM mesuretruie n WHERE n.truie_id=m.truie_id AND n.eld IS NOT NULL AND (n.date>m.date OR (n.date=m.date AND n.id>m.id)))) SELECT b.id,b.code,COUNT(l.eld) AS truies_mesurees,CAST(ROUND(AVG(l.eld),2) AS REAL) AS eld_moyenne,MAX(l.date) AS derniere_mesure FROM bande b JOIN truie t ON t.bande_code=b.code AND t.reformee=0 JOIN latest l ON l.truie_id=t.id WHERE b.active=1 GROUP BY b.id,b.code ORDER BY b.date_mb,b.id",
     )
     .await?;
-    let ranks = gttt_rank_rows(&gttt_litters);
+    let ranks = gttt_rank_rows(&gttt_litters)?;
     let schedule = load_band_schedule(&state.pool).await?;
     let today = Local::now().date_naive();
     let stage_source = generic_rows(
@@ -2334,7 +2397,7 @@ async fn productivite(
         let Some(date) = row
             .get("date_mb")
             .and_then(Value::as_str)
-            .and_then(|value| NaiveDate::parse_from_str(&value[..value.len().min(10)], "%Y-%m-%d").ok())
+            .and_then(parse_stored_date)
         else {
             continue;
         };
@@ -2416,7 +2479,7 @@ async fn reformes(
     let criteria=parameter_list(&state.pool,"reforme_criteres",&["nv","sevres","retours","ecrases","rang","chetifs"]).await?;
     let raw=generic_rows(&state.pool,"SELECT id,num_travail,bande_code,rang,perf_nv,perf_sevres,nb_retours,tx_chetifs,CAST(COALESCE((SELECT SUM(p.nb) FROM perteporcelet p WHERE p.truie_id=t.id AND lower(COALESCE(p.cause,'')) LIKE '%cras%'),0) AS INTEGER) AS ecrases FROM truie t WHERE reformee=0 ORDER BY num_travail").await?;
     let mut rows=Vec::new();
-    for mut row in raw{let object=row.as_object_mut().expect("truie objet");let mut reasons=Vec::new();let f=|key:&str|object.get(key).and_then(Value::as_f64);let i=|key:&str|object.get(key).and_then(Value::as_i64).map(|value|value as f64);if criteria.iter().any(|c|c=="nv")&&f("perf_nv").is_some_and(|v|v<seuils["seuil_nv_min"].as_f64().unwrap_or(13.0)){reasons.push("nés vifs bas")};if criteria.iter().any(|c|c=="sevres")&&f("perf_sevres").is_some_and(|v|v<seuils["seuil_sevres_min"].as_f64().unwrap_or(11.0)){reasons.push("sevrés bas")};if criteria.iter().any(|c|c=="retours")&&i("nb_retours").is_some_and(|v|v>seuils["seuil_retours_max"].as_f64().unwrap_or(2.0)){reasons.push("retours élevés")};if criteria.iter().any(|c|c=="ecrases")&&i("ecrases").is_some_and(|v|v>seuils["seuil_ecrases_max"].as_f64().unwrap_or(4.0)){reasons.push("écrasés élevés")};if criteria.iter().any(|c|c=="rang")&&i("rang").is_some_and(|v|v>seuils["seuil_rang_max"].as_f64().unwrap_or(7.0)){reasons.push("rang élevé")};if criteria.iter().any(|c|c=="chetifs")&&f("tx_chetifs").is_some_and(|v|v>seuils["seuil_chetifs_max"].as_f64().unwrap_or(20.0)){reasons.push("chétifs élevés")};if!reasons.is_empty(){object.insert("raisons".into(),json!(reasons.join(", ")));object.insert("score".into(),json!(reasons.len()));rows.push(row)}}
+    for mut row in raw{let Some(object)=row.as_object_mut() else{continue};let mut reasons=Vec::new();let f=|key:&str|object.get(key).and_then(Value::as_f64);let i=|key:&str|object.get(key).and_then(Value::as_i64).map(|value|value as f64);if criteria.iter().any(|c|c=="nv")&&f("perf_nv").is_some_and(|v|v<seuils["seuil_nv_min"].as_f64().unwrap_or(13.0)){reasons.push("nés vifs bas")};if criteria.iter().any(|c|c=="sevres")&&f("perf_sevres").is_some_and(|v|v<seuils["seuil_sevres_min"].as_f64().unwrap_or(11.0)){reasons.push("sevrés bas")};if criteria.iter().any(|c|c=="retours")&&i("nb_retours").is_some_and(|v|v>seuils["seuil_retours_max"].as_f64().unwrap_or(2.0)){reasons.push("retours élevés")};if criteria.iter().any(|c|c=="ecrases")&&i("ecrases").is_some_and(|v|v>seuils["seuil_ecrases_max"].as_f64().unwrap_or(4.0)){reasons.push("écrasés élevés")};if criteria.iter().any(|c|c=="rang")&&i("rang").is_some_and(|v|v>seuils["seuil_rang_max"].as_f64().unwrap_or(7.0)){reasons.push("rang élevé")};if criteria.iter().any(|c|c=="chetifs")&&f("tx_chetifs").is_some_and(|v|v>seuils["seuil_chetifs_max"].as_f64().unwrap_or(20.0)){reasons.push("chétifs élevés")};if!reasons.is_empty(){object.insert("raisons".into(),json!(reasons.join(", ")));object.insert("score".into(),json!(reasons.len()));rows.push(row)}}
     rows.sort_by_key(|row|std::cmp::Reverse(row.get("score").and_then(Value::as_u64).unwrap_or_default()));
     let exits=generic_rows(&state.pool,"SELECT id,num_travail,date_reforme,motif_sortie,rang FROM truie WHERE reformee=1 ORDER BY date_reforme DESC,id DESC LIMIT 200").await?;
     let mut ctx=context(&session);ctx.insert("seuils".into(),seuils);ctx.insert("criteres".into(),json!(criteria));ctx.insert("candidates".into(),Value::Array(rows));ctx.insert("sorties".into(),Value::Array(exits));render(&state,"reformes.html",Value::Object(ctx))
@@ -2430,7 +2493,7 @@ async fn cochettes(
     let averages=generic_rows(&state.pool,"SELECT ROUND(AVG(perf_nv),2) AS nv,ROUND(AVG(perf_sevres),2) AS sevres,ROUND(AVG(issf),2) AS issf,ROUND(AVG(tx_chetifs),2) AS chetifs FROM truie WHERE reformee=0").await?.into_iter().next().unwrap_or_else(||json!({}));
     let rows=generic_rows(&state.pool,"SELECT id,num_travail,bande_code,mere_cochette,rang,perf_nv,perf_sevres,perf_tx_perte,nb_retours,issf,tx_chetifs,CAST(COALESCE((SELECT SUM(p.nb) FROM perteporcelet p WHERE p.truie_id=t.id AND lower(COALESCE(p.cause,'')) LIKE '%cras%'),0) AS INTEGER) AS ecrases FROM truie t WHERE reformee=0 AND (perf_nv IS NOT NULL OR perf_sevres IS NOT NULL) ORDER BY num_travail").await?;
     let threshold=criteria.len().saturating_sub(1).max(1);let mut candidates=Vec::new();let mut designated=Vec::new();
-    for mut row in rows{let is_designated=row.get("mere_cochette").and_then(Value::as_i64)==Some(1);if is_designated{designated.push(row.clone())}let object=row.as_object_mut().expect("truie objet");let mut details=Vec::new();let f=|key:&str|object.get(key).and_then(Value::as_f64);let i=|key:&str|object.get(key).and_then(Value::as_i64);if criteria.iter().any(|c|c=="nv")&&f("perf_nv").is_some_and(|v|v>=averages["nv"].as_f64().unwrap_or(0.0)){details.push("nés vifs")};if criteria.iter().any(|c|c=="sevres")&&f("perf_sevres").is_some_and(|v|v>=averages["sevres"].as_f64().unwrap_or(0.0)){details.push("capacité maternelle")};if criteria.iter().any(|c|c=="ecrases")&&i("ecrases").unwrap_or_default()<=1{details.push("peu d’écrasés")};if criteria.iter().any(|c|c=="retours")&&i("nb_retours").unwrap_or_default()<=1{details.push("fertilité")};if criteria.iter().any(|c|c=="rang")&&i("rang").unwrap_or_default()>=3{details.push("longévité")};if criteria.iter().any(|c|c=="chetifs")&&f("tx_chetifs").is_some_and(|v|v<=averages["chetifs"].as_f64().unwrap_or(v)){details.push("homogénéité")};if criteria.iter().any(|c|c=="issf")&&f("issf").is_some_and(|v|v<=averages["issf"].as_f64().unwrap_or(v)){details.push("ISSF")};if details.len()>=threshold{object.insert("score".into(),json!(details.len()));object.insert("details".into(),json!(details.join(", ")));candidates.push(row)}}
+    for mut row in rows{let is_designated=row.get("mere_cochette").and_then(Value::as_i64)==Some(1);if is_designated{designated.push(row.clone())}let Some(object)=row.as_object_mut() else{continue};let mut details=Vec::new();let f=|key:&str|object.get(key).and_then(Value::as_f64);let i=|key:&str|object.get(key).and_then(Value::as_i64);if criteria.iter().any(|c|c=="nv")&&f("perf_nv").is_some_and(|v|v>=averages["nv"].as_f64().unwrap_or(0.0)){details.push("nés vifs")};if criteria.iter().any(|c|c=="sevres")&&f("perf_sevres").is_some_and(|v|v>=averages["sevres"].as_f64().unwrap_or(0.0)){details.push("capacité maternelle")};if criteria.iter().any(|c|c=="ecrases")&&i("ecrases").unwrap_or_default()<=1{details.push("peu d’écrasés")};if criteria.iter().any(|c|c=="retours")&&i("nb_retours").unwrap_or_default()<=1{details.push("fertilité")};if criteria.iter().any(|c|c=="rang")&&i("rang").unwrap_or_default()>=3{details.push("longévité")};if criteria.iter().any(|c|c=="chetifs")&&f("tx_chetifs").is_some_and(|v|v<=averages["chetifs"].as_f64().unwrap_or(v)){details.push("homogénéité")};if criteria.iter().any(|c|c=="issf")&&f("issf").is_some_and(|v|v<=averages["issf"].as_f64().unwrap_or(v)){details.push("ISSF")};if details.len()>=threshold{object.insert("score".into(),json!(details.len()));object.insert("details".into(),json!(details.join(", ")));candidates.push(row)}}
     candidates.sort_by_key(|row|std::cmp::Reverse(row.get("score").and_then(Value::as_u64).unwrap_or_default()));let mut ctx=context(&session);ctx.insert("criteres".into(),json!(criteria));ctx.insert("moyennes".into(),averages);ctx.insert("candidates".into(),Value::Array(candidates));ctx.insert("designees".into(),Value::Array(designated));render(&state,"cochettes.html",Value::Object(ctx))
 }
 
@@ -2441,7 +2504,7 @@ async fn ifip(
     let mut references=generic_rows(&state.pool,"SELECT id,libelle,cle,annee,moyenne,tiers_sup,sens,decimales,ordre,CASE cle WHEN 'poids_sevrage' THEN (SELECT ROUND(AVG(cs_poids_sevrage),2) FROM bande WHERE cs_poids_sevrage IS NOT NULL) WHEN 'gmq_ps' THEN (SELECT ROUND(AVG(cs_gmq_ps),2) FROM bande WHERE cs_gmq_ps IS NOT NULL) WHEN 'gmq_engr' THEN (SELECT ROUND(AVG(cs_gmq_engr),2) FROM bande WHERE cs_gmq_engr IS NOT NULL) ELSE NULL END AS valeur_elevage FROM referenceifip ORDER BY ordre,id").await?;
     let gttt = gttt_summary(&load_gttt_litters(&state.pool,None).await?);
     for reference in &mut references {
-        let object=reference.as_object_mut().expect("référence IFIP objet");
+        let object=json_object_mut(reference,"les références IFIP")?;
         let value=match object.get("cle").and_then(Value::as_str){
             Some("sevres_truie_an")=>gttt.sevres_truie_an,
             Some("nes_vifs")=>gttt.nes_vifs_moy,
@@ -2539,7 +2602,7 @@ async fn charcutier_traitement(
     sqlx::query("INSERT INTO traitementcharcutier(charcutier_id,bande_code,date,produit,dose,motif,delai_attente,note) VALUES(?,?,?,?,?,?,?,?)")
         .bind(id)
         .bind(band)
-        .bind(form_text(&form, "date").unwrap_or_else(|| Local::now().date_naive().format("%Y-%m-%d").to_string()))
+        .bind(form_date_or_today(&form, "date")?)
         .bind(product)
         .bind(form_text(&form, "dose"))
         .bind(form_text(&form, "motif"))
@@ -2592,7 +2655,7 @@ async fn transferts(
     )
     .await?;
     for band in &mut bands {
-        let object = band.as_object_mut().expect("generic row object");
+        let object = json_object_mut(band,"les bandes de transfert")?;
         let id = object.get("id").and_then(Value::as_i64).unwrap_or_default();
         let code = object.get("code").and_then(Value::as_str).unwrap_or_default().to_string();
         let remaining = remaining_band_pigs(&state.pool, id, &code).await?;
@@ -2705,7 +2768,7 @@ async fn transferts_porcs(
     let source = form_text(&form, "source").ok_or_else(|| AppError::Invalid("Source obligatoire".into()))?;
     let destination = form_i64(&form, "case_dest_id").ok_or_else(|| AppError::Invalid("Case de destination obligatoire".into()))?;
     let number = form_i64(&form, "nombre").filter(|value| *value > 0).ok_or_else(|| AppError::Invalid("Nombre invalide".into()))?;
-    let date = form_text(&form, "date").unwrap_or_else(|| Local::now().date_naive().format("%Y-%m-%d").to_string());
+    let date = form_date_or_today(&form, "date")?;
     let destination_row = sqlx::query_as::<_, (i64, i64, Option<i64>)>(
         "SELECT id,salle_id,nb_max_porcs FROM casesalle WHERE id=?",
     )
@@ -2780,7 +2843,7 @@ async fn transferts_truies(
     let destination_room: i64 = sqlx::query_scalar("SELECT salle_id FROM casesalle WHERE id=?")
         .bind(destination).fetch_optional(&state.pool).await?
         .ok_or_else(|| AppError::Invalid("Case de destination introuvable".into()))?;
-    let date = form_text(&form, "date").unwrap_or_else(|| Local::now().date_naive().format("%Y-%m-%d").to_string());
+    let date = form_date_or_today(&form, "date")?;
     let mut tx = state.pool.begin().await?;
     for id in ids {
         let current = sqlx::query_as::<_, (Option<i64>, Option<i64>)>("SELECT t.case_id,COALESCE(t.salle_id,c.salle_id) FROM truie t LEFT JOIN casesalle c ON c.id=t.case_id WHERE t.id=? AND t.reformee=0")
@@ -2852,14 +2915,14 @@ async fn effectifs(
     let losses = generic_rows(&state.pool,"SELECT bande_code,CAST(COALESCE(SUM(CASE WHEN code_ifip='39' THEN nombre ELSE 0 END),0) AS INTEGER) AS pertes_ps,CAST(COALESCE(SUM(CASE WHEN code_ifip='49' THEN nombre ELSE 0 END),0) AS INTEGER) AS pertes_engraissement FROM mouvementstock WHERE code_ifip IN('39','49') AND bande_code IS NOT NULL GROUP BY bande_code ORDER BY bande_code").await?;
     let mut cases = generic_rows(&state.pool,"SELECT c.id,c.nom,s.nom AS salle,COALESCE(si.nom,si.code) AS site,c.nb_max_porcs FROM casesalle c JOIN salle s ON s.id=c.salle_id JOIN site si ON si.id=s.site_id ORDER BY COALESCE(si.nom,si.code),s.ordre,c.nom").await?;
     for case in &mut cases {
-        let object=case.as_object_mut().expect("case objet");
+        let object=json_object_mut(case,"les effectifs par case")?;
         let id=object.get("id").and_then(Value::as_i64).unwrap_or_default();
         object.insert("effectif".into(),json!(case_pig_count(&state.pool,id).await?));
     }
     let case_inventories=generic_rows(&state.pool,"SELECT i.id,i.date,i.nombre,i.note,i.cree_par,c.nom AS case_nom,s.nom AS salle,COALESCE(si.nom,si.code) AS site FROM inventairecase i JOIN casesalle c ON c.id=i.case_id JOIN salle s ON s.id=c.salle_id JOIN site si ON si.id=s.site_id ORDER BY i.date DESC,i.id DESC LIMIT 100").await?;
     let mut bands = generic_rows(&state.pool,"SELECT id,code,date_mb,site FROM bande WHERE active=1 ORDER BY date_mb,code").await?;
     for band in &mut bands {
-        let object = band.as_object_mut().expect("generic row object");
+        let object = json_object_mut(band,"les effectifs par bande")?;
         let id = object.get("id").and_then(Value::as_i64).unwrap_or_default();
         let code = object.get("code").and_then(Value::as_str).unwrap_or_default().to_string();
         object.insert("effectif".into(), json!(remaining_band_pigs(&state.pool,id,&code).await?));
@@ -2893,7 +2956,7 @@ async fn effectifs_inventaire(
         .bind(band_id).fetch_optional(&state.pool).await?
         .ok_or_else(||AppError::Invalid("Bande introuvable".into()))?;
     let number = form_i64(&form,"nombre").filter(|value|*value>=0).ok_or_else(||AppError::Invalid("Effectif invalide".into()))?;
-    let date = form_text(&form,"date").unwrap_or_else(||Local::now().date_naive().format("%Y-%m-%d").to_string());
+    let date = form_date_or_today(&form, "date")?;
     let label = form_text(&form,"libelle").unwrap_or_else(||"stock porcs".into());
     let mut tx = state.pool.begin().await?;
     sqlx::query("DELETE FROM mouvementstock WHERE est_stock=1 AND bande_code=? AND date=? AND lower(trim(COALESCE(libelle,'')))=lower(trim(?))")
@@ -2916,7 +2979,7 @@ async fn effectifs_inventaire_case(
     let number=form_i64(&form,"nombre").filter(|value|*value>=0).ok_or_else(||AppError::Invalid("Effectif invalide".into()))?;
     let exists:i64=sqlx::query_scalar("SELECT COUNT(*) FROM casesalle WHERE id=?").bind(case_id).fetch_one(&state.pool).await?;
     if exists==0{return Err(AppError::Invalid("Case introuvable".into()))}
-    let date=form_text(&form,"date").unwrap_or_else(||Local::now().date_naive().format("%Y-%m-%d").to_string());
+    let date=form_date_or_today(&form, "date")?;
     let note=form_text(&form,"note");
     let mut tx=state.pool.begin().await?;
     sqlx::query("DELETE FROM inventairecase WHERE case_id=? AND date=?")
@@ -2962,15 +3025,17 @@ async fn energie(
             let consumption = if reading.remplacement_compteur { None } else { previous.map(|value| reading.valeur_index-value) };
             previous = Some(reading.valeur_index);
             let mut value = serde_json::to_value(reading).unwrap_or_default();
-            value.as_object_mut().unwrap().insert("conso".into(),json!(consumption));
+            json_object_mut(&mut value,"les relevés d’énergie")?
+                .insert("conso".into(),json!(consumption));
             enriched.push(value);
         }
         enriched.reverse(); readings.reverse();
-        let last_date = readings.first().and_then(|r|NaiveDate::parse_from_str(&r.date_releve[..r.date_releve.len().min(10)],"%Y-%m-%d").ok());
+        let last_date = readings.first().and_then(|reading|parse_stored_date(&reading.date_releve));
         let due = if meter.r#type=="eau" { meter.rappel_jours.map(|days|last_date.unwrap_or(Local::now().date_naive()-Duration::days(days))+Duration::days(days)) } else { None };
         let overdue = due.map(|date| (Local::now().date_naive()-date).num_days().max(0));
         let site: Option<String> = if let Some(id)=meter.site_id { sqlx::query_scalar("SELECT COALESCE(nom,code) FROM site WHERE id=?").bind(id).fetch_optional(&state.pool).await? } else { None };
-        data.push(json!({"compteur":meter,"releves":enriched,"site":site,"alerte":overdue.map(|d|d>=0 && due.unwrap()<=Local::now().date_naive()).unwrap_or(false),"jours_retard":overdue}));
+        let alert = due.is_some_and(|date| date <= Local::now().date_naive());
+        data.push(json!({"compteur":meter,"releves":enriched,"site":site,"alerte":alert,"jours_retard":overdue}));
     }
     let mut ctx=context(&session); ctx.insert("compteurs".into(),serde_json::to_value(meters).unwrap_or_default()); ctx.insert("sites".into(),Value::Array(sites)); ctx.insert("data".into(),Value::Array(data)); ctx.insert("today".into(),json!(Local::now().date_naive().format("%Y-%m-%d").to_string()));
     render(&state,"energie.html",Value::Object(ctx))
@@ -2982,12 +3047,12 @@ async fn energie_compteur(State(state):State<AppState>,Extension(session):Extens
 }
 
 async fn energie_releve(State(state):State<AppState>,Extension(session):Extension<SessionData>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{
-    require_writer(&session)?;verify_csrf(&session,&form)?;let meter_id=form_i64(&form,"compteur_id").ok_or_else(||AppError::Invalid("Compteur obligatoire".into()))?;let date=form_text(&form,"date_releve").unwrap_or_else(||Local::now().date_naive().format("%Y-%m-%d").to_string());let index=form_f64(&form,"index").ok_or_else(||AppError::Invalid("Index invalide".into()))?;let replacement=form.contains_key("remplacement_compteur");
+    require_writer(&session)?;verify_csrf(&session,&form)?;let meter_id=form_i64(&form,"compteur_id").ok_or_else(||AppError::Invalid("Compteur obligatoire".into()))?;let date=form_date_or_today(&form,"date_releve")?;let index=form_f64(&form,"index").ok_or_else(||AppError::Invalid("Index invalide".into()))?;let replacement=form.contains_key("remplacement_compteur");
     let site:Option<String>=sqlx::query_scalar("SELECT COALESCE(s.code,s.nom) FROM compteur_energie c LEFT JOIN site s ON s.id=c.site_id WHERE c.id=?").bind(meter_id).fetch_optional(&state.pool).await?.flatten();
     let bands=present_bands(&state.pool,site.as_deref(),&date).await?;sqlx::query("INSERT INTO releve_compteur(compteur_id,date_releve,valeur_index,bandes,note,remplacement_compteur) VALUES(?,?,?,?,?,?)").bind(meter_id).bind(&date).bind(index).bind(if bands.is_empty(){None}else{Some(bands.join(","))}).bind(form_text(&form,"note").or_else(||replacement.then(||"Compteur remplacé – nouvel index de départ".into()))).bind(replacement).execute(&state.pool).await?;Ok(Redirect::to(&format!("/energie#compteur-{meter_id}")).into_response())
 }
 
-async fn present_bands(pool:&SqlitePool,site:Option<&str>,day:&str)->AppResult<Vec<String>>{let Some(day)=NaiveDate::parse_from_str(&day[..day.len().min(10)],"%Y-%m-%d").ok() else{return Ok(vec![])};let rows=generic_rows(pool,"SELECT code,date_mb,site FROM bande WHERE date_mb IS NOT NULL").await?;let mut out=Vec::new();for row in rows{let obj=row.as_object().unwrap();let code=obj.get("code").and_then(Value::as_str).unwrap_or("");let mb=obj.get("date_mb").and_then(Value::as_str).and_then(|v|NaiveDate::parse_from_str(&v[..v.len().min(10)],"%Y-%m-%d").ok());let row_site=obj.get("site").and_then(Value::as_str);if let Some(mb)=mb{if site.is_some()&&row_site.is_some()&&site!=row_site{continue}if day>=mb-Duration::days(115)&&day<=mb+Duration::days(225)&&!code.is_empty(){out.push(code.to_string())}}}out.sort();out.dedup();Ok(out)}
+async fn present_bands(pool:&SqlitePool,site:Option<&str>,day:&str)->AppResult<Vec<String>>{let Some(day)=parse_iso_date(day).and_then(|value|NaiveDate::parse_from_str(&value,"%Y-%m-%d").ok()) else{return Ok(vec![])};let rows=generic_rows(pool,"SELECT code,date_mb,site FROM bande WHERE date_mb IS NOT NULL").await?;let mut out=Vec::new();for row in rows{let Some(obj)=row.as_object() else{continue};let code=obj.get("code").and_then(Value::as_str).unwrap_or("");let mb=obj.get("date_mb").and_then(Value::as_str).and_then(parse_iso_date).and_then(|value|NaiveDate::parse_from_str(&value,"%Y-%m-%d").ok());let row_site=obj.get("site").and_then(Value::as_str);if let Some(mb)=mb{if site.is_some()&&row_site.is_some()&&site!=row_site{continue}if day>=mb-Duration::days(115)&&day<=mb+Duration::days(225)&&!code.is_empty(){out.push(code.to_string())}}}out.sort();out.dedup();Ok(out)}
 
 async fn energie_rappel(State(state):State<AppState>,Extension(session):Extension<SessionData>,Path(id):Path<i64>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;sqlx::query("UPDATE compteur_energie SET rappel_jours=? WHERE id=? AND type='eau'").bind(form_i64(&form,"rappel_jours")).bind(id).execute(&state.pool).await?;Ok(Redirect::to(&format!("/energie#compteur-{id}")).into_response())}
 async fn energie_releve_supprimer(State(state):State<AppState>,Extension(session):Extension<SessionData>,Path(id):Path<i64>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;let meter:Option<i64>=sqlx::query_scalar("SELECT compteur_id FROM releve_compteur WHERE id=?").bind(id).fetch_optional(&state.pool).await?;sqlx::query("DELETE FROM releve_compteur WHERE id=?").bind(id).execute(&state.pool).await?;Ok(Redirect::to(&meter.map(|x|format!("/energie#compteur-{x}")).unwrap_or_else(||"/energie".into())).into_response())}
@@ -3074,12 +3139,12 @@ async fn energie_import(
             .get("nom_compteur")
             .filter(|value| !value.is_empty())
             .ok_or_else(|| AppError::Invalid("nom_compteur manquant".into()))?;
-        let date = row
+        let date_raw = row
             .get("date_releve")
             .filter(|value| !value.is_empty())
             .ok_or_else(|| AppError::Invalid("date_releve manquante".into()))?;
-        NaiveDate::parse_from_str(&date[..date.len().min(10)], "%Y-%m-%d")
-            .map_err(|_| AppError::Invalid(format!("date_releve invalide : {date}")))?;
+        let date = parse_iso_date(date_raw)
+            .ok_or_else(|| AppError::Invalid(format!("date_releve invalide : {date_raw}")))?;
         let index = row
             .get("index")
             .and_then(|value| value.replace(',', ".").parse::<f64>().ok())
@@ -3134,14 +3199,14 @@ async fn energie_import(
             "SELECT COUNT(*) FROM releve_compteur WHERE compteur_id=? AND date_releve=? AND ABS(valeur_index-?)<0.000001",
         )
         .bind(meter_id)
-        .bind(date)
+        .bind(&date)
         .bind(index)
         .fetch_one(&mut *transaction)
         .await?;
         if duplicate == 0 {
             sqlx::query("INSERT INTO releve_compteur(compteur_id,date_releve,valeur_index,note,remplacement_compteur) VALUES(?,?,?,?,?)")
                 .bind(meter_id)
-                .bind(date)
+                .bind(&date)
                 .bind(index)
                 .bind(row.get("note"))
                 .bind(matches!(row.get("remplacement_compteur").map(|value| value.to_lowercase()).as_deref(), Some("oui" | "1" | "true" | "x")))
@@ -3502,13 +3567,13 @@ async fn economique_import_annuler(
     Ok(Redirect::to("/economique").into_response())
 }
 
-async fn economique_aliment(State(state):State<AppState>,Extension(session):Extension<SessionData>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;let amount=economic_amount(&form,"montant_ht").ok_or_else(||AppError::Invalid("Montant HT obligatoire".into()))?;sqlx::query("INSERT INTO livraisonaliment(date,fournisseur,produit,silo,tonnage,pu_ht,montant_ht,num_facture,site,bande_id) VALUES(?,?,?,?,?,?,?,?,?,?)").bind(form_text(&form,"date")).bind(form_text(&form,"fournisseur")).bind(form_text(&form,"produit")).bind(form_text(&form,"silo")).bind(form_f64(&form,"tonnage")).bind(form_f64(&form,"pu_ht")).bind(amount).bind(form_text(&form,"num_facture")).bind(form_text(&form,"site")).bind(form_i64(&form,"bande_id")).execute(&state.pool).await?;Ok(Redirect::to("/economique").into_response())}
-async fn economique_veto(State(state):State<AppState>,Extension(session):Extension<SessionData>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;let amount=economic_amount(&form,"montant_ht").ok_or_else(||AppError::Invalid("Montant HT obligatoire".into()))?;sqlx::query("INSERT INTO achatveto(date,produit,quantite,pu_ht,montant_ht,num_facture,delai_attente,fournisseur,site,bande_id) VALUES(?,?,?,?,?,?,?,?,?,?)").bind(form_text(&form,"date")).bind(form_text(&form,"produit")).bind(form_f64(&form,"quantite")).bind(form_f64(&form,"pu_ht")).bind(amount).bind(form_text(&form,"num_facture")).bind(form_i64(&form,"delai_attente")).bind(form_text(&form,"fournisseur")).bind(form_text(&form,"site")).bind(form_i64(&form,"bande_id")).execute(&state.pool).await?;Ok(Redirect::to("/economique").into_response())}
-async fn economique_vente(State(state):State<AppState>,Extension(session):Extension<SessionData>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;let number=form_i64(&form,"nb_porcs").filter(|value|*value>=0);let weight=form_f64(&form,"poids_total").filter(|value|*value>=0.0);let average=match(number,weight){(Some(n),Some(w))if n>0=>Some(w/n as f64),_=>form_f64(&form,"poids_moyen")};let amount=economic_amount(&form,"montant_net").ok_or_else(||AppError::Invalid("Montant net obligatoire".into()))?;sqlx::query("INSERT INTO venteapport(date,num_apport,bande_id,nb_porcs,poids_total,poids_moyen,prix_moyen,plus_value,montant_net,tmp,tx_qualification,nb_hors_poids,nb_tmp_bas,nb_g2,nb_tatouage,nb_qualifies,nb_livres,muscle_gamme,muscle_lot,total_retenues) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").bind(form_text(&form,"date")).bind(form_text(&form,"num_apport")).bind(form_i64(&form,"bande_id")).bind(number).bind(weight).bind(average).bind(form_f64(&form,"prix_moyen")).bind(form_f64(&form,"plus_value")).bind(amount).bind(form_f64(&form,"tmp")).bind(form_f64(&form,"tx_qualification")).bind(form_i64(&form,"nb_hors_poids")).bind(form_i64(&form,"nb_tmp_bas")).bind(form_i64(&form,"nb_g2")).bind(form_i64(&form,"nb_tatouage")).bind(form_i64(&form,"nb_qualifies")).bind(form_i64(&form,"nb_livres")).bind(form_f64(&form,"muscle_gamme")).bind(form_f64(&form,"muscle_lot")).bind(form_f64(&form,"total_retenues")).execute(&state.pool).await?;Ok(Redirect::to("/economique").into_response())}
-async fn economique_semence(State(state):State<AppState>,Extension(session):Extension<SessionData>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;let amount=economic_amount(&form,"montant_ht").ok_or_else(||AppError::Invalid("Montant HT obligatoire".into()))?;let ttc=economic_amount(&form,"montant_ttc");sqlx::query("INSERT INTO achatsemence(date,num_facture,fournisseur,designation,nb_doses,montant_ht,montant_ttc,bande_id,note) VALUES(?,?,?,?,?,?,?,?,?)").bind(form_text(&form,"date")).bind(form_text(&form,"num_facture")).bind(form_text(&form,"fournisseur")).bind(form_text(&form,"designation")).bind(form_i64(&form,"nb_doses")).bind(amount).bind(ttc).bind(form_i64(&form,"bande_id")).bind(form_text(&form,"note")).execute(&state.pool).await?;Ok(Redirect::to("/economique").into_response())}
-async fn economique_genetique(State(state):State<AppState>,Extension(session):Extension<SessionData>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;let amount=economic_amount(&form,"montant_net").or_else(||economic_amount(&form,"montant_ht")).ok_or_else(||AppError::Invalid("Montant obligatoire".into()))?;sqlx::query("INSERT INTO achatgenetique(date,num_facture,fournisseur,designation,nb_animaux,poids_total,prix_moyen,montant_ht,montant_net,bande_code,note) VALUES(?,?,?,?,?,?,?,?,?,?,?)").bind(form_text(&form,"date")).bind(form_text(&form,"num_facture")).bind(form_text(&form,"fournisseur").unwrap_or_else(||"Cooperl".into())).bind(form_text(&form,"designation")).bind(form_i64(&form,"nb_animaux")).bind(form_f64(&form,"poids_total")).bind(form_f64(&form,"prix_moyen")).bind(None::<f64>).bind(amount).bind(form_text(&form,"bande_code")).bind(form_text(&form,"note")).execute(&state.pool).await?;Ok(Redirect::to("/economique").into_response())}
+async fn economique_aliment(State(state):State<AppState>,Extension(session):Extension<SessionData>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;let amount=economic_amount(&form,"montant_ht").ok_or_else(||AppError::Invalid("Montant HT obligatoire".into()))?;sqlx::query("INSERT INTO livraisonaliment(date,fournisseur,produit,silo,tonnage,pu_ht,montant_ht,num_facture,site,bande_id) VALUES(?,?,?,?,?,?,?,?,?,?)").bind(form_date(&form,"date")?).bind(form_text(&form,"fournisseur")).bind(form_text(&form,"produit")).bind(form_text(&form,"silo")).bind(form_f64(&form,"tonnage")).bind(form_f64(&form,"pu_ht")).bind(amount).bind(form_text(&form,"num_facture")).bind(form_text(&form,"site")).bind(form_i64(&form,"bande_id")).execute(&state.pool).await?;Ok(Redirect::to("/economique").into_response())}
+async fn economique_veto(State(state):State<AppState>,Extension(session):Extension<SessionData>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;let amount=economic_amount(&form,"montant_ht").ok_or_else(||AppError::Invalid("Montant HT obligatoire".into()))?;sqlx::query("INSERT INTO achatveto(date,produit,quantite,pu_ht,montant_ht,num_facture,delai_attente,fournisseur,site,bande_id) VALUES(?,?,?,?,?,?,?,?,?,?)").bind(form_date(&form,"date")?).bind(form_text(&form,"produit")).bind(form_f64(&form,"quantite")).bind(form_f64(&form,"pu_ht")).bind(amount).bind(form_text(&form,"num_facture")).bind(form_i64(&form,"delai_attente")).bind(form_text(&form,"fournisseur")).bind(form_text(&form,"site")).bind(form_i64(&form,"bande_id")).execute(&state.pool).await?;Ok(Redirect::to("/economique").into_response())}
+async fn economique_vente(State(state):State<AppState>,Extension(session):Extension<SessionData>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;let number=form_i64(&form,"nb_porcs").filter(|value|*value>=0);let weight=form_f64(&form,"poids_total").filter(|value|*value>=0.0);let average=match(number,weight){(Some(n),Some(w))if n>0=>Some(w/n as f64),_=>form_f64(&form,"poids_moyen")};let amount=economic_amount(&form,"montant_net").ok_or_else(||AppError::Invalid("Montant net obligatoire".into()))?;sqlx::query("INSERT INTO venteapport(date,num_apport,bande_id,nb_porcs,poids_total,poids_moyen,prix_moyen,plus_value,montant_net,tmp,tx_qualification,nb_hors_poids,nb_tmp_bas,nb_g2,nb_tatouage,nb_qualifies,nb_livres,muscle_gamme,muscle_lot,total_retenues) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").bind(form_date(&form,"date")?).bind(form_text(&form,"num_apport")).bind(form_i64(&form,"bande_id")).bind(number).bind(weight).bind(average).bind(form_f64(&form,"prix_moyen")).bind(form_f64(&form,"plus_value")).bind(amount).bind(form_f64(&form,"tmp")).bind(form_f64(&form,"tx_qualification")).bind(form_i64(&form,"nb_hors_poids")).bind(form_i64(&form,"nb_tmp_bas")).bind(form_i64(&form,"nb_g2")).bind(form_i64(&form,"nb_tatouage")).bind(form_i64(&form,"nb_qualifies")).bind(form_i64(&form,"nb_livres")).bind(form_f64(&form,"muscle_gamme")).bind(form_f64(&form,"muscle_lot")).bind(form_f64(&form,"total_retenues")).execute(&state.pool).await?;Ok(Redirect::to("/economique").into_response())}
+async fn economique_semence(State(state):State<AppState>,Extension(session):Extension<SessionData>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;let amount=economic_amount(&form,"montant_ht").ok_or_else(||AppError::Invalid("Montant HT obligatoire".into()))?;let ttc=economic_amount(&form,"montant_ttc");sqlx::query("INSERT INTO achatsemence(date,num_facture,fournisseur,designation,nb_doses,montant_ht,montant_ttc,bande_id,note) VALUES(?,?,?,?,?,?,?,?,?)").bind(form_date(&form,"date")?).bind(form_text(&form,"num_facture")).bind(form_text(&form,"fournisseur")).bind(form_text(&form,"designation")).bind(form_i64(&form,"nb_doses")).bind(amount).bind(ttc).bind(form_i64(&form,"bande_id")).bind(form_text(&form,"note")).execute(&state.pool).await?;Ok(Redirect::to("/economique").into_response())}
+async fn economique_genetique(State(state):State<AppState>,Extension(session):Extension<SessionData>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;let amount=economic_amount(&form,"montant_net").or_else(||economic_amount(&form,"montant_ht")).ok_or_else(||AppError::Invalid("Montant obligatoire".into()))?;sqlx::query("INSERT INTO achatgenetique(date,num_facture,fournisseur,designation,nb_animaux,poids_total,prix_moyen,montant_ht,montant_net,bande_code,note) VALUES(?,?,?,?,?,?,?,?,?,?,?)").bind(form_date(&form,"date")?).bind(form_text(&form,"num_facture")).bind(form_text(&form,"fournisseur").unwrap_or_else(||"Cooperl".into())).bind(form_text(&form,"designation")).bind(form_i64(&form,"nb_animaux")).bind(form_f64(&form,"poids_total")).bind(form_f64(&form,"prix_moyen")).bind(None::<f64>).bind(amount).bind(form_text(&form,"bande_code")).bind(form_text(&form,"note")).execute(&state.pool).await?;Ok(Redirect::to("/economique").into_response())}
 
-async fn economique_valorisation(State(state):State<AppState>,Extension(session):Extension<SessionData>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;let label=form_text(&form,"libelle").ok_or_else(||AppError::Invalid("Libellé obligatoire".into()))?;let lower=label.to_lowercase();let forced_retention=["équarrissage","equarrissage","groupement","cvee","contribution sanitaire","cotisation"].iter().any(|needle|lower.contains(needle));let category=if forced_retention||form.get("categorie").map(String::as_str)==Some("retenue"){"retenue"}else{"valorisation"};let amount=form_f64(&form,"montant").ok_or_else(||AppError::Invalid("Montant obligatoire".into()))?;let stored=if category=="retenue"{-amount.abs()}else{amount};let number=form_text(&form,"num_apport");let mut tx=state.pool.begin().await?;sqlx::query("INSERT INTO valorisationapport(num_apport,date,libelle,montant,categorie) VALUES(?,?,?,?,?)").bind(&number).bind(form_text(&form,"date")).bind(label).bind(stored).bind(category).execute(&mut *tx).await?;if let Some(number)=number{sqlx::query("UPDATE venteapport SET total_retenues=(SELECT ROUND(COALESCE(SUM(ABS(montant)),0),2) FROM valorisationapport WHERE num_apport=? AND lower(COALESCE(categorie,''))='retenue') WHERE num_apport=?").bind(&number).bind(&number).execute(&mut *tx).await?;}tx.commit().await?;Ok(Redirect::to("/economique").into_response())}
+async fn economique_valorisation(State(state):State<AppState>,Extension(session):Extension<SessionData>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;let label=form_text(&form,"libelle").ok_or_else(||AppError::Invalid("Libellé obligatoire".into()))?;let lower=label.to_lowercase();let forced_retention=["équarrissage","equarrissage","groupement","cvee","contribution sanitaire","cotisation"].iter().any(|needle|lower.contains(needle));let category=if forced_retention||form.get("categorie").map(String::as_str)==Some("retenue"){"retenue"}else{"valorisation"};let amount=form_f64(&form,"montant").ok_or_else(||AppError::Invalid("Montant obligatoire".into()))?;let stored=if category=="retenue"{-amount.abs()}else{amount};let number=form_text(&form,"num_apport");let date=form_date(&form,"date")?;let mut tx=state.pool.begin().await?;sqlx::query("INSERT INTO valorisationapport(num_apport,date,libelle,montant,categorie) VALUES(?,?,?,?,?)").bind(&number).bind(date).bind(label).bind(stored).bind(category).execute(&mut *tx).await?;if let Some(number)=number{sqlx::query("UPDATE venteapport SET total_retenues=(SELECT ROUND(COALESCE(SUM(ABS(montant)),0),2) FROM valorisationapport WHERE num_apport=? AND lower(COALESCE(categorie,''))='retenue') WHERE num_apport=?").bind(&number).bind(&number).execute(&mut *tx).await?;}tx.commit().await?;Ok(Redirect::to("/economique").into_response())}
 
 macro_rules! delete_handler{($name:ident,$table:literal)=>{async fn $name(State(state):State<AppState>,Extension(session):Extension<SessionData>,Path(id):Path<i64>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;sqlx::query(concat!("DELETE FROM ",$table," WHERE id=?")).bind(id).execute(&state.pool).await?;Ok(Redirect::to("/economique").into_response())}}}
 delete_handler!(economique_aliment_supprimer,"livraisonaliment");delete_handler!(economique_veto_supprimer,"achatveto");delete_handler!(economique_vente_supprimer,"venteapport");delete_handler!(economique_semence_supprimer,"achatsemence");delete_handler!(economique_genetique_supprimer,"achatgenetique");
@@ -3578,7 +3643,7 @@ async fn produit_inventaire(
 
 async fn produit_deplacer(State(state):State<AppState>,Extension(session):Extension<SessionData>,Path(id):Path<i64>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;let current:Option<i64>=sqlx::query_scalar("SELECT ordre FROM produitventedirecte WHERE id=?").bind(id).fetch_optional(&state.pool).await?;if let Some(current)=current{let direction=form.get("direction").map(String::as_str).unwrap_or("");let other:Option<(i64,i64)>=match direction{"haut"=>sqlx::query_as("SELECT id,ordre FROM produitventedirecte WHERE ordre<? ORDER BY ordre DESC LIMIT 1").bind(current).fetch_optional(&state.pool).await?,"bas"=>sqlx::query_as("SELECT id,ordre FROM produitventedirecte WHERE ordre>? ORDER BY ordre LIMIT 1").bind(current).fetch_optional(&state.pool).await?,_=>None};if let Some((other_id,other_order))=other{let mut tx=state.pool.begin().await?;sqlx::query("UPDATE produitventedirecte SET ordre=? WHERE id=?").bind(other_order).bind(id).execute(&mut *tx).await?;sqlx::query("UPDATE produitventedirecte SET ordre=? WHERE id=?").bind(current).bind(other_id).execute(&mut *tx).await?;tx.commit().await?;}}Ok(Redirect::to("/vente-directe#produits").into_response())}
 
-async fn vente_reglage_livraison(State(state):State<AppState>,Extension(session):Extension<SessionData>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;sqlx::query("INSERT INTO reglageventedirecte(id,date_livraison,texte_livraison) VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET date_livraison=excluded.date_livraison,texte_livraison=excluded.texte_livraison").bind(form_text(&form,"date_livraison")).bind(form_text(&form,"texte_livraison")).execute(&state.pool).await?;Ok(Redirect::to("/vente-directe").into_response())}
+async fn vente_reglage_livraison(State(state):State<AppState>,Extension(session):Extension<SessionData>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;sqlx::query("INSERT INTO reglageventedirecte(id,date_livraison,texte_livraison) VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET date_livraison=excluded.date_livraison,texte_livraison=excluded.texte_livraison").bind(form_date(&form,"date_livraison")?).bind(form_text(&form,"texte_livraison")).execute(&state.pool).await?;Ok(Redirect::to("/vente-directe").into_response())}
 
 async fn commande_statut(State(state):State<AppState>,Extension(session):Extension<SessionData>,Path(id):Path<i64>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;let new_status=form_text(&form,"statut").unwrap_or_else(||"nouvelle".into());if !matches!(new_status.as_str(),"nouvelle"|"validee"|"preparation"|"prete"|"livree"|"annulee"){return Err(AppError::Invalid("Statut invalide".into()))}let mut tx=state.pool.begin().await?;let old:Option<String>=sqlx::query_scalar("SELECT statut FROM commandeventedirecte WHERE id=?").bind(id).fetch_optional(&mut *tx).await?;let Some(old)=old else{return Err(AppError::NotFound)};let lines=sqlx::query_as::<_,(Option<i64>,f64)>("SELECT produit_id,quantite FROM lignecommandeventedirecte WHERE commande_id=?").bind(id).fetch_all(&mut *tx).await?;if new_status=="annulee"&&old!="annulee"{for(product_id,quantity)in &lines{if let Some(product_id)=product_id{sqlx::query("UPDATE produitventedirecte SET quantite_disponible=quantite_disponible+? WHERE id=? AND quantite_disponible IS NOT NULL").bind(quantity).bind(product_id).execute(&mut *tx).await?;}}}else if old=="annulee"&&new_status!="annulee"{for(product_id,quantity)in &lines{if let Some(product_id)=product_id{let stock:Option<f64>=sqlx::query_scalar("SELECT quantite_disponible FROM produitventedirecte WHERE id=?").bind(product_id).fetch_optional(&mut *tx).await?.flatten();if stock.is_some_and(|value|value<*quantity){return Err(AppError::Invalid("Stock insuffisant pour réactiver la commande".into()))}}}for(product_id,quantity)in &lines{if let Some(product_id)=product_id{sqlx::query("UPDATE produitventedirecte SET quantite_disponible=quantite_disponible-? WHERE id=? AND quantite_disponible IS NOT NULL").bind(quantity).bind(product_id).execute(&mut *tx).await?;}}}sqlx::query("UPDATE commandeventedirecte SET statut=? WHERE id=?").bind(new_status).bind(id).execute(&mut *tx).await?;tx.commit().await?;Ok(Redirect::to("/vente-directe").into_response())}
 
@@ -3789,7 +3854,7 @@ async fn commande_post(State(state):State<AppState>,Form(form):Form<HashMap<Stri
 }
 
 async fn utilisateurs(State(state):State<AppState>,Extension(session):Extension<SessionData>)->AppResult<Html<String>>{if!session.est_admin(){return Err(AppError::Forbidden)}let users=sqlx::query_as::<_,Utilisateur>("SELECT id,identifiant,nom,prenom,hash_mdp,role,actif,sections,doit_changer_mdp,tentatives_echec,bloque_jusqu FROM utilisateur ORDER BY identifiant").fetch_all(&state.pool).await?;let mut ctx=context(&session);ctx.insert("utilisateurs".into(),serde_json::to_value(users).unwrap_or_default());render(&state,"utilisateurs.html",Value::Object(ctx))}
-async fn utilisateur_creer(State(state):State<AppState>,Extension(session):Extension<SessionData>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{if!session.est_admin(){return Err(AppError::Forbidden)}verify_csrf(&session,&form)?;let id=form_text(&form,"identifiant").ok_or_else(||AppError::Invalid("Identifiant obligatoire".into()))?;let password=form.get("mdp").cloned().unwrap_or_default();if password.len()<8{return Err(AppError::Invalid("Mot de passe: 8 caractères minimum".into()))}let role=form.get("role").map(String::as_str).unwrap_or("salarie");if!matches!(role,"admin"|"eleveur"|"salarie"|"engraisseur"){return Err(AppError::Invalid("Rôle invalide".into()))}sqlx::query("INSERT INTO utilisateur(identifiant,nom,prenom,hash_mdp,role,actif,doit_changer_mdp) VALUES(?,?,?,?,?,1,1)").bind(id).bind(form_text(&form,"nom")).bind(form_text(&form,"prenom")).bind(auth::hash_password(&password)).bind(role).execute(&state.pool).await?;Ok(Redirect::to("/utilisateurs").into_response())}
+async fn utilisateur_creer(State(state):State<AppState>,Extension(session):Extension<SessionData>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{if!session.est_admin(){return Err(AppError::Forbidden)}verify_csrf(&session,&form)?;let id=form_text(&form,"identifiant").ok_or_else(||AppError::Invalid("Identifiant obligatoire".into()))?;let password=form.get("mdp").cloned().unwrap_or_default();if password.len()<8{return Err(AppError::Invalid("Mot de passe: 8 caractères minimum".into()))}let role=form.get("role").map(String::as_str).unwrap_or("salarie");if!matches!(role,"admin"|"eleveur"|"salarie"|"engraisseur"){return Err(AppError::Invalid("Rôle invalide".into()))}let hash=auth::hash_password_async(password).await?;sqlx::query("INSERT INTO utilisateur(identifiant,nom,prenom,hash_mdp,role,actif,doit_changer_mdp) VALUES(?,?,?,?,?,1,1)").bind(id).bind(form_text(&form,"nom")).bind(form_text(&form,"prenom")).bind(hash).bind(role).execute(&state.pool).await?;Ok(Redirect::to("/utilisateurs").into_response())}
 async fn utilisateur_actif(State(state):State<AppState>,Extension(session):Extension<SessionData>,Path(id):Path<i64>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{if!session.est_admin(){return Err(AppError::Forbidden)}verify_csrf(&session,&form)?;sqlx::query("UPDATE utilisateur SET actif=CASE actif WHEN 1 THEN 0 ELSE 1 END WHERE id=? AND identifiant<>'admin'").bind(id).execute(&state.pool).await?;Ok(Redirect::to("/utilisateurs").into_response())}
 
 async fn utilisateur_sections(
@@ -3849,8 +3914,9 @@ async fn utilisateur_mdp(
             "Le mot de passe doit contenir au moins 8 caractères".into(),
         ));
     }
+    let hash = auth::hash_password_async(password).await?;
     sqlx::query("UPDATE utilisateur SET hash_mdp=?,doit_changer_mdp=1,tentatives_echec=0,bloque_jusqu=NULL WHERE id=?")
-        .bind(auth::hash_password(&password))
+        .bind(hash)
         .bind(id)
         .execute(&state.pool)
         .await?;
@@ -4085,7 +4151,7 @@ async fn sanitaire_fait(
     verify_csrf(&session,&form)?;
     let act=form_i64(&form,"acte_id").ok_or_else(||AppError::Invalid("Acte manquant".into()))?;
     let band=form_i64(&form,"bande_id").ok_or_else(||AppError::Invalid("Bande manquante".into()))?;
-    let date=form_text(&form,"date_realise").unwrap_or_else(||Local::now().date_naive().format("%Y-%m-%d").to_string());
+    let date=form_date_or_today(&form,"date_realise")?;
     sqlx::query("INSERT INTO acterealise(acte_id,bande_id,date_realise,note) SELECT ?,?,?,? WHERE EXISTS(SELECT 1 FROM acteprotocole WHERE id=? AND actif=1) AND EXISTS(SELECT 1 FROM bande WHERE id=?)")
         .bind(act).bind(band).bind(date).bind(form_text(&form,"note")).bind(act).bind(band).execute(&state.pool).await?;
     Ok(Redirect::to("/sanitaire").into_response())
@@ -4117,7 +4183,7 @@ async fn pharmacie_mouvement(
     let stock: f64=sqlx::query_scalar("SELECT CAST(COALESCE(stock_actuel,0) AS REAL) FROM produitpharmacie WHERE lower(produit)=lower(?) LIMIT 1").bind(&product).fetch_one(&mut *tx).await?;
     let new_stock=match kind{"entree"=>stock+quantity,"inventaire"=>quantity,_ if quantity<=stock=>stock-quantity,_=>return Err(AppError::Invalid(format!("Stock insuffisant : {stock}")))};
     sqlx::query("UPDATE produitpharmacie SET stock_actuel=?,maj=CURRENT_TIMESTAMP WHERE lower(produit)=lower(?)").bind(new_stock).bind(&product).execute(&mut *tx).await?;
-    sqlx::query("INSERT INTO mouvementpharmacie(produit,date,type,quantite,note,bande_code) VALUES(?,?,?,?,?,?)").bind(&product).bind(form_text(&form,"date")).bind(kind).bind(quantity).bind(form_text(&form,"note")).bind(form_text(&form,"bande_code")).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO mouvementpharmacie(produit,date,type,quantite,note,bande_code) VALUES(?,?,?,?,?,?)").bind(&product).bind(form_date(&form,"date")?).bind(kind).bind(quantity).bind(form_text(&form,"note")).bind(form_text(&form,"bande_code")).execute(&mut *tx).await?;
     tx.commit().await?;Ok(Redirect::to("/pharmacie").into_response())
 }
 
@@ -4170,7 +4236,7 @@ async fn entretien_ajouter(
         .bind(nom)
         .bind(form_text(&form, "type"))
         .bind(form_text(&form, "site"))
-        .bind(form_text(&form, "derniere_date"))
+        .bind(form_date(&form, "derniere_date")?)
         .bind(form_i64(&form, "frequence_jours").unwrap_or(365).max(1))
         .bind(form_text(&form, "note"))
         .execute(&state.pool)
@@ -4186,8 +4252,7 @@ async fn entretien_date(
 ) -> AppResult<Response> {
     require_writer(&session)?;
     verify_csrf(&session, &form)?;
-    let date = form_text(&form, "derniere_date")
-        .unwrap_or_else(|| Local::now().date_naive().format("%Y-%m-%d").to_string());
+    let date = form_date_or_today(&form, "derniere_date")?;
     sqlx::query("UPDATE entretien SET derniere_date=? WHERE id=?")
         .bind(date)
         .bind(id)
@@ -4286,7 +4351,7 @@ async fn declaration_ajouter(
     }
     sqlx::query("INSERT INTO declarationmort(bande_code,date,stade,case_id,cause,poids,nombre,declare_par,note) VALUES(?,?,?,?,?,?,?,?,?)")
         .bind(&band)
-        .bind(form_text(&form, "date").unwrap_or_else(|| Local::now().date_naive().format("%Y-%m-%d").to_string()))
+        .bind(form_date_or_today(&form, "date")?)
         .bind(form_text(&form, "stade"))
         .bind(case_id)
         .bind(form_text(&form, "cause"))
@@ -4410,7 +4475,7 @@ async fn abattoir_saisie(
     let morceau = form_text(&form, "morceau")
         .ok_or_else(|| AppError::Invalid("Morceau obligatoire".into()))?;
     sqlx::query("INSERT INTO saisieabattoir(date,bande_code,num_apport,morceau,nombre,motif,note) VALUES(?,?,?,?,?,?,?)")
-        .bind(form_text(&form, "date").unwrap_or_else(|| Local::now().date_naive().format("%Y-%m-%d").to_string()))
+        .bind(form_date_or_today(&form, "date")?)
         .bind(form_text(&form, "bande_code"))
         .bind(form_text(&form, "num_apport"))
         .bind(morceau)
@@ -4587,7 +4652,7 @@ async fn vente_sessions(
     let mut ctx=context(&session);ctx.insert("sessions_vente".into(),Value::Array(sessions));ctx.insert("charges".into(),Value::Array(charges));ctx.insert("bandes".into(),Value::Array(bands));ctx.insert("today".into(),json!(Local::now().date_naive().format("%Y-%m-%d").to_string()));render(&state,"vente_sessions.html",Value::Object(ctx))
 }
 
-async fn vente_session_creer(State(state):State<AppState>,Extension(session):Extension<SessionData>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;let name=form_text(&form,"nom").ok_or_else(||AppError::Invalid("Nom de session obligatoire".into()))?.chars().take(160).collect::<String>();let mut tx=state.pool.begin().await?;sqlx::query("UPDATE sessionventedirecte SET active=0 WHERE active=1").execute(&mut *tx).await?;let id=sqlx::query("INSERT INTO sessionventedirecte(nom,date_creation,date_livraison,nb_porcs,bande_reference,active,notes) VALUES(?,date('now'),?,?,?,1,?)").bind(name).bind(form_text(&form,"date_livraison")).bind(form_i64(&form,"nb_porcs").unwrap_or(0).max(0)).bind(form_text(&form,"bande_reference")).bind(form_text(&form,"notes")).execute(&mut *tx).await?.last_insert_rowid();sqlx::query("INSERT OR IGNORE INTO coutelevageventedirecte(session_vente_id) VALUES(?)").bind(id).execute(&mut *tx).await?;sqlx::query("INSERT INTO reglageventedirecte(id,date_livraison) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET date_livraison=excluded.date_livraison").bind(form_text(&form,"date_livraison")).execute(&mut *tx).await?;tx.commit().await?;Ok(Redirect::to("/vente-directe/sessions").into_response())}
+async fn vente_session_creer(State(state):State<AppState>,Extension(session):Extension<SessionData>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;let name=form_text(&form,"nom").ok_or_else(||AppError::Invalid("Nom de session obligatoire".into()))?.chars().take(160).collect::<String>();let delivery_date=form_date(&form,"date_livraison")?;let mut tx=state.pool.begin().await?;sqlx::query("UPDATE sessionventedirecte SET active=0 WHERE active=1").execute(&mut *tx).await?;let id=sqlx::query("INSERT INTO sessionventedirecte(nom,date_creation,date_livraison,nb_porcs,bande_reference,active,notes) VALUES(?,date('now'),?,?,?,1,?)").bind(name).bind(&delivery_date).bind(form_i64(&form,"nb_porcs").unwrap_or(0).max(0)).bind(form_text(&form,"bande_reference")).bind(form_text(&form,"notes")).execute(&mut *tx).await?.last_insert_rowid();sqlx::query("INSERT OR IGNORE INTO coutelevageventedirecte(session_vente_id) VALUES(?)").bind(id).execute(&mut *tx).await?;sqlx::query("INSERT INTO reglageventedirecte(id,date_livraison) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET date_livraison=excluded.date_livraison").bind(delivery_date).execute(&mut *tx).await?;tx.commit().await?;Ok(Redirect::to("/vente-directe/sessions").into_response())}
 
 async fn vente_session_activer(State(state):State<AppState>,Extension(session):Extension<SessionData>,Path(id):Path<i64>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;let row:Option<(Option<String>,)>=sqlx::query_as("SELECT date_livraison FROM sessionventedirecte WHERE id=?").bind(id).fetch_optional(&state.pool).await?;let Some((date,))=row else{return Err(AppError::NotFound)};let mut tx=state.pool.begin().await?;sqlx::query("UPDATE sessionventedirecte SET active=CASE WHEN id=? THEN 1 ELSE 0 END").bind(id).execute(&mut *tx).await?;sqlx::query("INSERT INTO reglageventedirecte(id,date_livraison) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET date_livraison=excluded.date_livraison").bind(date).execute(&mut *tx).await?;tx.commit().await?;Ok(Redirect::to("/vente-directe/sessions").into_response())}
 
@@ -4612,7 +4677,7 @@ async fn vente_session_modifier(
     let Some(active) = active else {
         return Err(AppError::NotFound);
     };
-    let delivery_date = form_text(&form, "date_livraison");
+    let delivery_date = form_date(&form, "date_livraison")?;
     sqlx::query("UPDATE sessionventedirecte SET nom=?,date_livraison=?,nb_porcs=?,bande_reference=?,notes=? WHERE id=?")
         .bind(name)
         .bind(&delivery_date)
@@ -4745,7 +4810,7 @@ mod gttt_tests {
         GtttLitter {
             sow_number: "T1".into(),
             band: Some("B1".into()),
-            farrowing_date: Some(NaiveDate::from_ymd_opt(2026, 1, 1).unwrap()),
+            farrowing_date: NaiveDate::from_ymd_opt(2026, 1, 1),
             rank: 1,
             gestation: Some(115.0),
             live_born: Some(live_born),
@@ -4775,7 +4840,7 @@ mod gttt_tests {
         let mut second_sow = first_sow.clone();
         second_sow.sow_number = "T2".into();
         let mut first_sow_next = first_sow.clone();
-        first_sow_next.farrowing_date = Some(NaiveDate::from_ymd_opt(2026, 7, 1).unwrap());
+        first_sow_next.farrowing_date = NaiveDate::from_ymd_opt(2026, 7, 1);
         let mut second_sow_next = second_sow.clone();
         second_sow_next.farrowing_date = first_sow_next.farrowing_date;
         let summary = gttt_summary(&[first_sow, second_sow, first_sow_next, second_sow_next]);
