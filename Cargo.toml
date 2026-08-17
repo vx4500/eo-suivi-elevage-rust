@@ -17,7 +17,7 @@ minijinja = { version = "2.7", features = ["loader", "json", "preserve_order"] }
 lopdf = "0.44"
 pbkdf2 = "0.12"
 rand = "0.8"
-qrcode = { version = "0.14", default-features = false }
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 regex = "1.12"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1.0", features = ["derive"] }
