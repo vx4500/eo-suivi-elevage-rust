@@ -118,7 +118,7 @@ pub fn router(state: AppState) -> Router {
         .route("/economique", get(economique))
         .route(
             "/economique/import-pdf",
-            post(economique_import_pdf).layer(DefaultBodyLimit::max(10 * 1024 * 1024)),
+            post(economique_import_pdf).layer(DefaultBodyLimit::max(42 * 1024 * 1024)),
         )
         .route("/economique/import/{token}", get(economique_import_apercu))
         .route(
@@ -3415,6 +3415,7 @@ async fn economique(
     ctx.insert("non_affectes".into(),Value::Array(unallocated));
     ctx.insert("imports_pdf".into(),Value::Array(imports));
     ctx.insert("import_ok".into(),json!(query.get("import_ok")));
+    ctx.insert("imports_prets".into(),json!(query.get("imports_prets")));
     ctx.insert("today".into(),json!(Local::now().date_naive().format("%Y-%m-%d").to_string()));
     render(&state,"economique.html",Value::Object(ctx))
 }
@@ -3499,16 +3500,16 @@ async fn economique_import_pdf(
 ) -> AppResult<Response> {
     require_economic_import(&session)?;
     let mut csrf = None;
-    let mut filename = "document.pdf".to_string();
-    let mut data = None;
+    let mut files = Vec::new();
     while let Some(field) = multipart.next_field().await.map_err(|error|AppError::Invalid(error.to_string()))? {
         match field.name() {
             Some("csrf_token") => csrf = Some(field.text().await.map_err(|error|AppError::Invalid(error.to_string()))?),
             Some("fichier") => {
-                filename = field.file_name().unwrap_or("document.pdf").chars()
+                let filename: String = field.file_name().unwrap_or("document.pdf").chars()
                     .filter(|character| character.is_alphanumeric() || ".-_ ".contains(*character))
                     .take(180).collect();
-                data = Some(field.bytes().await.map_err(|error|AppError::Invalid(error.to_string()))?);
+                let data = field.bytes().await.map_err(|error|AppError::Invalid(error.to_string()))?;
+                files.push((filename, data));
             }
             _ => {}
         }
@@ -3516,44 +3517,67 @@ async fn economique_import_pdf(
     if csrf.as_deref() != Some(session.csrf.as_str()) {
         return Err(AppError::Forbidden);
     }
-    let bytes = data.ok_or_else(||AppError::Invalid("Fichier PDF manquant".into()))?;
-    if bytes.len() > 8 * 1024 * 1024 {
-        return Err(AppError::Invalid("PDF trop volumineux (maximum 8 Mo)".into()));
+    if files.is_empty() {
+        return Err(AppError::Invalid("Fichier PDF manquant".into()));
     }
-    if !filename.to_lowercase().ends_with(".pdf") {
-        return Err(AppError::Invalid("Seuls les fichiers PDF sont acceptés dans cette version".into()));
+    if files.len() > 5 {
+        return Err(AppError::Invalid("Sélectionne au maximum 5 PDF à la fois".into()));
     }
-    let text = economic_import::extract_pdf_text(&bytes).map_err(AppError::Invalid)?;
-    let parsed = economic_import::parse_document(&text).map_err(AppError::Invalid)?;
-    let token = uuid::Uuid::new_v4().simple().to_string();
+    let total_size: usize = files.iter().map(|(_, bytes)| bytes.len()).sum();
+    if total_size > 40 * 1024 * 1024 {
+        return Err(AppError::Invalid("Lot de PDF trop volumineux (maximum 40 Mo)".into()));
+    }
+    let mut documents = Vec::new();
+    for (filename, bytes) in files {
+        if bytes.len() > 8 * 1024 * 1024 {
+            return Err(AppError::Invalid(format!("{filename} dépasse 8 Mo")));
+        }
+        if !filename.to_lowercase().ends_with(".pdf") {
+            return Err(AppError::Invalid(format!("{filename} n'est pas un fichier PDF")));
+        }
+        let text = economic_import::extract_pdf_text(&bytes)
+            .map_err(|error| AppError::Invalid(format!("{filename} : {error}")))?;
+        let parsed = economic_import::parse_document(&text)
+            .map_err(|error| AppError::Invalid(format!("{filename} : {error}")))?;
+        documents.push((filename, parsed));
+    }
     let mut transaction = state.pool.begin().await?;
     sqlx::query("DELETE FROM importjournal WHERE statut='apercu' AND cree_le<datetime('now','-1 day')")
         .execute(&mut *transaction).await?;
-    sqlx::query("INSERT INTO importjournal(token,type_import,nom_fichier,statut,cree_par) VALUES(?,?,?,'apercu',?)")
-        .bind(&token).bind(format!("economique:{}",parsed.document_type)).bind(&filename).bind(session.uid)
-        .execute(&mut *transaction).await?;
-    let mut seen = HashSet::new();
-    let mut counts = HashMap::<String,i64>::new();
-    for (index,line) in parsed.lines.iter().enumerate() {
-        let (action,anomaly) = economic_preview_action(&mut transaction,line,&mut seen).await?;
-        *counts.entry(action.clone()).or_default() += 1;
-        sqlx::query("INSERT INTO importligne(token,numero_ligne,action,anomalie,donnees_json) VALUES(?,?,?,?,?)")
-            .bind(&token).bind(index as i64 + 1).bind(&action).bind(&anomaly)
-            .bind(serde_json::to_string(line).map_err(|error|AppError::Internal(error.into()))?)
+    let mut tokens = Vec::new();
+    for (filename, parsed) in documents {
+        let token = uuid::Uuid::new_v4().simple().to_string();
+        sqlx::query("INSERT INTO importjournal(token,type_import,nom_fichier,statut,cree_par) VALUES(?,?,?,'apercu',?)")
+            .bind(&token).bind(format!("economique:{}",parsed.document_type)).bind(&filename).bind(session.uid)
             .execute(&mut *transaction).await?;
+        let mut seen = HashSet::new();
+        let mut counts = HashMap::<String,i64>::new();
+        for (index,line) in parsed.lines.iter().enumerate() {
+            let (action,anomaly) = economic_preview_action(&mut transaction,line,&mut seen).await?;
+            *counts.entry(action.clone()).or_default() += 1;
+            sqlx::query("INSERT INTO importligne(token,numero_ligne,action,anomalie,donnees_json) VALUES(?,?,?,?,?)")
+                .bind(&token).bind(index as i64 + 1).bind(&action).bind(&anomaly)
+                .bind(serde_json::to_string(line).map_err(|error|AppError::Internal(error.into()))?)
+                .execute(&mut *transaction).await?;
+        }
+        let summary = json!({
+            "ajouter": counts.get("ajouter").copied().unwrap_or_default(),
+            "mettre_a_jour": counts.get("mettre_a_jour").copied().unwrap_or_default(),
+            "remplacer": counts.get("remplacer").copied().unwrap_or_default(),
+            "ignorer": counts.get("ignorer").copied().unwrap_or_default(),
+            "erreur": counts.get("erreur").copied().unwrap_or_default(),
+            "avertissements": parsed.warnings,
+        });
+        sqlx::query("UPDATE importjournal SET resume=? WHERE token=?")
+            .bind(summary.to_string()).bind(&token).execute(&mut *transaction).await?;
+        tokens.push(token);
     }
-    let summary = json!({
-        "ajouter": counts.get("ajouter").copied().unwrap_or_default(),
-        "mettre_a_jour": counts.get("mettre_a_jour").copied().unwrap_or_default(),
-        "remplacer": counts.get("remplacer").copied().unwrap_or_default(),
-        "ignorer": counts.get("ignorer").copied().unwrap_or_default(),
-        "erreur": counts.get("erreur").copied().unwrap_or_default(),
-        "avertissements": parsed.warnings,
-    });
-    sqlx::query("UPDATE importjournal SET resume=? WHERE token=?")
-        .bind(summary.to_string()).bind(&token).execute(&mut *transaction).await?;
     transaction.commit().await?;
-    Ok(Redirect::to(&format!("/economique/import/{token}")).into_response())
+    if tokens.len() == 1 {
+        Ok(Redirect::to(&format!("/economique/import/{}", tokens[0])).into_response())
+    } else {
+        Ok(Redirect::to(&format!("/economique?imports_prets={}", tokens.len())).into_response())
+    }
 }
 
 async fn economique_import_apercu(

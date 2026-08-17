@@ -124,3 +124,14 @@ fn la_version_222_couvre_les_demandes_de_suivi() {
     assert!(band.contains("Avance / retard"));
     assert!(sanitary.contains("Porcs traités hors vaccins"));
 }
+
+#[test]
+fn la_version_223_permet_plusieurs_imports_pdf_securises() {
+    let economic = include_str!("../templates/economique.html");
+    let routes = include_str!("../src/routes/mod.rs");
+    assert!(economic.contains("multiple required"));
+    assert!(economic.contains("Jusqu’à 5 PDF"));
+    assert!(economic.contains("Ouvrir l’aperçu"));
+    assert!(routes.contains("files.len() > 5"));
+    assert!(routes.contains("total_size > 40 * 1024 * 1024"));
+}

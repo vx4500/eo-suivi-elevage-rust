@@ -1,5 +1,22 @@
 # Historique et feuille de route EO-Suivi Rust
 
+## 2.2.3 — imports économiques multiples et avoirs génétiques
+
+- Sélection de un à cinq PDF économiques en une fois, avec limites par fichier
+  et limite globale avant toute écriture.
+- Un aperçu et un jeton séparés sont créés pour chaque document ; une erreur
+  invalide le lot complet avant la création des aperçus.
+- Les avoirs génétiques 1443203 et 1441836 sont forcés en négatif, comme les
+  montants portant un signe moins final.
+- Cotisation Aujeszky, service cochette et prime cochette Serenis conservent
+  désormais des libellés distincts.
+
+## 2.2.2 — mouvements et suivi des bandes
+
+- Mouvement des porcs depuis le bouton « + », suivi des emplacements, effectif,
+  numéro de marquage et avance/retard sur la fiche bande.
+- Liste sanitaire des porcs traités hors vaccins et tri des tableaux.
+
 ## 2.2.1 — retour de la saisie rapide
 
 - Le bouton flottant « + » est de nouveau affiché en bas à droite sur toutes

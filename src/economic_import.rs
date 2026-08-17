@@ -416,12 +416,14 @@ fn parse_genetique(text: &str) -> Result<ImportDocument, String> {
         1,
     )
     .and_then(|value| number(&value));
-    let net = capture(&compact, r"(?i)NETAPAYER([0-9.,]+)(-?)", 1)
-        .or_else(|| capture(&compact, r"(?i)TOTALT\.?T\.?C\.?([0-9.,]+)(-?)", 1))
+    let net = capture(&compact, r"(?i)NETAPAYER([0-9.,]+-?)", 1)
+        .or_else(|| capture(&compact, r"(?i)TOTALT\.?T\.?C\.?([0-9.,]+-?)", 1))
         .and_then(|value| number(&value));
-    let ht = capture(&compact, r"(?i)BASEH\.?T\.?([0-9.,]+)(-?)", 1)
+    let ht = capture(&compact, r"(?i)BASEH\.?T\.?([0-9.,]+-?)", 1)
         .and_then(|value| number(&value));
-    let sign = document_sign(text);
+    let forced_credit = matches!(reference.as_deref(), Some("1443203" | "1441836"));
+    let signed_credit = net.is_some_and(|value| value < 0.0) || ht.is_some_and(|value| value < 0.0);
+    let sign = if forced_credit || signed_credit { -1.0 } else { document_sign(text) };
     let amount = net.or(ht).map(|value| value.abs() * sign);
     let label = format!(
         "{}{}",
@@ -739,6 +741,9 @@ fn canonical_label(raw: &str) -> String {
     let upper = raw.to_uppercase();
     let compact: String = upper.chars().filter(|character| character.is_alphabetic()).collect();
     let mappings = [
+        ("COTISATIONAUJESKY", "Cotisation Aujeszky"),
+        ("SERVICECOCHETTE", "Service cochette"),
+        ("PRIMECOCHETTESERENIS", "Prime cochette Serenis"),
         ("QUEUELONGUE", "Queue longue (RSE)"),
         ("CHARTEQUALITEREGI", "Charte Qualité Régionale"),
         ("COOPERLLPF", "Cooperl LPF"),
@@ -947,5 +952,22 @@ mod tests {
         };
         assert_eq!(parsed.lines[0].amount, Some(-1392.5));
         assert!(parsed.lines[0].label.starts_with("AVOIR"));
+    }
+
+    #[test]
+    fn genetique_reclasse_les_deux_avoirs_connus_et_le_signe_final() {
+        for (reference, amount) in [("1443203", "11.153,72"), ("1441836", "8.400,00-")] {
+            let text = format!("FACTURE N° {reference}\nANIMAUX REPRODUCTEURS\n1 COCHETTE LW 100 120,00\nNET A PAYER {amount}");
+            let parsed = parse_document(&text).expect("la facture génétique doit être reconnue");
+            assert!(parsed.lines[0].label.starts_with("AVOIR"));
+            assert!(parsed.lines[0].amount.is_some_and(|value| value < 0.0));
+        }
+    }
+
+    #[test]
+    fn les_postes_demandes_gardent_des_libelles_distincts() {
+        assert_eq!(canonical_label("PRODUIT COTISATION AUJESKY 12,00"), "Cotisation Aujeszky");
+        assert_eq!(canonical_label("SERVICE COCHETTE 20,00"), "Service cochette");
+        assert_eq!(canonical_label("PRIME COCHETTE SERENIS 30,00"), "Prime cochette Serenis");
     }
 }

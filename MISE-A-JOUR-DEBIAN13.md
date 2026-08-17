@@ -1,7 +1,7 @@
 # Mise à jour du serveur Debian 13
 
-La version 2.2.1 fournit une mise à jour automatisée et réversible depuis le
-dépôt GitHub privé. Elle conserve les chemins de production :
+La version 2.2.3 fournit une mise à jour automatisée et réversible depuis le
+dépôt GitHub public. Elle conserve les chemins de production :
 
 - sources : `/opt/eo-suivi-rust-src` ;
 - application : `/opt/eo-suivi-rust` ;
