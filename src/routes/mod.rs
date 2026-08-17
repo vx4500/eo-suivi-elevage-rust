@@ -1045,7 +1045,8 @@ async fn truies_affecter_bande(
         .await?;
     }
     tx.commit().await?;
-    Ok(Redirect::to("/truies").into_response())
+    let retour=if form.get("retour").is_some_and(|value|value=="/attente"){"/attente"}else{"/truies"};
+    Ok(Redirect::to(retour).into_response())
 }
 
 async fn truie_detail(

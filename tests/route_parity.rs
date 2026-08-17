@@ -135,3 +135,19 @@ fn la_version_223_permet_plusieurs_imports_pdf_securises() {
     assert!(routes.contains("files.len() > 5"));
     assert!(routes.contains("total_size > 40 * 1024 * 1024"));
 }
+
+#[test]
+fn la_version_224_gere_la_file_ia_et_la_capacite_de_verraterie() {
+    let migration = include_str!("../migrations/0001_schema.sql");
+    let routes = include_str!("../src/routes/parity.rs");
+    let template = include_str!("../templates/attente.html");
+    let navigation = include_str!("../templates/base.html");
+    assert!(migration.contains("('capacite_verraterie',31"));
+    assert!(routes.contains("bande_code=CASE WHEN date(?)<=date('now')"));
+    assert!(routes.contains("Sortie maternité"));
+    assert!(routes.contains("Retour IA"));
+    assert!(template.contains("action=\"/truies/affecter-bande\""));
+    assert!(template.contains("Occupation actuelle"));
+    assert!(template.contains("Places disponibles"));
+    assert!(navigation.contains(">IA (Cochette)<"));
+}

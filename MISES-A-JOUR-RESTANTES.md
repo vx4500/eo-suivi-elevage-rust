@@ -1,6 +1,6 @@
 # Point des mises à jour EO-Suivi Élevage
 
-État établi pour la version 2.2.3. La priorité reste la fiabilité des données, des imports et des sauvegardes avant les fonctions externes.
+État établi pour la version 2.2.4. La priorité reste la fiabilité des données, des imports et des sauvegardes avant les fonctions externes.
 
 ## Livré
 
@@ -12,6 +12,7 @@
 - [x] Import PDF avec aperçu, détection des doublons, transaction globale, annulation et journal.
 - [x] Import simultané de plusieurs PDF économiques en 2.2.3.
 - [x] Reclassement des avoirs génétiques 1443203 et 1441836 et des montants avec signe moins final.
+- [x] File IA/cochettes après sevrage, affectation groupée et capacité de verraterie paramétrable (31 places par défaut) en 2.2.4.
 - [x] Plan sanitaire, pharmacie et liste des porcs traités hors vaccins.
 - [x] Prestataire, RFID, inventaires par case, structure ordonnable, eau/électricité et calendrier ICS.
 - [x] Sauvegarde SQLite contrôlée, restauration vérifiée et mise à jour Debian réversible.
@@ -19,7 +20,6 @@
 ## Restant prioritaire
 
 - [ ] Contrôler les effectifs réels avec les données de production, notamment les anciens inventaires incohérents et les mortalités dont le stade est erroné.
-- [ ] Ajouter la file d’attente IA/cochettes après sortie de maternité et rendre la capacité de verraterie paramétrable, cible 31 places.
 - [ ] Ajouter la prévision de consommation et de commande d’aliment par bande avant rechargement.
 - [ ] Importer les consommations de la machine à soupe.
 - [ ] Produire une GTE complète en complément de la GTTT.

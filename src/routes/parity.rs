@@ -106,7 +106,8 @@ pub(super) async fn truie_sevrage(
         sqlx::query("INSERT INTO evenement(type,date,truie_id,bande_id,nb_sevres,poids_moyen,adoptes,retires,eld_entree,eld_sortie,note) VALUES('sevrage',?,?,?,?,?,?,?,?,?,?)")
             .bind(&date).bind(id).bind(band_id).bind(weaned).bind(form_f64(&form,"poids_moyen")).bind(adopted).bind(removed).bind(form_f64(&form,"eld_entree")).bind(form_f64(&form,"eld_sortie")).bind(form_text(&form,"note")).execute(&mut *tx).await?;
     }
-    sqlx::query("UPDATE truie SET perf_sevres=?,perf_adoptes=?,perf_retires=?,updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(weaned as f64).bind(adopted as f64).bind(removed as f64).bind(id).execute(&mut *tx).await?;
+    sqlx::query("UPDATE truie SET perf_sevres=?,perf_adoptes=?,perf_retires=?,bande_code=CASE WHEN date(?)<=date('now') AND bande_code=(SELECT code FROM bande WHERE id=?) THEN NULL ELSE bande_code END,updated_at=CURRENT_TIMESTAMP WHERE id=?")
+        .bind(weaned as f64).bind(adopted as f64).bind(removed as f64).bind(&date).bind(band_id).bind(id).execute(&mut *tx).await?;
     tx.commit().await?;Ok(Redirect::to(&format!("/truie/{id}")).into_response())
 }
 
@@ -142,8 +143,39 @@ pub(super) async fn truie_reclasser_verrat(State(state):State<AppState>,Extensio
 }
 
 pub(super) async fn attente(State(state):State<AppState>,Extension(session):Extension<SessionData>)->AppResult<Html<String>>{
-    let rows=generic_rows(&state.pool,"SELECT t.id,t.num_travail,t.num_national,t.rfid,t.race,t.date_entree,t.rang,(SELECT e.type FROM evenement e WHERE e.truie_id=t.id ORDER BY e.date DESC,e.id DESC LIMIT 1) AS dernier_evenement,(SELECT e.date FROM evenement e WHERE e.truie_id=t.id ORDER BY e.date DESC,e.id DESC LIMIT 1) AS derniere_date FROM truie t WHERE t.reformee=0 AND NOT EXISTS(SELECT 1 FROM bande b WHERE b.active=1 AND b.code=t.bande_code) ORDER BY CASE WHEN t.rang=0 THEN 0 ELSE 1 END,t.num_travail").await?;
-    let mut ctx=context(&session);ctx.insert("truies".into(),Value::Array(rows));render(&state,"attente.html",Value::Object(ctx))
+    let capacite:i64=sqlx::query_scalar("SELECT COALESCE((SELECT valeur FROM reglage WHERE cle='capacite_verraterie'),31)").fetch_one(&state.pool).await?;
+    let occupation:i64=sqlx::query_scalar("SELECT COUNT(*) FROM truie t LEFT JOIN casesalle c ON c.id=t.case_id LEFT JOIN salle s ON s.id=COALESCE(t.salle_id,c.salle_id) WHERE t.reformee=0 AND (lower(COALESCE(s.type,'')) LIKE '%verrater%' OR lower(COALESCE(s.nom,'')) LIKE '%verrater%')").fetch_one(&state.pool).await?;
+    let rows=generic_rows(&state.pool,r#"
+        SELECT t.id,t.num_travail,t.num_national,t.rfid,t.race,t.date_entree,t.rang,
+          CASE
+            WHEN t.rang=0 THEN 'Cochette'
+            WHEN (SELECT e.type FROM evenement e WHERE e.truie_id=t.id ORDER BY e.date DESC,e.id DESC LIMIT 1)='sevrage' THEN 'Sortie maternité'
+            WHEN lower(COALESCE((SELECT e.resultat FROM evenement e WHERE e.truie_id=t.id AND e.type='echo' ORDER BY e.date DESC,e.id DESC LIMIT 1),'')) IN ('vide','négative','negative','negatif','négatif') THEN 'Retour IA'
+            ELSE 'Sans bande'
+          END AS categorie,
+          (SELECT e.type FROM evenement e WHERE e.truie_id=t.id ORDER BY e.date DESC,e.id DESC LIMIT 1) AS dernier_evenement,
+          (SELECT e.date FROM evenement e WHERE e.truie_id=t.id ORDER BY e.date DESC,e.id DESC LIMIT 1) AS derniere_date,
+          (SELECT e.date FROM evenement e WHERE e.truie_id=t.id AND e.type='sevrage' ORDER BY e.date DESC,e.id DESC LIMIT 1) AS dernier_sevrage,
+          date((SELECT e.date FROM evenement e WHERE e.truie_id=t.id AND e.type='sevrage' ORDER BY e.date DESC,e.id DESC LIMIT 1),printf('+%d day',COALESCE((SELECT valeur FROM reglage WHERE cle='chaleur_post_sevrage_j'),5))) AS chaleur_prevue,
+          COALESCE(si.nom,si.code) AS batiment,s.nom AS salle,c.nom AS case_nom
+        FROM truie t
+        LEFT JOIN casesalle c ON c.id=t.case_id
+        LEFT JOIN salle s ON s.id=COALESCE(t.salle_id,c.salle_id)
+        LEFT JOIN site si ON si.id=s.site_id
+        WHERE t.reformee=0
+          AND NOT EXISTS(SELECT 1 FROM bande b WHERE b.active=1 AND b.code=t.bande_code)
+        ORDER BY CASE WHEN chaleur_prevue IS NULL THEN 1 ELSE 0 END,chaleur_prevue,t.num_travail
+    "#).await?;
+    let bands=sqlx::query_as::<_,Bande>(BAND_SELECT_ACTIVE).fetch_all(&state.pool).await?;
+    let places_disponibles=(capacite-occupation).max(0);
+    let attente=rows.len() as i64;
+    let mut ctx=context(&session);
+    ctx.insert("truies".into(),Value::Array(rows));
+    ctx.insert("bandes".into(),serde_json::to_value(bands).unwrap_or_default());
+    ctx.insert("capacite".into(),json!(capacite));ctx.insert("occupation".into(),json!(occupation));
+    ctx.insert("places_disponibles".into(),json!(places_disponibles));ctx.insert("attente".into(),json!(attente));
+    ctx.insert("saturee".into(),json!(occupation>=capacite));ctx.insert("depasse_capacite".into(),json!(attente>places_disponibles));
+    render(&state,"attente.html",Value::Object(ctx))
 }
 
 pub(super) async fn cause_ajouter(State(state):State<AppState>,Extension(session):Extension<SessionData>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;let label=form_text(&form,"libelle").ok_or_else(||AppError::Invalid("Libellé obligatoire".into()))?;sqlx::query("INSERT INTO causeperte(libelle) SELECT ? WHERE NOT EXISTS(SELECT 1 FROM causeperte WHERE lower(libelle)=lower(?))").bind(&label).bind(&label).execute(&state.pool).await?;Ok(Redirect::to("/parametres#causes").into_response())}

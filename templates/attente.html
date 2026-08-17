@@ -1,4 +1,22 @@
-{% extends "base.html" %}{% block title %}Truies en attente · EO-Suivi{% endblock %}{% block content %}
-<h1>Truies en attente d’affectation</h1><p>Truies actives qui ne sont rattachées à aucune bande active. Aucune date n’est inventée lorsqu’un événement est absent.</p>
-<div class="rust-scroll"><table><tr><th>N° travail</th><th>N° national</th><th>RFID</th><th>Race</th><th>Rang</th><th>Dernier événement</th><th>Date</th></tr>{% for t in truies %}<tr><td><a href="/truie/{{ t.id }}"><b>{{ t.num_travail }}</b></a></td><td>{{ t.num_national or '—' }}</td><td>{{ t.rfid or '—' }}</td><td>{{ t.race or '—' }}</td><td>{{ t.rang }}</td><td>{{ t.dernier_evenement or 'Aucun' }}</td><td>{% if t.derniere_date %}{{ t.derniere_date|date_fr }}{% else %}Date inconnue{% endif %}</td></tr>{% else %}<tr><td colspan="7" class="rust-empty">Aucune truie en attente</td></tr>{% endfor %}</table></div>
+{% extends "base.html" %}{% block title %}IA (Cochette) · EO-Suivi{% endblock %}{% block content %}
+<h1>IA (Cochette) — file d’attente</h1>
+<p>Cochettes, truies sorties de maternité et autres truies actives sans bande. Les dates affichées proviennent des événements enregistrés ; aucune priorité n’est imposée automatiquement.</p>
+<div class="rust-grid">
+  <section class="card"><b>Capacité verraterie</b><div><strong>{{ capacite }}</strong> places</div></section>
+  <section class="card"><b>Occupation actuelle</b><div><strong>{{ occupation }}</strong> truies</div></section>
+  <section class="card"><b>Places disponibles</b><div><strong>{{ places_disponibles }}</strong></div></section>
+  <section class="card"><b>File d’attente</b><div><strong>{{ attente }}</strong> truies</div></section>
+</div>
+{% if saturee %}<div class="alert danger">La verraterie a atteint sa capacité paramétrée.</div>{% elif depasse_capacite %}<div class="alert">La file contient plus de truies que de places actuellement disponibles.</div>{% endif %}
+{% if session.peut_modifier %}
+<form method="post" action="/truies/affecter-bande">
+  <input type="hidden" name="csrf_token" value="{{ session.csrf }}"><input type="hidden" name="retour" value="/attente">
+  <div class="card rust-actions"><label>Bande active<select name="bande_code" required><option value="">Choisir…</option>{% for b in bandes %}<option value="{{ b.code }}">{{ b.code }}</option>{% endfor %}</select></label><button>Affecter les truies cochées</button><button type="button" class="ghost" onclick="document.querySelectorAll('.attente-check').forEach(x=>x.checked=true)">Tout sélectionner</button></div>
+{% endif %}
+<div class="rust-scroll"><table><thead><tr>{% if session.peut_modifier %}<th>Choix</th>{% endif %}<th>Catégorie</th><th>N° travail</th><th>N° national</th><th>Rang</th><th>Dernier événement</th><th>Date</th><th>Chaleur prévue</th><th>Emplacement</th></tr></thead><tbody>
+{% for t in truies %}<tr>{% if session.peut_modifier %}<td><input class="attente-check" type="checkbox" name="truie_{{ t.id }}" value="1"></td>{% endif %}<td><span class="rust-badge">{{ t.categorie }}</span></td><td><a href="/truie/{{ t.id }}"><b>{{ t.num_travail }}</b></a></td><td>{{ t.num_national or '—' }}</td><td>{{ t.rang }}</td><td>{{ t.dernier_evenement or 'Aucun' }}</td><td>{% if t.derniere_date %}{{ t.derniere_date|date_fr }}{% else %}Date inconnue{% endif %}</td><td>{% if t.chaleur_prevue %}{{ t.chaleur_prevue|date_fr }}{% else %}—{% endif %}</td><td>{% if t.salle %}{{ t.batiment or '—' }} · {{ t.salle }}{% if t.case_nom %} · {{ t.case_nom }}{% endif %}{% else %}—{% endif %}</td></tr>
+{% else %}<tr><td colspan="9" class="rust-empty">Aucune truie dans la file d’attente</td></tr>{% endfor %}
+</tbody></table></div>
+{% if session.peut_modifier %}</form>{% endif %}
+<p><small>La capacité se modifie dans Administration → Paramètres → Réglages de conduite.</small></p>
 {% endblock %}

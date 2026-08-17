@@ -1,5 +1,15 @@
 # Historique et feuille de route EO-Suivi Rust
 
+## 2.2.4 — file IA/cochettes et capacité de verraterie
+
+- La sortie de maternité retire l’ancienne bande au sevrage sans écraser une
+  nouvelle affectation déjà enregistrée.
+- La page IA (Cochette) regroupe les cochettes, sorties de maternité, retours
+  d’IA et autres truies sans bande, avec leurs dates et emplacements connus.
+- Les truies cochées peuvent être affectées ensemble à une bande active.
+- L’occupation, les places disponibles et les alertes utilisent une capacité
+  de verraterie réglable, initialisée à 31 places.
+
 ## 2.2.3 — imports économiques multiples et avoirs génétiques
 
 - Sélection de un à cinq PDF économiques en une fois, avec limites par fichier
