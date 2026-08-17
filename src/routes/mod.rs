@@ -3124,7 +3124,49 @@ async fn energie_releve(State(state):State<AppState>,Extension(session):Extensio
     let bands=present_bands(&state.pool,site.as_deref(),&date).await?;sqlx::query("INSERT INTO releve_compteur(compteur_id,date_releve,valeur_index,bandes,note,remplacement_compteur) VALUES(?,?,?,?,?,?)").bind(meter_id).bind(&date).bind(index).bind(if bands.is_empty(){None}else{Some(bands.join(","))}).bind(form_text(&form,"note").or_else(||replacement.then(||"Compteur remplacé – nouvel index de départ".into()))).bind(replacement).execute(&state.pool).await?;Ok(Redirect::to(&format!("/energie#compteur-{meter_id}")).into_response())
 }
 
-async fn present_bands(pool:&SqlitePool,site:Option<&str>,day:&str)->AppResult<Vec<String>>{let Some(day)=parse_iso_date(day).and_then(|value|NaiveDate::parse_from_str(&value,"%Y-%m-%d").ok()) else{return Ok(vec![])};let rows=generic_rows(pool,"SELECT code,date_mb,site FROM bande WHERE date_mb IS NOT NULL").await?;let mut out=Vec::new();for row in rows{let Some(obj)=row.as_object() else{continue};let code=obj.get("code").and_then(Value::as_str).unwrap_or("");let mb=obj.get("date_mb").and_then(Value::as_str).and_then(parse_iso_date).and_then(|value|NaiveDate::parse_from_str(&value,"%Y-%m-%d").ok());let row_site=obj.get("site").and_then(Value::as_str);if let Some(mb)=mb{if site.is_some()&&row_site.is_some()&&site!=row_site{continue}if day>=mb-Duration::days(115)&&day<=mb+Duration::days(225)&&!code.is_empty(){out.push(code.to_string())}}}out.sort();out.dedup();Ok(out)}
+async fn present_bands(
+    pool: &SqlitePool,
+    site: Option<&str>,
+    day: &str,
+) -> AppResult<Vec<String>> {
+    let Some(day) = parse_iso_date(day)
+        .and_then(|value| NaiveDate::parse_from_str(&value, "%Y-%m-%d").ok())
+    else {
+        return Ok(vec![]);
+    };
+    let rows = generic_rows(
+        pool,
+        "SELECT code,date_mb,site FROM bande WHERE date_mb IS NOT NULL",
+    )
+    .await?;
+    let mut out = Vec::new();
+    for row in rows {
+        let Some(obj) = row.as_object() else {
+            continue;
+        };
+        let code = obj.get("code").and_then(Value::as_str).unwrap_or("");
+        let mb = obj
+            .get("date_mb")
+            .and_then(Value::as_str)
+            .and_then(parse_iso_date)
+            .and_then(|value| NaiveDate::parse_from_str(&value, "%Y-%m-%d").ok());
+        let row_site = obj.get("site").and_then(Value::as_str);
+        if let Some(mb) = mb {
+            if site.is_some() && row_site.is_some() && site != row_site {
+                continue;
+            }
+            if day >= mb - Duration::days(115)
+                && day <= mb + Duration::days(225)
+                && !code.is_empty()
+            {
+                out.push(code.to_string());
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    Ok(out)
+}
 
 async fn energie_rappel(State(state):State<AppState>,Extension(session):Extension<SessionData>,Path(id):Path<i64>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;sqlx::query("UPDATE compteur_energie SET rappel_jours=? WHERE id=? AND type='eau'").bind(form_i64(&form,"rappel_jours")).bind(id).execute(&state.pool).await?;Ok(Redirect::to(&format!("/energie#compteur-{id}")).into_response())}
 async fn energie_releve_supprimer(State(state):State<AppState>,Extension(session):Extension<SessionData>,Path(id):Path<i64>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;let meter:Option<i64>=sqlx::query_scalar("SELECT compteur_id FROM releve_compteur WHERE id=?").bind(id).fetch_optional(&state.pool).await?;sqlx::query("DELETE FROM releve_compteur WHERE id=?").bind(id).execute(&state.pool).await?;Ok(Redirect::to(&meter.map(|x|format!("/energie#compteur-{x}")).unwrap_or_else(||"/energie".into())).into_response())}
@@ -3915,7 +3957,24 @@ async fn commande_post(State(state):State<AppState>,Form(form):Form<HashMap<Stri
     let mut tx=state.pool.begin().await?;
     let products=sqlx::query_as::<_,ProduitVenteDirecte>("SELECT id,nom,prix,unite,actif,ordre,quantite_disponible FROM produitventedirecte WHERE actif=1 ORDER BY ordre,nom").fetch_all(&mut *tx).await?;
     let mut lines=Vec::new();let mut total=0.0;
-    for product in products{let quantity=form_f64(&form,&format!("q_{}",product.id)).unwrap_or(0.0);if quantity<=0.0{continue}if quantity>10_000.0{return Err(AppError::Invalid("Quantité invalide".into()))}if product.quantite_disponible.is_some_and(|stock|quantity>stock){return Ok(Redirect::to("/commande?err=stock-insuffisant").into_response())}let line_total=(quantity*product.prix*100.0).round()/100.0;total+=line_total;lines.push((product,quantity,line_total))}
+    for product in products {
+        let quantity = form_f64(&form, &format!("q_{}", product.id)).unwrap_or(0.0);
+        if quantity <= 0.0 {
+            continue;
+        }
+        if quantity > 10_000.0 {
+            return Err(AppError::Invalid("Quantité invalide".into()));
+        }
+        if product
+            .quantite_disponible
+            .is_some_and(|stock| quantity > stock)
+        {
+            return Ok(Redirect::to("/commande?err=stock-insuffisant").into_response());
+        }
+        let line_total = (quantity * product.prix * 100.0).round() / 100.0;
+        total += line_total;
+        lines.push((product, quantity, line_total));
+    }
     if lines.is_empty(){return Ok(Redirect::to("/commande?err=commande-vide").into_response())}
     let session_id:Option<i64>=sqlx::query_scalar("SELECT id FROM sessionventedirecte WHERE active=1 ORDER BY date_creation DESC,id DESC LIMIT 1").fetch_optional(&mut *tx).await?;
     let token=uuid::Uuid::new_v4().simple().to_string();let email=form_text(&form,"email");
