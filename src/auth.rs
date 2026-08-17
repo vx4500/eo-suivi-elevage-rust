@@ -4,7 +4,7 @@ use axum::http::header::COOKIE;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Redirect, Response};
 use pbkdf2::pbkdf2_hmac;
-use rand::RngCore;
+use rand::{rngs::OsRng, RngCore};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 
@@ -69,12 +69,19 @@ impl SessionData {
 
 pub fn hash_password(password: &str) -> String {
     let mut salt_raw = [0_u8; 16];
-    rand::thread_rng().fill_bytes(&mut salt_raw);
+    OsRng.fill_bytes(&mut salt_raw);
     let salt = hex::encode(salt_raw);
     let mut output = [0_u8; 32];
     // Compatibilité exacte avec hashlib.pbkdf2_hmac("sha256", ..., 600_000).
     pbkdf2_hmac::<Sha256>(password.as_bytes(), salt.as_bytes(), 600_000, &mut output);
     format!("{}${}", salt, hex::encode(output))
+}
+
+/// PBKDF2 est volontairement exécuté hors des workers asynchrones Tokio.
+pub async fn hash_password_async(password: String) -> anyhow::Result<String> {
+    tokio::task::spawn_blocking(move || hash_password(&password))
+        .await
+        .map_err(|error| anyhow::anyhow!("hachage du mot de passe interrompu: {error}"))
 }
 
 pub fn verify_password(password: &str, stored: &str) -> bool {
@@ -89,8 +96,21 @@ pub fn verify_password(password: &str, stored: &str) -> bool {
     output.ct_eq(&expected).into()
 }
 
+/// La vérification PBKDF2 est coûteuse en CPU et ne doit pas bloquer une route async.
+pub async fn verify_password_async(password: String, stored: String) -> anyhow::Result<bool> {
+    tokio::task::spawn_blocking(move || verify_password(&password, &stored))
+        .await
+        .map_err(|error| anyhow::anyhow!("vérification du mot de passe interrompue: {error}"))
+}
+
+pub fn new_secure_token() -> String {
+    let mut raw = [0_u8; 32];
+    OsRng.fill_bytes(&mut raw);
+    hex::encode(raw)
+}
+
 pub fn new_csrf() -> String {
-    uuid::Uuid::new_v4().simple().to_string()
+    new_secure_token()
 }
 
 fn path_has_prefix(path: &str, prefix: &str) -> bool {

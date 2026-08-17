@@ -10,6 +10,15 @@ async fn schema_complet_et_ecritures_compatibles() -> anyhow::Result<()> {
         .execute(&pool)
         .await?;
 
+    let busy_timeout: i64 = sqlx::query_scalar("PRAGMA busy_timeout")
+        .fetch_one(&pool)
+        .await?;
+    let foreign_keys: i64 = sqlx::query_scalar("PRAGMA foreign_keys")
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(busy_timeout, 5_000);
+    assert_eq!(foreign_keys, 1);
+
     // SQLite renvoie normalement un INTEGER pour COALESCE(SUM(...), 0)
     // lorsque la table est vide. Le CAST garantit le décodage Rust en f64.
     let empty_sales: f64 = sqlx::query_scalar(

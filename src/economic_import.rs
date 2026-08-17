@@ -130,10 +130,12 @@ fn number(raw: &str) -> Option<f64> {
         .parse::<f64>()
         .ok()
         .map(|parsed| if negative { -parsed.abs() } else { parsed })
+        .filter(|parsed| parsed.is_finite())
 }
 
 fn integer(raw: &str) -> Option<i64> {
-    number(raw).map(|value| value.round() as i64)
+    let value = number(raw)?.round();
+    (value >= i64::MIN as f64 && value <= i64::MAX as f64).then_some(value as i64)
 }
 
 fn iso_date(raw: &str) -> Option<String> {
@@ -149,8 +151,7 @@ fn iso_date(raw: &str) -> Option<String> {
 fn document_sign(text: &str) -> f64 {
     let upper = text.to_uppercase();
     if Regex::new(r"\bAVOIR\b|NOTE\s+DE\s+CREDIT|NOTE\s+DE\s+CRÉDIT|CREDIT\s+NOTE")
-        .expect("valid credit regex")
-        .is_match(&upper)
+        .is_ok_and(|regex| regex.is_match(&upper))
     {
         -1.0
     } else {
@@ -181,7 +182,7 @@ fn parse_aliment(text: &str) -> Result<ImportDocument, String> {
     let regex = Regex::new(
         r"(?m)^(.+?)\s+(MI|FE|GR)\s+([0-9]+)\s+([0-9.,]+)(-?)\s*\*?\s+[0-9.,]+\s+([0-9.,]+)\s+[0-9]+\s+([0-9.,]+)(-?)\s*$",
     )
-    .expect("valid feed regex");
+    .map_err(|error| format!("analyse aliment indisponible: {error}"))?;
     let credit = document_sign(text);
     let mut lines = Vec::new();
     for row in regex.captures_iter(text) {
@@ -231,7 +232,7 @@ fn parse_veto(text: &str) -> Result<ImportDocument, String> {
     let regex = Regex::new(
         r"(?m)^([0-9]+)\s+([A-ZÀ-ÖØ-Þ].+?)\s+4\s+[0-9 ]+?\s+([0-9.,]+)\s+([0-9.,]+)(-?)\s*$",
     )
-    .expect("valid veterinary regex");
+    .map_err(|error| format!("analyse vétérinaire indisponible: {error}"))?;
     let credit = document_sign(text);
     let mut lines = Vec::new();
     for row in regex.captures_iter(text) {
@@ -402,7 +403,7 @@ fn parse_genetique(text: &str) -> Result<ImportDocument, String> {
     })
     .and_then(|value| iso_date(&value));
     let animals = Regex::new(r"(?m)^([0-9]+)\s+COCHETTE\s+\w+\s+[0-9]+\s+([0-9.,]+)")
-        .expect("valid genetics regex");
+        .map_err(|error| format!("analyse génétique indisponible: {error}"))?;
     let mut count = 0_i64;
     let mut weight = 0.0;
     for row in animals.captures_iter(text) {
@@ -578,7 +579,9 @@ fn parse_apport(text: &str) -> Result<ImportDocument, String> {
 }
 
 fn split_lots(text: &str) -> Vec<(Option<String>, String)> {
-    let regex = Regex::new(r"(?i)Bon\s*n[°ºo]?\s*([0-9]+)").expect("valid lot regex");
+    let Ok(regex) = Regex::new(r"(?i)Bon\s*n[°ºo]?\s*([0-9]+)") else {
+        return vec![(None, text.to_string())];
+    };
     let matches: Vec<_> = regex.captures_iter(text).collect();
     if matches.is_empty() {
         return vec![(None, text.to_string())];
@@ -603,7 +606,7 @@ fn split_lots(text: &str) -> Vec<(Option<String>, String)> {
 fn parse_lot(bon: Option<String>, body: &str) -> Option<ApportLot> {
     let reference = lot_reference(body);
     let total = Regex::new(r"(?i)Total\s*Bon\.+\s*([0-9.,]+)\s+([0-9.,]+)")
-        .expect("valid lot total regex")
+        .ok()?
         .captures(body);
     let weight = total
         .as_ref()
@@ -616,7 +619,7 @@ fn parse_lot(bon: Option<String>, body: &str) -> Option<ApportLot> {
     let animal_regex = Regex::new(
         r"(?im)^\s*([0-9]+)\s+(SAISI|CREVE|CREVÉ|CREVEE|PORC|LEGER|LÉGER|LOURD|COEUR)",
     )
-    .expect("valid animal regex");
+    .ok()?;
     let pigs: i64 = animal_regex
         .captures_iter(body)
         .filter_map(|row| row.get(1))
@@ -625,7 +628,7 @@ fn parse_lot(bon: Option<String>, body: &str) -> Option<ApportLot> {
     let muscle = Regex::new(
         r"(?i)muscle\s*:\s*de la gamme\s*([0-9.,]+)\s*du lot\s*([0-9.,]+)",
     )
-    .expect("valid muscle regex")
+    .ok()?
     .captures(body);
     let muscle_range = muscle
         .as_ref()
@@ -658,7 +661,7 @@ fn parse_lot(bon: Option<String>, body: &str) -> Option<ApportLot> {
 }
 
 fn lot_reference(text: &str) -> Option<String> {
-    let regex = Regex::new(r"\b[A-Z0-9]{4,5}\b").expect("valid lot reference regex");
+    let regex = Regex::new(r"\b[A-Z0-9]{4,5}\b").ok()?;
     let mut occurrences: HashMap<String, usize> = HashMap::new();
     for value in regex.find_iter(text).map(|value| value.as_str()) {
         if value.chars().any(|character| character.is_ascii_alphabetic())
@@ -674,10 +677,11 @@ fn lot_reference(text: &str) -> Option<String> {
 }
 
 fn parse_economic_lines(text: &str, reference: Option<&str>, date: Option<&str>) -> Vec<ImportLine> {
-    let keyword = Regex::new(
+    let Ok(keyword) = Regex::new(
         r"(?i)(\+\s*VALUE|PRIME\s+SOLIDARITE|COMPLEMENT|PARTICIPATION|FRAIS\s+DE\s+GROUPEMENT|SERVICE\s+PUBLIC|EQUARRISSAGE|ÉQUARRISSAGE|CVEE|CONTRIBUTION\s+SANITAIRE|COTISATION)",
-    )
-    .expect("valid economic-line regex");
+    ) else {
+        return Vec::new();
+    };
     let mut ordered = Vec::<(String, String, f64)>::new();
     for raw in text.lines() {
         if !keyword.is_match(raw)
@@ -762,11 +766,12 @@ fn canonical_label(raw: &str) -> String {
         }
     }
     let before_amount = Regex::new(r"\s+[0-9.,]+-?\s*$")
-        .expect("valid amount suffix regex")
-        .replace(raw, "");
-    Regex::new(r"^\s*[0-9]+\s+")
-        .expect("valid quantity prefix regex")
-        .replace(&before_amount, "")
+        .map(|regex| regex.replace(raw, "").into_owned())
+        .unwrap_or_else(|_| raw.to_string());
+    let without_quantity = Regex::new(r"^\s*[0-9]+\s+")
+        .map(|regex| regex.replace(&before_amount, "").into_owned())
+        .unwrap_or(before_amount);
+    without_quantity
         .replace("+ VALUE", "")
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -897,13 +902,19 @@ mod tests {
     fn nombres_francais_et_avoirs() {
         assert_eq!(number("1 234,56"), Some(1234.56));
         assert_eq!(number("1.234,56-"), Some(-1234.56));
+        assert_eq!(number(""), None);
+        assert_eq!(number("NaN"), None);
+        assert_eq!(number("inf"), None);
+        assert_eq!(integer("999999999999999999999999999999"), None);
         assert_eq!(document_sign("NOTE DE CRÉDIT fournisseur"), -1.0);
     }
 
     #[test]
     fn aliment_conserve_la_presentation_dans_la_cle() {
         let text = "FACTURE N° 123.456\nALIMENTS SILOS DÉSIGNATION PRODUIT\nBon de livraison du 16/08/2026\nPORC CROISSANCE GR 12 5,50 100 320,00 20 1760,00\nPORC CROISSANCE FE 12 4,00 100 300,00 20 1200,00";
-        let parsed = parse_document(text).expect("feed document parsed");
+        let Ok(parsed) = parse_document(text) else {
+            panic!("le document aliment doit être analysé");
+        };
         assert_eq!(parsed.lines.len(), 2);
         assert_eq!(parsed.lines[0].label, "PORC CROISSANCE GR");
         assert_eq!(parsed.lines[1].label, "PORC CROISSANCE FE");
@@ -913,13 +924,16 @@ mod tests {
     #[test]
     fn apport_classe_les_frais_en_retenues() {
         let text = "APPORT N° 123456 CHARCUTIERS\nENLEVEMENT DU 16/08/2026\nBon n° 42\nDA915 DA915\n63 PORC\nTotal Bon..... 5700,00 10000,00\nmuscle : de la gamme 62,1 du lot 61,3\nFRAIS DE GROUPEMENT 2 ABC 120,00\nPRIME SOLIDARITE JEUNE 2 ABC 80,00\nNET A PAYER 9960,00";
-        let parsed = parse_document(text).expect("apport parsed");
+        let Ok(parsed) = parse_document(text) else {
+            panic!("le document d'apport doit être analysé");
+        };
         assert!(parsed.lines.iter().any(|line| line.kind == "vente"));
-        let retention = parsed
+        let Some(retention) = parsed
             .lines
             .iter()
-            .find(|line| line.kind == "retenue")
-            .expect("retention parsed");
+            .find(|line| line.kind == "retenue") else {
+                panic!("la retenue doit être analysée");
+            };
         assert_eq!(retention.label, "Frais de groupement");
         assert_eq!(retention.amount, Some(-120.0));
         assert!(parsed.lines.iter().any(|line| line.kind == "valorisation"));
@@ -928,7 +942,9 @@ mod tests {
     #[test]
     fn semence_avoir_force_des_montants_negatifs() {
         let text = "YXIA SEMENCE AVOIR FAC2026001\nDATE : 16/08/2026\n20 BLISTER LIFE\nTOTAL HT 1 392,50\nTOTAL TTC 1 671,00";
-        let parsed = parse_document(text).expect("semen credit parsed");
+        let Ok(parsed) = parse_document(text) else {
+            panic!("l'avoir de semence doit être analysé");
+        };
         assert_eq!(parsed.lines[0].amount, Some(-1392.5));
         assert!(parsed.lines[0].label.starts_with("AVOIR"));
     }

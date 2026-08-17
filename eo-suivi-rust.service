@@ -9,6 +9,7 @@ WorkingDirectory=/opt/eo-suivi-rust
 Environment=ELEVAGE_DATA=/var/lib/eo-suivi
 Environment=EO_HOST=0.0.0.0
 Environment=EO_PORT=8080
+Environment=EO_SECURE_COOKIES=true
 ExecStart=/opt/eo-suivi-rust/eo-suivi-elevage
 Restart=on-failure
 RestartSec=3

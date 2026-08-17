@@ -5,6 +5,7 @@ pub async fn init(pool: &SqlitePool) -> anyhow::Result<()> {
     sqlx::raw_sql(include_str!("../migrations/0001_schema.sql"))
         .execute(pool)
         .await?;
+    verify_sqlite_pragmas(pool).await?;
 
     // Migrations additives pour les bases anciennes 1.55–1.65. Une colonne déjà
     // présente est volontairement ignorée afin de rendre le démarrage idempotent.
@@ -44,7 +45,7 @@ pub async fn init(pool: &SqlitePool) -> anyhow::Result<()> {
         .fetch_one(pool)
         .await?;
     if count == 0 {
-        let hash = auth::hash_password("admin");
+        let hash = auth::hash_password_async("admin".to_string()).await?;
         sqlx::query(
             "INSERT INTO utilisateur(identifiant,nom,hash_mdp,role,actif,doit_changer_mdp) VALUES('admin','Administrateur',?,'admin',1,1)",
         )
@@ -53,6 +54,25 @@ pub async fn init(pool: &SqlitePool) -> anyhow::Result<()> {
         .await?;
         tracing::warn!("Compte admin initial créé; mot de passe temporaire: admin");
     }
+    Ok(())
+}
+
+async fn verify_sqlite_pragmas(pool: &SqlitePool) -> anyhow::Result<()> {
+    let journal_mode: String = sqlx::query_scalar("PRAGMA journal_mode")
+        .fetch_one(pool)
+        .await?;
+    let busy_timeout: i64 = sqlx::query_scalar("PRAGMA busy_timeout")
+        .fetch_one(pool)
+        .await?;
+    let foreign_keys: i64 = sqlx::query_scalar("PRAGMA foreign_keys")
+        .fetch_one(pool)
+        .await?;
+    anyhow::ensure!(
+        journal_mode.eq_ignore_ascii_case("wal"),
+        "SQLite doit fonctionner en WAL (mode obtenu: {journal_mode})"
+    );
+    anyhow::ensure!(busy_timeout >= 5_000, "SQLite busy_timeout inférieur à 5000 ms");
+    anyhow::ensure!(foreign_keys == 1, "les clés étrangères SQLite sont désactivées");
     Ok(())
 }
 
