@@ -268,7 +268,31 @@ pub(super) async fn aliment_ajouter(State(state):State<AppState>,Extension(sessi
 pub(super) async fn aliment_modifier(State(state):State<AppState>,Extension(session):Extension<SessionData>,Path(id):Path<i64>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_admin(&session)?;verify_csrf(&session,&form)?;sqlx::query("UPDATE planaliment SET categorie=?,jour_debut=?,jour_fin=?,aliment=?,quantite=?,unite=?,note=?,ordre=? WHERE id=?").bind(form_text(&form,"categorie")).bind(form_i64(&form,"jour_debut").unwrap_or(0)).bind(form_i64(&form,"jour_fin").unwrap_or(0)).bind(form_text(&form,"aliment")).bind(form_f64(&form,"quantite")).bind(form_text(&form,"unite")).bind(form_text(&form,"note")).bind(form_i64(&form,"ordre").unwrap_or(0)).bind(id).execute(&state.pool).await?;Ok(Redirect::to("/parametres#alimentation").into_response())}
 pub(super) async fn aliment_supprimer(State(state):State<AppState>,Extension(session):Extension<SessionData>,Path(id):Path<i64>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_admin(&session)?;verify_csrf(&session,&form)?;sqlx::query("DELETE FROM planaliment WHERE id=?").bind(id).execute(&state.pool).await?;Ok(Redirect::to("/parametres#alimentation").into_response())}
 
-pub(super) async fn reglages_maj(State(state):State<AppState>,Extension(session):Extension<SessionData>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_admin(&session)?;verify_csrf(&session,&form)?;let mut tx=state.pool.begin().await?;for (key,value) in &form{if key=="csrf"{continue}if let Ok(value)=value.trim().parse::<i64>(){if value>=0{sqlx::query("UPDATE reglage SET valeur=? WHERE cle=?").bind(value).bind(key).execute(&mut *tx).await?;}}}tx.commit().await?;Ok(Redirect::to("/parametres#reglages").into_response())}
+pub(super) async fn reglages_maj(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_admin(&session)?;
+    verify_csrf(&session, &form)?;
+    let mut tx = state.pool.begin().await?;
+    for (key, value) in &form {
+        if key == "csrf" {
+            continue;
+        }
+        if let Ok(value) = value.trim().parse::<i64>() {
+            if value >= 0 {
+                sqlx::query("UPDATE reglage SET valeur=? WHERE cle=?")
+                    .bind(value)
+                    .bind(key)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+        }
+    }
+    tx.commit().await?;
+    Ok(Redirect::to("/parametres#reglages").into_response())
+}
 
 pub(super) async fn parametres_maj(State(state):State<AppState>,Extension(session):Extension<SessionData>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_admin(&session)?;verify_csrf(&session,&form)?;let allowed=["nom_elevage","adresse_elevage","telephone_elevage","email_elevage","public_url","echo_j","seuil_stock","nas_path","cloud_path","mail_sauvegarde"];
     let mut tx=state.pool.begin().await?;for key in allowed{if let Some(value)=form.get(key){sqlx::query("INSERT INTO parametre(cle,valeur) VALUES(?,?) ON CONFLICT(cle) DO UPDATE SET valeur=excluded.valeur").bind(key).bind(value.trim()).execute(&mut *tx).await?;}}tx.commit().await?;Ok(Redirect::to("/parametres").into_response())}
@@ -318,7 +342,22 @@ pub(super) async fn sauvegarde_restaurer(State(state):State<AppState>,Extension(
     let parent=data_parent(&state);let candidate=parent.join("restauration-validee.db");tokio::fs::write(&candidate,&bytes).await.map_err(anyhow::Error::from)?;
     let options=sqlx::sqlite::SqliteConnectOptions::new().filename(&candidate).read_only(true);let check_pool=sqlx::sqlite::SqlitePoolOptions::new().max_connections(1).connect_with(options).await?;let check:String=sqlx::query_scalar("PRAGMA quick_check").fetch_one(&check_pool).await?;let tables:i64=sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN('truie','bande','utilisateur')").fetch_one(&check_pool).await?;check_pool.close().await;if check!="ok"||tables!=3{return Err(AppError::Invalid("Sauvegarde incomplète ou corrompue".into()));}
     sqlx::query("PRAGMA wal_checkpoint(FULL)").execute(&state.pool).await?;let timestamp=Local::now().format("%Y%m%d-%H%M%S").to_string();let backup=parent.join(format!("avant-restauration-{timestamp}.db"));tokio::fs::copy(&state.config.db_path,&backup).await.map_err(anyhow::Error::from)?;db::journal(&state.pool,&session.nom,"restaurer","sauvegarde",&backup.display().to_string(),"/sauvegarde/restaurer").await;
-    let pool=state.pool.clone();let live=state.config.db_path.clone();tokio::spawn(async move{tokio::time::sleep(std::time::Duration::from_millis(800)).await;pool.close().await;for suffix in ["-wal","-shm"]{let old=PathBuf::from(format!("{}{suffix}",live.display()));if tokio::fs::metadata(&old).await.is_ok(){let archived=PathBuf::from(format!("{}.ancien{suffix}",live.display()));let _=tokio::fs::rename(old,archived).await;}}if tokio::fs::rename(candidate,live).await.is_ok(){std::process::exit(1);}});
+    let pool = state.pool.clone();
+    let live = state.config.db_path.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+        pool.close().await;
+        for suffix in ["-wal", "-shm"] {
+            let old = PathBuf::from(format!("{}{suffix}", live.display()));
+            if tokio::fs::metadata(&old).await.is_ok() {
+                let archived = PathBuf::from(format!("{}.ancien{suffix}", live.display()));
+                let _ = tokio::fs::rename(old, archived).await;
+            }
+        }
+        if tokio::fs::rename(candidate, live).await.is_ok() {
+            std::process::exit(1);
+        }
+    });
     Ok(Html(String::from("<!doctype html><meta charset='utf-8'><h1>Restauration validée</h1><p>La base a été contrôlée et le service redémarre. Rechargez la page dans quelques secondes.</p>")).into_response())
 }
 
