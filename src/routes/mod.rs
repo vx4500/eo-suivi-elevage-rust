@@ -1184,7 +1184,7 @@ async fn evenement_ajouter(
         .execute(&state.pool).await?;
     if kind == "mise_bas" {
         if let Some(sow_id) = sow_id {
-            let completed = parse_stored_date(date)
+            let completed = parse_stored_date(&date)
                 .is_some_and(|value| value <= Local::now().date_naive());
             sqlx::query("UPDATE truie SET bande_code=COALESCE((SELECT code FROM bande WHERE id=?),bande_code),rang=rang+?,updated_at=CURRENT_TIMESTAMP WHERE id=?")
                 .bind(band_id).bind(if completed { 1 } else { 0 }).bind(sow_id).execute(&state.pool).await?;
