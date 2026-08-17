@@ -2,10 +2,10 @@
 
 La 1.65 d’origine contient 215 routes HTTP et environ 8 200 lignes dans son
 fichier principal. Le changement Python → Rust est une réécriture du moteur,
-pas une conversion automatique. La version 2.1.9 relie explicitement plus de 127
-chemins Rust ; certaines déclarations gèrent plusieurs verbes HTTP.
+pas une conversion automatique. La version 2.2.0 relie explicitement les 68
+chemins qui manquaient encore après normalisation des paramètres d’URL.
 
-## Fonctions opérationnelles en Rust 2.1.9
+## Fonctions opérationnelles en Rust 2.2.0
 
 | Domaine | État |
 | --- | --- |
@@ -17,26 +17,22 @@ chemins Rust ; certaines déclarations gèrent plusieurs verbes HTTP.
 | Économie | Aliment, véto, semence, génétique, ventes, résultat par bande et import PDF avec aperçu |
 | Abattoir | Apports, synthèse par bande et saisies sanitaires |
 | Productivité | GTTT centralisé par période/bande, sevrés par truie productive/an, objectifs pondérés, ELD, rangs et abattage |
-| Vente directe | Produits, inventaires, commandes modifiables/imprimables, préparation, sessions, coûts et charges |
+| Vente directe | Produits, inventaires, commandes, préparation, sessions, coûts, charges, consentements, Brevo courriel/SMS et historique |
 | Eau et électricité | Compteurs, relevés, alertes, remplacement et import CSV |
-| Exports | CSV mise-bas, modèle/import truies, calendrier ICS et fiches imprimables |
-| Exploitation | Utilisateurs, structure, tâches, sauvegarde, entretien, quotidien, cahiers |
+| Exports | CSV/PDF mise-bas, registre PDF, QR, modèle/import truies, calendrier ICS et fiches imprimables |
+| Exploitation | Utilisateurs, structure, tâches, sauvegarde/restauration contrôlée, paramètres, mise à jour en attente, entretien, quotidien, cahiers |
 
-## Modules secondaires restant à porter pour une parité totale
+## Extensions qui ne font pas partie des 68 routes
 
 - OCR des scans/photos et imports Excel spécialisés ;
-- génération PDF serveur et QR codes (les fiches HTML sont imprimables) ;
 - imports automatiques de nouveaux référentiels techniques externes ;
-- fiches charcutier complètes, pharmacie et protocoles sanitaires en écriture ;
-- contrôles quotidiens salle par salle et écrans secondaires de l’engraisseur ;
-- newsletter Brevo, SMS et historique complet des communications ;
-- base de démonstration, activation 45 jours, installateur Inno Setup et mise à
-  jour ZIP/Git depuis l’interface ;
-- reprise à l’identique des URL secondaires encore servies par la couche de
-  compatibilité.
+- synchronisation directe Gmail/Outlook et stockage cloud, qui exigent des
+  identifiants propres à chaque fournisseur ;
+- installateur graphique Windows Inno Setup.
 
-Une écriture non portée renvoie volontairement `501 Not Implemented`. Cela
-évite qu’une action partielle modifie silencieusement la base réelle.
+La couche `501 Not Implemented` reste un garde-fou uniquement pour une URL
+inconnue, et non pour l’une des 68 routes historiques couvertes par le test
+`tests/route_parity.rs`.
 
 ## Validation avec la sauvegarde du 16 août 2026
 
@@ -47,5 +43,5 @@ Une écriture non portée renvoie volontairement `501 Not Implemented`. Cela
   impressions exécutées sur une copie ;
 - aucune donnée personnelle ni copie de la base n’est incluse dans l’archive ;
 - la 2.0.1 a compilé et démarré avec Rust 1.97.1 sur Debian 13 ;
-- la 2.1.9 doit être validée par `cargo fmt --check`, `cargo clippy`,
+- la 2.2.0 doit être validée par `cargo fmt --check`, `cargo clippy`,
   `cargo test` et `cargo build --release` sur le serveur de recette.

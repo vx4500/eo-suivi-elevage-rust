@@ -64,6 +64,21 @@ pub fn build() -> anyhow::Result<Environment<'static>> {
     env.add_template("effectifs.html", include_str!("../templates/effectifs.html"))?;
     env.add_template("vente_sessions.html", include_str!("../templates/vente_sessions.html"))?;
     env.add_template("impression.html", include_str!("../templates/impression.html"))?;
+    env.add_template("attente.html", include_str!("../templates/attente.html"))?;
+    env.add_template("planning.html", include_str!("../templates/planning.html"))?;
+    env.add_template("stock.html", include_str!("../templates/stock.html"))?;
+    env.add_template("journal.html", include_str!("../templates/journal.html"))?;
+    env.add_template("scan.html", include_str!("../templates/scan.html"))?;
+    env.add_template("maj.html", include_str!("../templates/maj.html"))?;
+    env.add_template("parametres.html", include_str!("../templates/parametres.html"))?;
+    env.add_template(
+        "vente_directe_communications.html",
+        include_str!("../templates/vente_directe_communications.html"),
+    )?;
+    env.add_template(
+        "vente_session_detail.html",
+        include_str!("../templates/vente_session_detail.html"),
+    )?;
     env.add_filter("date_fr", date_fr);
     env.add_filter("euro", euro);
     env.add_filter("decimal1", decimal1);

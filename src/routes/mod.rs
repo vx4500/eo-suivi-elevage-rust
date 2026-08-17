@@ -21,6 +21,8 @@ use sqlx::{Column, Row, SqlitePool, TypeInfo, ValueRef};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+mod parity;
+
 #[derive(Clone)]
 pub struct AppState {
     pub config: Config,
@@ -210,6 +212,76 @@ pub fn router(state: AppState) -> Router {
         .route("/correctifs", get(correctifs))
         .route("/apropos", get(apropos))
         .route("/contact", get(contact))
+        // Compatibilité complète avec les URL de la version Python 1.65.
+        .route("/abattoir/saisie", post(abattoir_saisie))
+        .route("/attente", get(parity::attente))
+        .route("/bande/{id}/engraisseur", post(parity::bande_engraisseur))
+        .route("/bande/{id}/inventaire", post(parity::bande_inventaire))
+        .route("/bande/{id}/mortalite/{declaration_id}/supprimer", post(parity::mortalite_supprimer))
+        .route("/bande/{id}/transfert-porcs", post(parity::bande_transfert_porcs))
+        .route("/bande/{id}/truie/{truie_id}/portee", post(parity::portee_bande_truie))
+        .route("/cahiers/ajouter", post(cahier_ajouter))
+        .route("/cause/ajouter", post(parity::cause_ajouter))
+        .route("/cause/{id}/supprimer", post(parity::cause_supprimer))
+        .route("/desinscription/{token}", get(parity::desinscription))
+        .route("/economique/aliment/{id}/bandes", post(parity::economique_aliment_bandes))
+        .route("/economique/aliment/{id}/site", post(parity::economique_aliment_site))
+        .route("/economique/auto-lier", post(parity::economique_auto_lier))
+        .route("/economique/genetique/{id}/bande", post(parity::economique_genetique_bande))
+        .route("/economique/rattacher-auto", post(parity::economique_rattacher_auto))
+        .route("/economique/semence/{id}/bande", post(parity::economique_semence_bande))
+        .route("/economique/semence/{id}/montant", post(parity::economique_semence_montant))
+        .route("/economique/vente/{id}/bande", post(parity::economique_vente_bande))
+        .route("/economique/vente/{id}/lot/{lot_index}/bande", post(parity::economique_vente_lot_bande))
+        .route("/economique/veto/{id}/bande", post(parity::economique_veto_bande))
+        .route("/economique/veto/{id}/bandes", post(parity::economique_veto_bandes))
+        .route("/economique/veto/{id}/site", post(parity::economique_veto_site))
+        .route("/entretien/ajouter", post(entretien_ajouter))
+        .route("/export/mise-bas-pdf/{id}", get(parity::export_mise_bas_pdf))
+        .route("/export/registre-pdf", get(parity::export_registre_pdf))
+        .route("/import", post(truies_import).layer(DefaultBodyLimit::max(10 * 1024 * 1024)))
+        .route("/import-pdf", post(economique_import_pdf).layer(DefaultBodyLimit::max(10 * 1024 * 1024)))
+        .route("/journal/{id}/supprimer", post(parity::journal_supprimer))
+        .route("/logo", get(parity::logo))
+        .route("/maj", get(parity::maj))
+        .route("/maj/lancer", post(parity::maj_lancer))
+        .route("/maj/zip", post(parity::maj_zip).layer(DefaultBodyLimit::max(100 * 1024 * 1024)))
+        .route("/parametres/aliment/ajouter", post(parity::aliment_ajouter))
+        .route("/parametres/aliment/{id}/modifier", post(parity::aliment_modifier))
+        .route("/parametres/aliment/{id}/supprimer", post(parity::aliment_supprimer))
+        .route("/parametres/demo", post(parity::demo_basculer))
+        .route("/parametres/demo-actif", get(parity::demo_actif))
+        .route("/parametres/maj", post(parity::parametres_maj))
+        // Le paramètre reçoit aussi le suffixe .png (ex. /qr/truie/42.png).
+        .route("/qr/truie/{file}", get(parity::qr_truie))
+        .route("/reglages/maj", post(parity::reglages_maj))
+        .route("/saisie-rapide", post(parity::saisie_rapide))
+        .route("/salle/{id}/lavage", post(parity::salle_lavage))
+        .route("/sanitaire/generer-protocole", post(parity::sanitaire_generer_protocole))
+        .route("/sauvegarde/restaurer", post(parity::sauvegarde_restaurer).layer(DefaultBodyLimit::max(512 * 1024 * 1024)))
+        .route("/scan", get(parity::scan))
+        .route("/scan/lookup", get(parity::scan_lookup))
+        .route("/stock/doses", post(parity::stock_doses))
+        .route("/template/truies.csv", get(truies_modele_csv))
+        .route("/truie/{id}/chaleur", post(parity::truie_chaleur))
+        .route("/truie/{id}/echo", post(parity::truie_echo))
+        .route("/truie/{id}/ia", post(parity::truie_ia))
+        .route("/truie/{id}/misebas", post(parity::truie_mise_bas))
+        .route("/truie/{id}/reclasser-verrat", post(parity::truie_reclasser_verrat))
+        .route("/truie/{id}/sevrage", post(parity::truie_sevrage))
+        .route("/truie/{id}/sortie", post(parity::truie_sortie))
+        .route("/truie/{id}/traitement", post(parity::truie_traitement))
+        .route("/truies/transfert", post(transferts_truies))
+        .route("/vente-directe/client/{id}/consentements", post(parity::client_consentements))
+        .route("/vente-directe/communications", get(parity::communications))
+        .route("/vente-directe/communications/newsletter-email", post(parity::newsletter_email))
+        .route("/vente-directe/communications/newsletter-sms", post(parity::newsletter_sms))
+        .route("/vente-directe/communications/reglages", post(parity::communications_reglages))
+        .route("/vente-directe/communications/test-email", post(parity::test_email))
+        .route("/vente-directe/communications/test-sms", post(parity::test_sms))
+        .route("/vente-directe/recalculer-stocks", post(parity::recalculer_stocks))
+        .route("/vente-directe/session/{id}", get(parity::vente_session_detail))
+        .route("/vente-directe/session/{id}/commande/{commande_id}/rattacher", post(parity::vente_session_commande_rattacher))
         .fallback(compatibility_fallback)
         .with_state(state)
 }
@@ -4195,9 +4267,20 @@ async fn pharmacie_regler(
     sqlx::query("UPDATE produitpharmacie SET unite=?,seuil_alerte=?,note=?,maj=CURRENT_TIMESTAMP WHERE id=?").bind(form_text(&form,"unite")).bind(form_f64(&form,"seuil_alerte")).bind(form_text(&form,"note")).bind(id).execute(&state.pool).await?;
     Ok(Redirect::to("/pharmacie").into_response())
 }
-async fn planning(State(state):State<AppState>,Extension(session):Extension<SessionData>)->AppResult<Html<String>>{list_page(&state,&session,"Planning","Événements à venir et récents","SELECT e.id,e.date,e.type,t.num_travail,b.code AS bande,e.produit,e.note FROM evenement e LEFT JOIN truie t ON t.id=e.truie_id LEFT JOIN bande b ON b.id=e.bande_id ORDER BY e.date DESC LIMIT 250",&["date","type","num_travail","bande","produit","note"]).await}
-async fn stock(State(state):State<AppState>,Extension(session):Extension<SessionData>)->AppResult<Html<String>>{list_page(&state,&session,"Stocks et mouvements","Derniers mouvements enregistrés","SELECT id,date,bande_code,nombre,poids,montant,libelle,destination,type_saisie,est_stock FROM mouvementstock ORDER BY date DESC,id DESC LIMIT 500",&["date","bande_code","nombre","poids","montant","libelle","destination","type_saisie","est_stock"]).await}
-async fn journal(State(state):State<AppState>,Extension(session):Extension<SessionData>)->AppResult<Html<String>>{if!session.est_admin(){return Err(AppError::Forbidden)}list_page(&state,&session,"Journal d'activité","Traçabilité des opérations","SELECT id,horodatage,utilisateur,action,objet,detail,chemin FROM journal ORDER BY horodatage DESC,id DESC LIMIT 1000",&["horodatage","utilisateur","action","objet","detail","chemin"]).await}
+async fn planning(State(state):State<AppState>,Extension(session):Extension<SessionData>)->AppResult<Html<String>>{
+    let events=generic_rows(&state.pool,"SELECT e.id,e.date,e.type,t.num_travail,b.code AS bande,e.produit,e.note FROM evenement e LEFT JOIN truie t ON t.id=e.truie_id LEFT JOIN bande b ON b.id=e.bande_id WHERE date(e.date)>=date('now','-30 days') ORDER BY e.date LIMIT 500").await?;
+    let tasks=generic_rows(&state.pool,"SELECT id,titre,type,bande_code,echeance,fait,note FROM tache WHERE fait=0 ORDER BY echeance IS NULL,echeance,id").await?;
+    let bands=sqlx::query_as::<_,Bande>(BAND_SELECT_ACTIVE).fetch_all(&state.pool).await?;let schedule=load_band_schedule(&state.pool).await?;let mut calculated=Vec::new();for band in bands{for date in key_dates(band.date_mb.as_deref(),schedule){calculated.push(json!({"bande":band.code,"type":date["nom"],"date":date["date"],"etat":date["etat"]}));}}
+    calculated.sort_by_key(|v|v["date"].as_str().unwrap_or_default().to_string());let mut ctx=context(&session);ctx.insert("evenements".into(),Value::Array(events));ctx.insert("taches".into(),Value::Array(tasks));ctx.insert("echeances".into(),Value::Array(calculated));render(&state,"planning.html",Value::Object(ctx))
+}
+async fn stock(State(state):State<AppState>,Extension(session):Extension<SessionData>)->AppResult<Html<String>>{
+    let movements=generic_rows(&state.pool,"SELECT id,date,bande_code,nombre,poids,montant,libelle,destination,type_saisie,est_stock FROM mouvementstock ORDER BY date DESC,id DESC LIMIT 500").await?;
+    let pharmacy=generic_rows(&state.pool,"SELECT id,produit,stock_actuel,unite,seuil_alerte,CASE WHEN seuil_alerte IS NOT NULL AND stock_actuel<=seuil_alerte THEN 1 ELSE 0 END AS alerte FROM produitpharmacie ORDER BY alerte DESC,produit").await?;
+    let purchases=generic_rows(&state.pool,"SELECT produit,CAST(COALESCE(SUM(quantite*COALESCE(doses_unite,1)),0) AS REAL) AS doses_achetees,MAX(doses_unite) AS doses_unite FROM achatveto GROUP BY produit ORDER BY produit").await?;
+    let mut bands_view=Vec::new();for band in sqlx::query_as::<_,Bande>(BAND_SELECT_ACTIVE).fetch_all(&state.pool).await?{let remaining=remaining_band_pigs(&state.pool,band.id,&band.code).await?;bands_view.push(json!({"id":band.id,"code":band.code,"date_mb":band.date_mb,"effectif_estime":remaining}));}
+    let mut ctx=context(&session);ctx.insert("mouvements".into(),Value::Array(movements));ctx.insert("pharmacie".into(),Value::Array(pharmacy));ctx.insert("achats_veto".into(),Value::Array(purchases));ctx.insert("bandes_stock".into(),Value::Array(bands_view));render(&state,"stock.html",Value::Object(ctx))
+}
+async fn journal(State(state):State<AppState>,Extension(session):Extension<SessionData>)->AppResult<Html<String>>{if!session.est_admin(){return Err(AppError::Forbidden)}let rows=generic_rows(&state.pool,"SELECT id,horodatage,utilisateur,action,objet,detail,chemin FROM journal ORDER BY horodatage DESC,id DESC LIMIT 1000").await?;let mut ctx=context(&session);ctx.insert("lignes".into(),Value::Array(rows));render(&state,"journal.html",Value::Object(ctx))}
 
 async fn entretien(
     State(state): State<AppState>,
@@ -4727,15 +4810,12 @@ async fn parametres(
     if !session.est_admin() {
         return Err(AppError::Forbidden);
     }
-    list_page(
-        &state,
-        &session,
-        "Paramètres",
-        "Paramètres techniques conservés dans la base. Les secrets de communication ne sont jamais affichés ici.",
-        "SELECT cle,valeur FROM parametre ORDER BY cle",
-        &["cle", "valeur"],
-    )
-    .await
+    let params=generic_rows(&state.pool,"SELECT cle,valeur FROM parametre ORDER BY cle").await?;
+    let settings=generic_rows(&state.pool,"SELECT cle,valeur,libelle FROM reglage ORDER BY cle").await?;
+    let feed=generic_rows(&state.pool,"SELECT id,categorie,jour_debut,jour_fin,aliment,quantite,unite,note,ordre FROM planaliment ORDER BY ordre,categorie,jour_debut").await?;
+    let causes=generic_rows(&state.pool,"SELECT id,libelle FROM causeperte ORDER BY libelle").await?;
+    let demo:i64=sqlx::query_scalar("SELECT COUNT(*) FROM demoobjet").fetch_one(&state.pool).await?;
+    let mut ctx=context(&session);ctx.insert("parametres".into(),Value::Array(params));ctx.insert("reglages".into(),Value::Array(settings));ctx.insert("plans_aliment".into(),Value::Array(feed));ctx.insert("causes".into(),Value::Array(causes));ctx.insert("demo_actif".into(),json!(demo>0));render(&state,"parametres.html",Value::Object(ctx))
 }
 
 async fn correctifs(State(state):State<AppState>,Extension(session):Extension<SessionData>)->AppResult<Html<String>>{render(&state,"correctifs.html",Value::Object(context(&session)))}

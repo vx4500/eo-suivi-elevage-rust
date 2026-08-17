@@ -1,4 +1,4 @@
-# EO-Suivi Élevage — portage Rust 2.1.9
+# EO-Suivi Élevage — portage Rust 2.2.0
 
 Cette archive reprend la base EO-Suivi 1.65 sous forme d’un serveur Rust. Elle
 n’utilise plus FastAPI, SQLModel, Uvicorn ni Python pour les fonctions déjà
@@ -35,9 +35,13 @@ compatibilité avec les sauvegardes 1.55 à 1.65.
   lecture/écriture ;
 - suivi engraissement, export CSV mise-bas, import CSV truies, fiches
   imprimables et calendrier ICS.
+- parité des 68 anciennes URL encore absentes : saisie rapide, attente,
+  scanner/QR, PDF serveur, réglages et plans d’aliment, restauration contrôlée,
+  rattachement économique, communications Brevo et détail des sessions.
 
-Le détail des modules secondaires restant à réécrire pour atteindre une parité
-totale avec les 215 routes de la 1.65 se trouve dans `PORTAGE-RUST.md`.
+Le détail de la correspondance fonctionnelle avec la 1.65 se trouve dans
+`PORTAGE-RUST.md`. L’OCR des images reste volontairement un module externe :
+les imports PDF texte sont natifs et les scans sans couche texte sont refusés.
 
 ## Démarrage sur Linux
 
@@ -114,5 +118,5 @@ copie de la sauvegarde réelle du 16 août 2026. Les 51 tables attendues et leur
 colonnes correspondent ; la base réelle contient en plus une ancienne table
 énergie vide, laissée intacte. Les contrôles SQLite `quick_check` et clés
 étrangères sont conformes. La version 2.0.1 a compilé et démarré sur Debian 13
-avec Rust 1.97.1 ; la 2.1.9 doit repasser les trois commandes Cargo ci-dessus
+avec Rust 1.97.1 ; la 2.2.0 doit repasser les trois commandes Cargo ci-dessus
 sur le serveur avant remplacement du binaire.
