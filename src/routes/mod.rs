@@ -1202,7 +1202,7 @@ async fn evenement_supprimer(
     let mut tx=state.pool.begin().await?;
     sqlx::query("DELETE FROM evenement WHERE id=?").bind(id).execute(&mut *tx).await?;
     if let Some((Some(sow_id),kind,date))=&event {
-        if kind=="mise_bas"&&parse_stored_date(&date).is_some_and(|value|value<=Local::now().date_naive()){sqlx::query("UPDATE truie SET rang=MAX(rang-1,0),updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(sow_id).execute(&mut *tx).await?;}
+        if kind=="mise_bas"&&parse_stored_date(date).is_some_and(|value|value<=Local::now().date_naive()){sqlx::query("UPDATE truie SET rang=MAX(rang-1,0),updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(sow_id).execute(&mut *tx).await?;}
     }
     tx.commit().await?;
     let sow=event.and_then(|value|value.0);
@@ -1603,9 +1603,7 @@ async fn calendrier_ics(State(state): State<AppState>) -> AppResult<Response> {
         "METHOD:PUBLISH".into(),
     ];
     for band in bands {
-        let Some(base) = band.date_mb.as_deref().and_then(|value| {
-            parse_stored_date(value)
-        }) else {
+        let Some(base) = band.date_mb.as_deref().and_then(parse_stored_date) else {
             continue;
         };
         for (name, days) in stages {
@@ -1849,9 +1847,7 @@ async fn load_gttt_litters(pool: &SqlitePool, band: Option<&str>) -> AppResult<V
         .map(|row| GtttLitter {
             sow_number: row.0,
             band: row.1,
-            farrowing_date: row.2.as_deref().and_then(|value| {
-                parse_stored_date(value)
-            }),
+            farrowing_date: row.2.as_deref().and_then(parse_stored_date),
             rank: row.3,
             gestation: row.4,
             live_born: row.5,
