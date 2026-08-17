@@ -1,5 +1,18 @@
 # Historique et feuille de route EO-Suivi Rust
 
+## 2.2.1 — retour de la saisie rapide
+
+- Le bouton flottant « + » est de nouveau affiché en bas à droite sur toutes
+  les pages accessibles à un utilisateur autorisé à modifier les données.
+- Le panneau permet les saisies ELD/poids/NEC, IA, écho, chaleur, perte de
+  porcelet et sortie de truie avec les listes Rust de truies, bandes et cases.
+- La chaleur conserve uniquement les trois raccourcis demandés dans
+  l’observation : aspect de la vulve, comportement et réflexe d’immobilité.
+- Les mesures poids/NEC et le nombre de doses d’IA saisis dans le panneau sont
+  maintenant réellement enregistrés par la route Rust.
+- Un test empêche une prochaine version de supprimer à nouveau le bouton ou
+  ses sources de données.
+
 ## 2.2.0 — parité des 68 routes historiques
 
 - Les 68 chemins Python 1.65 encore absents sont maintenant enregistrés et

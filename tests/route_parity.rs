@@ -96,3 +96,18 @@ fn la_version_220_contient_les_ecrans_de_parite() {
         assert!(templates.contains(name), "écran non enregistré: {name}");
     }
 }
+
+#[test]
+fn la_saisie_rapide_est_accessible_depuis_toutes_les_pages_connectees() {
+    let base = include_str!("../templates/base.html");
+    for marker in [
+        "id=\"fab\"",
+        "id=\"fab-panel\"",
+        "action=\"/saisie-rapide\"",
+        "fetch('/api/truies')",
+        "fetch('/api/bandes-actives')",
+        "fetch('/api/cases')",
+    ] {
+        assert!(base.contains(marker), "élément de saisie rapide absent: {marker}");
+    }
+}

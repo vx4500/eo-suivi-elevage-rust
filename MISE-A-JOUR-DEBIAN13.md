@@ -1,6 +1,6 @@
 # Mise à jour du serveur Debian 13
 
-La version 2.2.0 fournit une mise à jour automatisée et réversible depuis le
+La version 2.2.1 fournit une mise à jour automatisée et réversible depuis le
 dépôt GitHub privé. Elle conserve les chemins de production :
 
 - sources : `/opt/eo-suivi-rust-src` ;
@@ -51,7 +51,7 @@ l'arrêt déclenche le retour arrière ; la sauvegarde de la base est conservée
 ```bash
 systemctl status eo-suivi-rust --no-pager -l
 journalctl -u eo-suivi-rust -n 80 --no-pager -l -o cat
-curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.0"
+curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.1"
 ```
 
 Puis ouvrir `https://rust-elevage.basse-chevrie.ovh`.

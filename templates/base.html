@@ -10,7 +10,7 @@
     .rust-nav a{color:white;text-decoration:none;padding:7px 10px;border-radius:8px;white-space:nowrap}.rust-nav a:hover{background:#ffffff22}
     .rust-nav .rust-menu{position:relative;white-space:nowrap}.rust-nav .rust-menu>span{display:block;padding:7px 10px;cursor:pointer}.rust-nav .rust-sub{display:none;position:absolute;top:100%;left:0;min-width:210px;padding:7px;background:#173f32;border-radius:0 0 10px 10px;box-shadow:0 12px 25px #0004}.rust-nav .rust-menu:hover .rust-sub{display:grid}.rust-nav .rust-sub a{padding:8px 10px}
     .rust-search{display:flex;gap:5px;align-items:center}.rust-search input{width:150px;padding:6px 8px}.rust-search button{padding:6px 9px}
-    body{min-height:100vh;display:flex;flex-direction:column}.rust-nav .grow{flex:1}.rust-main{width:100%;max-width:1320px;margin:0 auto;padding:18px;flex:1}.rust-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+    body{min-height:100vh;display:flex;flex-direction:column}.rust-nav .grow{flex:1}.rust-main{width:100%;max-width:1320px;margin:0 auto;padding:18px 18px 96px;flex:1}.rust-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
     .rust-actions{display:flex;gap:8px;align-items:end;flex-wrap:wrap}.rust-actions label{min-width:130px}.rust-empty{padding:25px;text-align:center;color:#667085}
     .rust-badge{display:inline-block;padding:3px 8px;border-radius:99px;background:#eef7f0;color:#1e4d3a;font-size:12px}.danger{color:#b42318}.rust-scroll{overflow:auto}
     .rust-footer{text-align:center;padding:14px 18px;color:#6b7773;font-size:12px;border-top:1px solid #e2e8e3;background:#fff}
@@ -46,6 +46,144 @@
   {% if flash %}<div class="alert">{{ flash }}</div>{% endif %}
   {% block content %}{% endblock %}
 </main>
+{% if session and session.peut_modifier %}
+<button id="fab" type="button" title="Saisie rapide" aria-label="Ouvrir la saisie rapide" aria-controls="fab-panel" aria-expanded="false">+</button>
+<aside id="fab-panel" aria-label="Saisie rapide" aria-hidden="true">
+  <div class="fab-head">Saisie rapide <button type="button" id="fab-close" class="fab-close" aria-label="Fermer la saisie rapide">✕</button></div>
+  <div class="fab-types" role="tablist" aria-label="Type de saisie">
+    <button type="button" class="fab-t on" data-type="eld">ELD / poids</button>
+    <button type="button" class="fab-t" data-type="ia">IA / saillie</button>
+    <button type="button" class="fab-t" data-type="echo">Écho</button>
+    <button type="button" class="fab-t" data-type="chaleur">Chaleur</button>
+    <button type="button" class="fab-t" data-type="perte">Perte porcelet</button>
+    <button type="button" class="fab-t" data-type="sortie">Sortie truie</button>
+  </div>
+  <form method="post" action="/saisie-rapide" id="fab-form">
+    <input type="hidden" name="csrf_token" value="{{ session.csrf }}">
+    <input type="hidden" name="type" id="fab-type" value="eld">
+    <label id="fab-truie-wrap"><span id="fab-truie-label">Truie</span>
+      <select name="truie_id" id="fab-truie" required><option value="">Chargement…</option></select>
+    </label>
+    <div class="fab-f" data-for="perte" hidden>
+      <label>Bande
+        <select name="bande_id" id="fab-bande" disabled required><option value="">Chargement…</option></select>
+      </label>
+    </div>
+    <label>Date<input type="date" name="date" id="fab-date" required></label>
+
+    <div class="fab-f" data-for="eld">
+      <label>Période
+        <select name="periode">
+          <option value="">—</option><option>Entrée quarantaine</option><option>Sortie quarantaine</option>
+          <option>Verraterie (IA / Régumate)</option><option>Entrée gestante</option>
+          <option>Entrée maternité</option><option>Sortie maternité</option><option>Autre</option>
+        </select>
+      </label>
+      <label>ELD (mm)<input name="eld" inputmode="decimal" placeholder="ex. 17"></label>
+      <label>Poids (kg)<input name="poids" inputmode="decimal"></label>
+      <label>NEC (1 à 5)<input name="nec" inputmode="decimal"></label>
+    </div>
+    <div class="fab-f" data-for="ia" hidden>
+      <label>Nombre de doses<input name="nb_doses" inputmode="numeric" value="2" disabled></label>
+      <label>Produit / verrat<input name="produit" disabled></label>
+    </div>
+    <div class="fab-f" data-for="echo" hidden>
+      <label>Résultat
+        <select name="resultat" disabled><option value="pleine">Pleine</option><option value="vide">Vide</option><option value="doute">Doute</option></select>
+      </label>
+    </div>
+    <div class="fab-f fab-chaleur" data-for="chaleur" hidden>
+      <div class="fab-question"><b>Ajouter dans l’observation</b>
+        <div class="fab-chaleur-suggestions">
+          <button type="button" data-observation="Aspect de la vulve">Aspect vulve</button>
+          <button type="button" data-observation="Comportement">Comportement</button>
+          <button type="button" data-observation="Réflexe d’immobilité">Réflexe d’immobilité</button>
+        </div>
+      </div>
+    </div>
+    <div class="fab-f" data-for="perte" hidden>
+      <label>Nombre de porcelets<input name="nombre" inputmode="numeric" value="1" min="1" disabled></label>
+      <label>Stade
+        <select name="stade" disabled><option value="maternite">Maternité</option><option value="post_sevrage">Post-sevrage</option><option value="engraissement">Engraissement</option></select>
+      </label>
+      <label>Case d’origine
+        <select name="case_id" id="fab-case" disabled><option value="">— aucune / sous la mère —</option></select>
+      </label>
+      <label>Cause
+        <select name="cause" disabled><option>Écrasement</option><option>Chétif / non conforme</option><option>Diarrhée</option><option>Respiratoire</option><option>Mort subite</option><option>Boiterie</option><option>Autre</option></select>
+      </label>
+      <label>Âge (jours)<input name="age_j" inputmode="numeric" min="0" disabled></label>
+      <label>Poids (kg)<input name="poids" inputmode="decimal" disabled></label>
+    </div>
+    <div class="fab-f" data-for="sortie" hidden>
+      <label>Motif de sortie
+        <select name="motif" disabled><option>Morte</option><option>Euthanasie</option><option>Vente / réforme</option><option>Boiterie / accident</option><option>Non fécondée / infertile</option><option>Âge / usure</option><option>Sanitaire</option><option>Autre</option></select>
+      </label>
+    </div>
+    <label id="fab-note-wrap">Observation<input name="note" id="fab-note" placeholder="Observation facultative"></label>
+    <button type="submit" class="fab-ok">Valider</button>
+  </form>
+</aside>
+<script>
+(function(){
+  var button=document.getElementById('fab');
+  var panel=document.getElementById('fab-panel');
+  var close=document.getElementById('fab-close');
+  var form=document.getElementById('fab-form');
+  var typeInput=document.getElementById('fab-type');
+  var sow=document.getElementById('fab-truie');
+  var sowLabel=document.getElementById('fab-truie-label');
+  var band=document.getElementById('fab-bande');
+  var noteWrap=document.getElementById('fab-note-wrap');
+  var note=document.getElementById('fab-note');
+  function setOpen(open){
+    panel.classList.toggle('open',open); panel.setAttribute('aria-hidden',String(!open));
+    button.setAttribute('aria-expanded',String(open)); if(open){window.setTimeout(function(){sow.focus();},0);}
+  }
+  button.addEventListener('click',function(){setOpen(!panel.classList.contains('open'));});
+  close.addEventListener('click',function(){setOpen(false);button.focus();});
+  document.addEventListener('keydown',function(event){if(event.key==='Escape'&&panel.classList.contains('open')){setOpen(false);button.focus();}});
+  function text(value){return String(value==null?'':value);}
+  function fillSelect(select,rows,label){
+    select.replaceChildren(new Option('— sélectionner —',''));
+    rows.forEach(function(row){select.add(new Option(label(row),text(row.id)));});
+  }
+  fetch('/api/truies').then(function(response){return response.json();}).then(function(rows){
+    fillSelect(sow,rows,function(row){return text(row.num_travail)+(row.bande_code?' · '+text(row.bande_code):'');});
+  }).catch(function(){sow.replaceChildren(new Option('Liste indisponible',''));});
+  fetch('/api/bandes-actives').then(function(response){return response.json();}).then(function(rows){
+    fillSelect(band,rows,function(row){return text(row.code)+(row.site?' · '+text(row.site):'');});
+  }).catch(function(){band.replaceChildren(new Option('Liste indisponible',''));});
+  fetch('/api/cases').then(function(response){return response.json();}).then(function(rows){
+    var select=document.getElementById('fab-case'); select.replaceChildren(new Option('— aucune / sous la mère —',''));
+    rows.forEach(function(row){select.add(new Option([row.site,row.salle,row.nom].filter(Boolean).join(' · '),text(row.id)));});
+  }).catch(function(){});
+  var now=new Date(); now.setMinutes(now.getMinutes()-now.getTimezoneOffset());
+  document.getElementById('fab-date').value=now.toISOString().slice(0,10);
+  function chooseType(type,chosen){
+    typeInput.value=type;
+    document.querySelectorAll('.fab-t').forEach(function(item){item.classList.toggle('on',item===chosen);});
+    document.querySelectorAll('#fab-form .fab-f').forEach(function(section){
+      var active=section.dataset.for===type; section.hidden=!active;
+      section.querySelectorAll('input,select,textarea,button').forEach(function(field){field.disabled=!active;});
+    });
+    var loss=type==='perte'; sow.required=!loss; sowLabel.textContent=loss?'Truie sous la mère (facultatif)':'Truie';
+    band.disabled=!loss; band.required=loss; noteWrap.hidden=type==='sortie'; note.disabled=type==='sortie';
+  }
+  document.querySelectorAll('.fab-t').forEach(function(item){item.addEventListener('click',function(){chooseType(item.dataset.type,item);});});
+  document.querySelectorAll('[data-observation]').forEach(function(item){item.addEventListener('click',function(){
+    var value=item.dataset.observation; var parts=note.value.split(',').map(function(v){return v.trim();}).filter(Boolean);
+    if(parts.indexOf(value)<0){parts.push(value);} note.value=parts.join(', '); note.focus();
+  });});
+  form.addEventListener('submit',function(event){
+    if(typeInput.value==='eld'){
+      var values=['eld','poids','nec'].map(function(name){return form.querySelector('[data-for="eld"] [name="'+name+'"]').value.trim();});
+      if(values.every(function(value){return !value;})){event.preventDefault();window.alert('Saisissez au moins l’ELD, le poids ou la NEC.');}
+    }
+  });
+})();
+</script>
+{% endif %}
 <footer class="rust-footer">EO-Suivi Élevage · Version Rust {{ app_version }}</footer>
 </body>
 </html>

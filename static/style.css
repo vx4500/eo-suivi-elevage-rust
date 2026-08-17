@@ -91,6 +91,8 @@ nav .grp .sous a:hover{background:rgba(200,130,63,.3);color:#fff}
   padding:14px;display:none}
 #fab-panel.open{display:block}
 .fab-head{font-weight:700;color:var(--vert,#1e4d3a);margin-bottom:10px}
+.fab-close{float:right;padding:0 3px;background:transparent;color:var(--vert,#1e4d3a);font-size:18px;line-height:1}
+.fab-close:hover{background:transparent;color:#b42318}
 .fab-types{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
 .fab-t{padding:7px 10px;border-radius:8px;border:1px solid var(--line,#dfe4e0);background:#fff;
   color:#1e4d3a;cursor:pointer;font-size:13px;font-weight:600}
