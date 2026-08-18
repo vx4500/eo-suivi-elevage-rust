@@ -1,7 +1,3 @@
-# Demandes de modifications EO-Suivi Élevage
-
-Document de suivi nettoyé pour le dépôt public. Le jeton d’accès GitHub qui figurait dans la note source a été volontairement supprimé et ne doit jamais être versionné.
-
 ## Imports et économie
 
 - Permettre deux lots sur une facture d’apport Cooperl.
