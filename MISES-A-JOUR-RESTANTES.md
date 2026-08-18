@@ -29,11 +29,8 @@
 ## Restant avec service externe
 
 - [ ] Sauvegardes automatiques vers NAS, stockage en ligne ou messagerie après configuration explicite de l’éleveur.
-- [ ] Synchronisation directe Google Calendar et Outlook ; l’export ICS local reste disponible.
-- [ ] Envoi des données ou remontées à un tiers uniquement sur décision explicite de l’éleveur.
 
 ## Améliorations secondaires
 
 - [ ] Simplifier encore la navigation et réduire le nombre de pages visibles.
 - [ ] Ajouter le modèle d’import génétique téléchargeable.
-- [ ] Étudier une courte vidéo de présentation.
