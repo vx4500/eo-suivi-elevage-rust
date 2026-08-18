@@ -16,6 +16,20 @@
     .rust-footer{text-align:center;padding:14px 18px;color:#6b7773;font-size:12px;border-top:1px solid #e2e8e3;background:#fff}
     @media(max-width:850px){.rust-nav{position:static;flex-wrap:wrap}.rust-nav .grow{display:none}.rust-search{order:10;width:100%}.rust-search input{flex:1}.rust-nav .rust-sub{position:fixed;left:10px;right:10px;top:auto;max-height:70vh;overflow:auto}}
   </style>
+  /* Capacity badge styles */
+  <style>
+    .capacity-badge{display:inline-block;padding:4px 8px;border-radius:8px;font-size:12px;margin-left:8px}
+    .capacity-badge.good{background:#e6ffef;color:#0f5132;border:1px solid #b7f3d0}
+    .capacity-badge.warn{background:#fff4e6;color:#7a4b00;border:1px solid #ffdca8}
+    .capacity-badge.full{background:#ffeef0;color:#87121a;border:1px solid #ffccd5}
+    /* Toast notifications */
+    #toast-container{position:fixed;right:18px;bottom:94px;z-index:9999;display:flex;flex-direction:column;gap:8px;align-items:flex-end}
+    .toast{min-width:220px;padding:10px 14px;border-radius:8px;color:white;font-weight:600;box-shadow:0 6px 18px rgba(0,0,0,0.18);opacity:0;transform:translateY(8px);transition:opacity .22s,transform .22s}
+    .toast.show{opacity:1;transform:translateY(0)}
+    .toast.success{background:#0f5132}
+    .toast.error{background:#b42318}
+    .toast.info{background:#174e6f}
+  </style>
 </head>
 <body>
 {% if session %}
@@ -46,6 +60,7 @@
   {% if flash %}<div class="alert">{{ flash }}</div>{% endif %}
   {% block content %}{% endblock %}
 </main>
+<div id="toast-container" aria-hidden="true"></div>
 {% if session and session.peut_modifier %}
 <button id="fab" type="button" title="Saisie rapide" aria-label="Ouvrir la saisie rapide" aria-controls="fab-panel" aria-expanded="false">+</button>
 <aside id="fab-panel" aria-label="Saisie rapide" aria-hidden="true">
@@ -58,6 +73,7 @@
     <button type="button" class="fab-t" data-type="perte">Perte porcelet</button>
     <button type="button" class="fab-t" data-type="sortie">Sortie truie</button>
     <button type="button" class="fab-t" data-type="mouvement">Mouvement</button>
+    <button type="button" class="fab-t" data-type="sevrage">Sevrage</button>
   </div>
   <form method="post" action="/saisie-rapide" id="fab-form">
     <input type="hidden" name="csrf_token" value="{{ session.csrf }}">
@@ -131,6 +147,32 @@
       <label>Nombre de porcs<input name="nombre" type="number" min="1" value="1" disabled required></label>
       <p><a href="/transferts">Sélectionner et déplacer plusieurs truies</a></p>
     </div>
+
+    <!-- Sevrage: étape 1 (choix mode / truies) puis étape 2 (répartition) -->
+    <div class="fab-f" data-for="sevrage" hidden>
+      <label>Bande
+        <select name="bande_id" id="fab-bande-sevrage" disabled required><option value="">Chargement…</option></select>
+      </label>
+      <div style="margin-top:8px">
+        <label><input type="radio" name="sevrage_mode" value="toute" checked disabled> Sevrer toute la bande</label>
+        <label style="margin-left:12px"><input type="radio" name="sevrage_mode" value="truie" disabled> Sevrer truie par truie</label>
+      </div>
+      <div id="fab-sevrage-truies" style="margin-top:8px;max-height:220px;overflow:auto;border:1px dashed #ddd;padding:8px;display:none">
+        <!-- Rempli dynamiquement : checkbox par truie + input nombre -->
+        <div id="fab-sevrage-truies-list"></div>
+      </div>
+      <hr>
+      <div id="fab-sevrage-repartition" style="display:none">
+        <p>Nombre total à sevrer : <b id="fab-sevrage-total">0</b></p>
+        <div id="fab-sevrage-lines">
+          <!-- template ligne destination -->
+        </div>
+        <p><button type="button" id="fab-sevrage-add-dest">+ Ajouter une salle</button></p>
+        <p>Répartis : <span id="fab-sevrage-sum">0</span> / <span id="fab-sevrage-total-2">0</span> porcelets</p>
+      </div>
+      <input type="hidden" name="sevrage_truies" id="sevrage_truies">
+      <input type="hidden" name="sevrage_distribution" id="sevrage_distribution">
+    </div>
     <label id="fab-note-wrap">Observation<input name="note" id="fab-note" placeholder="Observation facultative"></label>
     <button type="submit" class="fab-ok">Valider</button>
   </form>
@@ -150,6 +192,19 @@
   var source=document.getElementById('fab-source');
   var destination=document.getElementById('fab-destination');
   var movementBands=[], movementCases=[];
+  // Toast helper: non-blocking notifications
+  function showToast(message, kind){
+    try{
+      var container = document.getElementById('toast-container'); if(!container) return;
+      var toast = document.createElement('div'); toast.className = 'toast '+(kind||'info'); toast.textContent = message;
+      container.appendChild(toast);
+      // force reflow to allow transition
+      window.getComputedStyle(toast).opacity; setTimeout(function(){ toast.classList.add('show'); },10);
+      // auto-remove
+      setTimeout(function(){ toast.classList.remove('show'); setTimeout(function(){ toast.remove(); },240); }, 4500);
+    } catch(e){ /* silent */ }
+  }
+  function setSubmitPending(pending){ var btn = form.querySelector('.fab-ok'); if(!btn) return; if(pending){ btn.disabled = true; btn.dataset._orig = btn.textContent; btn.textContent = 'Enregistrement…'; } else { btn.disabled = false; if(btn.dataset._orig) { btn.textContent = btn.dataset._orig; delete btn.dataset._orig; } } }
   function refreshMovementSources(){
     source.replaceChildren(new Option('— sélectionner —',''));
     movementBands.forEach(function(row){source.add(new Option('Bande · '+text(row.code)+(row.site?' · '+text(row.site):''),'bande:'+text(row.id)));});
@@ -158,6 +213,14 @@
   function setOpen(open){
     panel.classList.toggle('open',open); panel.setAttribute('aria-hidden',String(!open));
     button.setAttribute('aria-expanded',String(open)); if(open){window.setTimeout(function(){sow.focus();},0);}
+    if(open){ // refresh capacities when opening the panel to have up-to-date data
+      refreshCasesCapacity();
+      if(typeInput.value==='sevrage'){
+        startCaseCapacityPolling();
+      }
+    } else {
+      stopCaseCapacityPolling();
+    }
   }
   button.addEventListener('click',function(){setOpen(!panel.classList.contains('open'));});
   close.addEventListener('click',function(){setOpen(false);button.focus();});
@@ -167,21 +230,118 @@
     select.replaceChildren(new Option('— sélectionner —',''));
     rows.forEach(function(row){select.add(new Option(label(row),text(row.id)));});
   }
+  // stocke les truies pour usage par l'UI sevrage
+  var _truieRows = [];
+  // stocke les capacités actuelles par case
+  var caseCapMap = {};
+
+  // refresh capacities from server and update selects/badges
+  function refreshCasesCapacity(){
+    return fetch('/api/cases-capacity').then(function(resp){ return resp.json(); }).then(function(caps){
+      caseCapMap = {};
+      caps.forEach(function(c){ caseCapMap[String(c.id)] = c; });
+      // update main selects options and dataset
+      ['fab-case','fab-destination'].forEach(function(id){
+        var sel = document.getElementById(id);
+        if(!sel) return;
+        Array.from(sel.options).forEach(function(opt){
+          var val = opt.value;
+          if(!val) return;
+          var cap = caseCapMap[String(val)];
+          if(cap && cap.nb_max_porcs){
+            var remaining = (cap.remaining!=null)?cap.remaining:null;
+            if(remaining!=null){ opt.dataset.remaining = String(remaining); }
+            var isFull = remaining !== null && Number(remaining) <= 0;
+            if(isFull){ opt.disabled = true; opt.text = opt.text.replace(/\s*\(.*\)$/,'') + ' (plein)'; opt.title='Capacité pleine'; }
+            else { opt.disabled = false; opt.title=''; }
+          }
+        });
+        updateCapacityBadgeForSelect(sel);
+      });
+      // update any sevrage dest selects and their hint badges
+      document.querySelectorAll('.fab-sev-dest').forEach(function(sel){
+        Array.from(sel.options).forEach(function(opt){ var val = opt.value; if(!val) return; var cap = caseCapMap[String(val)]; if(cap && cap.nb_max_porcs){ var remaining = (cap.remaining!=null)?cap.remaining:null; if(remaining!=null){ opt.dataset.remaining = String(remaining); } var isFull = remaining !== null && Number(remaining) <= 0; if(isFull){ opt.disabled = true; opt.text = opt.text.replace(/\s*\(.*\)$/,'') + ' (plein)'; opt.title='Capacité pleine'; } else { opt.disabled = false; opt.title=''; } } });
+        // update badge next to select
+        updateCapacityBadgeForSelect(sel);
+        // update hint span if present
+        var hint = sel.parentElement.querySelector('.capacity-badge'); if(hint){ var selOpt = sel.options[sel.selectedIndex]; hint.style.display = selOpt && selOpt.dataset && selOpt.dataset.remaining ? 'inline-block' : 'none'; }
+      });
+      return caps;
+    }).catch(function(){ /* ignore */ });
+  }
+
+  // polling management for capacities
+  var caseCapacityIntervalId = null;
+  function startCaseCapacityPolling(){
+    stopCaseCapacityPolling();
+    caseCapacityIntervalId = window.setInterval(function(){
+      // refresh only if panel is open and we are on sevrage
+      if(panel.classList.contains('open') && typeInput.value==='sevrage'){
+        refreshCasesCapacity();
+      } else {
+        stopCaseCapacityPolling();
+      }
+    }, 20000);
+  }
+  function stopCaseCapacityPolling(){ if(caseCapacityIntervalId){ clearInterval(caseCapacityIntervalId); caseCapacityIntervalId = null; } }
+
+  // fetch generic truies list (used by many places and expected by tests)
   fetch('/api/truies').then(function(response){return response.json();}).then(function(rows){
+    _truieRows = rows;
     fillSelect(sow,rows,function(row){return text(row.num_travail)+(row.bande_code?' · '+text(row.bande_code):'');});
+    // now fetch sevrage-specific extra values (dernier mise-bas, dernier sevrage) and merge
+    fetch('/api/truies-sevrage').then(function(resp){return resp.json();}).then(function(extraRows){
+      var map = {};
+      extraRows.forEach(function(r){ map[String(r.id)] = r; });
+      _truieRows.forEach(function(orig){ var ext = map[String(orig.id)]; if(ext){ orig.dernier_nes_vifs = ext.dernier_nes_vifs; orig.dernier_nb_sevres = ext.dernier_nb_sevres; }});
+      // if sevrage UI already visible, refresh list
+      if(document.querySelector('[data-for="sevrage"]').hidden === false){ populateSevrageTruies(); }
+    }).catch(function(){});
   }).catch(function(){sow.replaceChildren(new Option('Liste indisponible',''));});
   fetch('/api/bandes-actives').then(function(response){return response.json();}).then(function(rows){
     fillSelect(band,rows,function(row){return text(row.code)+(row.site?' · '+text(row.site):'');});
     movementBands=rows; refreshMovementSources();
+    // aussi remplir le select dédié au sevrage
+    var bandSelectSev=document.getElementById('fab-bande-sevrage'); bandSelectSev.replaceChildren(new Option('— sélectionner —',''));
+    rows.forEach(function(r){bandSelectSev.add(new Option((r.code||(r.id))+ (r.site?' · '+r.site:''),text(r.id)));});
   }).catch(function(){band.replaceChildren(new Option('Liste indisponible',''));});
-  fetch('/api/cases').then(function(response){return response.json();}).then(function(rows){
+  // fetch cases and capacities to display remaining places
+  Promise.all([fetch('/api/cases').then(function(r){return r.json();}), fetch('/api/cases-capacity').then(function(r){return r.json();}).catch(function(){return [];} )]).then(function(results){
+    var rows = results[0] || [];
+    var caps = (results[1] && Array.isArray(results[1]))?results[1]:[];
+    var capMap = {};
+    caps.forEach(function(c){ capMap[String(c.id)] = c; });
     var select=document.getElementById('fab-case'); select.replaceChildren(new Option('— aucune / sous la mère —',''));
-    destination.replaceChildren(new Option('— sélectionner —','')); movementCases=rows; refreshMovementSources();
+    destination.replaceChildren(new Option('— sélectionner —',''));
+    movementCases=rows; refreshMovementSources();
     rows.forEach(function(row){
       var label=[row.site,row.salle,row.nom].filter(Boolean).join(' · ');
-      select.add(new Option(label,text(row.id)));
-      destination.add(new Option(label,text(row.id)));
+      var opt1 = new Option(label,text(row.id));
+      var opt2 = new Option(label,text(row.id));
+      var cap = capMap[String(row.id)];
+      if(cap){
+        var remaining = (cap.nb_max_porcs!=null && cap.nb_max_porcs>0) ? (cap.remaining!=null?cap.remaining:'?') : null;
+        var isFull = remaining !== null && remaining !== '?' && Number(remaining) <= 0;
+        var capLabel = '';
+        if(cap.nb_max_porcs){
+          if(isFull){
+            capLabel = ' (plein)';
+          } else {
+            capLabel = ' (cap:'+cap.nb_max_porcs+', libre:'+ (remaining==null?'?':remaining) +')';
+          }
+        }
+        opt1.text = label + capLabel; opt2.text = label + capLabel;
+        if(remaining!=null && remaining!=='?'){ opt1.dataset.remaining = String(remaining); opt2.dataset.remaining = String(remaining); }
+        if(isFull){ opt1.disabled = true; opt2.disabled = true; opt1.title = 'Capacité pleine'; opt2.title = 'Capacité pleine'; }
+      }
+      select.add(opt1);
+      destination.add(opt2);
     });
+    // initialize capacity badges for main selects and update on change
+    updateCapacityBadgeForSelect(document.getElementById('fab-case'));
+    updateCapacityBadgeForSelect(document.getElementById('fab-destination'));
+    document.getElementById('fab-case').addEventListener('change',function(){ updateCapacityBadgeForSelect(this); });
+    document.getElementById('fab-destination').addEventListener('change',function(){ updateCapacityBadgeForSelect(this); });
   }).catch(function(){});
   var now=new Date(); now.setMinutes(now.getMinutes()-now.getTimezoneOffset());
   document.getElementById('fab-date').value=now.toISOString().slice(0,10);
@@ -197,16 +357,215 @@
     sow.disabled=movement; sow.required=!loss&&!movement; document.getElementById('fab-truie-wrap').hidden=movement;
     sowLabel.textContent=loss?'Truie sous la mère (facultatif)':'Truie';
     band.disabled=!loss; band.required=loss; noteWrap.hidden=type==='sortie'; note.disabled=type==='sortie';
+
+    // Sevrage: initialisation spécifique
+    if(type==='sevrage'){
+      // enable sevrage-specific fields
+      var bandSev=document.getElementById('fab-bande-sevrage');
+      bandSev.disabled=false; bandSev.required=true;
+      document.querySelectorAll('[name="sevrage_mode"]').forEach(function(r){r.disabled=false});
+      // show list only if mode truie
+      document.querySelectorAll('[name="sevrage_mode"]').forEach(function(r){r.addEventListener('change',function(){updateSevrageUI();});});
+      bandSev.addEventListener('change',function(){populateSevrageTruies(); refreshCasesCapacity();});
+      // also refresh capacities now
+      refreshCasesCapacity();
+      // prepare add destination
+      setupSevrageRepartition();
+      // start polling if panel is open
+      if(panel.classList.contains('open')){ startCaseCapacityPolling(); }
+    } else {
+      // stop polling when leaving sevrage
+      stopCaseCapacityPolling();
+    }
   }
   document.querySelectorAll('.fab-t').forEach(function(item){item.addEventListener('click',function(){chooseType(item.dataset.type,item);});});
   document.querySelectorAll('[data-observation]').forEach(function(item){item.addEventListener('click',function(){
     var value=item.dataset.observation; var parts=note.value.split(',').map(function(v){return v.trim();}).filter(Boolean);
     if(parts.indexOf(value)<0){parts.push(value);} note.value=parts.join(', '); note.focus();
   });});
+  // Sevrage helper functions
+  function populateSevrageTruies(){
+    var bandId=document.getElementById('fab-bande-sevrage').value; var list=document.getElementById('fab-sevrage-truies-list'); list.replaceChildren();
+    if(!bandId) { document.getElementById('fab-sevrage-truies').style.display='none'; updateSevrageUI(); return; }
+    var rows=_truieRows||[]; var filtered=rows.filter(function(r){return String(r.bande_code||'')!=='' && String(getBandIdForCode(r.bande_code))===String(bandId);});
+    // if none match by code, fallback to any truie with bande_code present matching code via movementBands
+    if(filtered.length===0){filtered = rows.filter(function(r){return r.bande_code && movementBands.some(function(b){return b.code===r.bande_code && String(b.id)===String(bandId);});});}
+    // If mode 'toute', fetch an estimate for the bande to show total and avoid manual per-truie selection
+    var mode = document.querySelector('[name="sevrage_mode"]:checked')?.value || 'toute';
+    if(mode==='toute'){
+      fetch('/api/bande/'+encodeURIComponent(bandId)+'/sevrage-estimate').then(function(resp){return resp.json();}).then(function(data){
+        var total = data && data.total_expected ? data.total_expected : 0;
+        document.getElementById('fab-sevrage-total').textContent = total;
+        document.getElementById('fab-sevrage-total-2').textContent = total;
+        // ensure repartition UI visible/enabled
+        document.getElementById('fab-sevrage-repartition').style.display = total>0 ? 'block' : 'none';
+        document.getElementById('fab-sevrage-repartition').querySelectorAll('input,select').forEach(function(f){f.disabled = !(total>0);});
+        // hide truie list in 'toute' mode
+        document.getElementById('fab-sevrage-truies').style.display='none';
+      }).catch(function(){
+        // fallback: compute total from available per-truie values
+        var total = filtered.reduce(function(acc,r){ var p=(r.dernier_nes_vifs!=null)?(parseInt(r.dernier_nes_vifs)||0):((r.dernier_nb_sevres!=null)?(parseInt(r.dernier_nb_sevres)||0):0); return acc + p; },0);
+        document.getElementById('fab-sevrage-total').textContent = total;
+        document.getElementById('fab-sevrage-total-2').textContent = total;
+        document.getElementById('fab-sevrage-repartition').style.display = total>0 ? 'block' : 'none';
+        document.getElementById('fab-sevrage-repartition').querySelectorAll('input,select').forEach(function(f){f.disabled = !(total>0);});
+        document.getElementById('fab-sevrage-truies').style.display='none';
+      });
+      updateSevrageUI();
+      return;
+    }
+    // build list for 'truie' mode
+    filtered.forEach(function(r){
+      var row=document.createElement('div'); row.style.display='flex'; row.style.alignItems='center'; row.style.gap='8px'; row.style.marginBottom='6px';
+      var cb=document.createElement('input'); cb.type='checkbox'; cb.dataset.sowId=String(r.id); cb.className='fab-sev-check';
+      var label=document.createElement('span'); label.textContent=r.num_travail + (r.rfid?(' · '+r.rfid):''); label.style.flex='0 0 140px';
+      var nb=document.createElement('input'); nb.type='number'; nb.min='0'; nb.className='fab-sev-nb'; nb.style.width='70px'; nb.placeholder='# porcelets';
+      // préremplissage si disponible depuis l'API (dernier mise-bas / dernier sevrage)
+      var pre = (r.dernier_nes_vifs!=null)?r.dernier_nes_vifs:(r.dernier_nb_sevres!=null?r.dernier_nb_sevres:0);
+      nb.value = String(pre);
+      row.appendChild(cb); row.appendChild(label); row.appendChild(nb); list.appendChild(row);
+      nb.addEventListener('input',function(){recomputeSevrageTotal();}); cb.addEventListener('change',function(){recomputeSevrageTotal();});
+    });
+    document.getElementById('fab-sevrage-truies').style.display='block'; updateSevrageUI();
+  }
+  function getBandIdForCode(code){ if(!code) return null; for(var i=0;i<movementBands.length;i++){if(movementBands[i].code===code) return movementBands[i].id;} return null; }
+
+  // Update or create a small capacity badge next to a select element
+  function updateCapacityBadgeForSelect(select){ if(!select) return; var opt = select.options[select.selectedIndex]; var rem = opt && opt.dataset ? opt.dataset.remaining : undefined; var badge = select.nextElementSibling; if(!badge || !badge.classList || !badge.classList.contains('capacity-badge')){ badge = document.createElement('span'); badge.className='capacity-badge'; select.parentNode.insertBefore(badge, select.nextSibling); }
+  if(rem===undefined || rem===null || rem==='') { badge.style.display='none'; badge.textContent=''; badge.className='capacity-badge'; return; }
+  badge.style.display='inline-block'; var n = parseInt(rem)||0; if(n<=0){ badge.textContent = 'Plein'; badge.className='capacity-badge full'; } else { badge.textContent = 'Libre: '+n; if(n<5){ badge.className='capacity-badge warn'; } else { badge.className='capacity-badge good'; } } }
+
+  function recomputeSevrageTotal(){ var total=0; document.querySelectorAll('#fab-sevrage-truies-list .fab-sev-nb').forEach(function(inp){ if(inp.previousSibling && inp.previousSibling.checked){ var v=parseInt(inp.value)||0; total+=v; }}); document.getElementById('fab-sevrage-total').textContent=total; document.getElementById('fab-sevrage-total-2').textContent=total; document.getElementById('fab-sevrage-sum').textContent=(parseInt(document.getElementById('fab-sevrage-sum').textContent)||0); }
+  function updateSevrageUI(){ var mode=document.querySelector('[name="sevrage_mode"]:checked')?.value; var total=parseInt(document.getElementById('fab-sevrage-total').textContent)||0; if(mode==='truie'){ document.getElementById('fab-sevrage-truies').style.display='block'; } else { document.getElementById('fab-sevrage-truies').style.display='none'; }
+    document.getElementById('fab-sevrage-repartition').style.display = (total>0)?'block':'none'; document.getElementById('fab-sevrage-repartition').querySelectorAll('input,select').forEach(function(f){f.disabled = !(total>0);});
+    document.getElementById('fab-sevrage-sum').textContent = 0;
+  }
+  function setupSevrageRepartition(){
+    var container=document.getElementById('fab-sevrage-lines'); container.replaceChildren();
+    function addLine(caseId,nb){ var line=document.createElement('div'); line.style.display='flex'; line.style.gap='8px'; line.style.alignItems='center';
+      var sel=document.createElement('select'); sel.className='fab-sev-dest'; sel.innerHTML = document.getElementById('fab-destination').innerHTML; if(caseId) sel.value=String(caseId);
+      var hint=document.createElement('span'); hint.className='capacity-badge'; hint.style.fontSize='12px'; hint.style.minWidth='120px'; hint.style.display='inline-block';
+      var inp=document.createElement('input'); inp.type='number'; inp.min='0'; inp.value=nb||0; inp.className='fab-sev-dest-nb'; inp.style.width='90px';
+      var rem=document.createElement('button'); rem.type='button'; rem.textContent='×'; rem.addEventListener('click',function(){line.remove(); recomputeSevrageDestSum();});
+      line.appendChild(sel); line.appendChild(hint); line.appendChild(inp); line.appendChild(rem); container.appendChild(line);
+      // update hint from selected option's data-remaining using shared updater
+      function updateHint(){ updateCapacityBadgeForSelect(sel); }
+      inp.addEventListener('input',recomputeSevrageDestSum); sel.addEventListener('change',function(){ updateHint(); recomputeSevrageDestSum(); });
+      // initialize hint
+      updateHint();
+    }
+    document.getElementById('fab-sevrage-add-dest').addEventListener('click',function(){ addLine(); recomputeSevrageDestSum(); });
+    // start with one line
+    addLine(); recomputeSevrageDestSum();
+  }
+  function recomputeSevrageDestSum(){ var sum=0; var invalid=false; document.querySelectorAll('.fab-sev-dest-nb').forEach(function(inp){ var val = parseInt(inp.value)||0; sum += val; var sel = inp.previousSibling; // in DOM structure sel may be previous sibling
+    if(!sel || !sel.options) {
+      // try to find select in parent
+      sel = inp.parentElement.querySelector('.fab-sev-dest');
+    }
+    var remaining = sel && sel.options[sel.selectedIndex] && sel.options[sel.selectedIndex].dataset ? parseInt(sel.options[sel.selectedIndex].dataset.remaining||'') : NaN;
+    if(!Number.isNaN(remaining) && val>remaining){ invalid = true; inp.classList.add('invalid'); } else { inp.classList.remove('invalid'); }
+  }); document.getElementById('fab-sevrage-sum').textContent = sum; document.getElementById('fab-sevrage-sum').dataset.value = sum; if(invalid){ document.getElementById('fab-sevrage-sum').style.color='red'; } else { document.getElementById('fab-sevrage-sum').style.color='inherit'; } }
+
   form.addEventListener('submit',function(event){
     if(typeInput.value==='eld'){
       var values=['eld','poids','nec'].map(function(name){return form.querySelector('[data-for="eld"] [name="'+name+'"]').value.trim();});
-      if(values.every(function(value){return !value;})){event.preventDefault();window.alert('Saisissez au moins l’ELD, le poids ou la NEC.');}
+      if(values.every(function(value){return !value;})){event.preventDefault(); showToast('Saisissez au moins l\u2019ELD, le poids ou la NEC.','error'); return; }
+    }
+    if(typeInput.value==='sevrage'){
+      // verify per-line capacities before submit
+      var invalidFound=false; document.querySelectorAll('#fab-sevrage-lines div').forEach(function(line){ var sel=line.querySelector('.fab-sev-dest'); var nb=parseInt(line.querySelector('.fab-sev-dest-nb').value)||0; if(sel && sel.value){ var remaining = sel.options[sel.selectedIndex] && sel.options[sel.selectedIndex].dataset ? parseInt(sel.options[sel.selectedIndex].dataset.remaining||'') : NaN; if(!Number.isNaN(remaining) && nb>remaining){ invalidFound=true; } } }); if(invalidFound){ event.preventDefault(); showToast('Une ou plusieurs destinations dépassent la capacité restante. Ajuste la répartition.','error'); return; }
+      // submit via AJAX to receive immediate refresh info
+      event.preventDefault();
+      setSubmitPending(true);
+      var fd = new FormData(form);
+      fd.set('ajax','1');
+      fetch(form.action, { method: 'POST', body: fd, credentials: 'same-origin' }).then(function(resp){
+        if(resp.ok){ return resp.json().catch(function(){ return {ok:true}; }); }
+        throw new Error('Erreur serveur');
+      }).then(function(data){
+        try{ if(data && data.ok){
+            // refresh capacities first
+            refreshCasesCapacity();
+            // if we're on the band page for the updated band, refresh only specific fragments
+            if(data.band_id){
+              // try a fine-grained update using JSON API: fetch band data and update KPI and emplacements
+              fetch('/api/bande/'+encodeURIComponent(data.band_id), {credentials:'same-origin'}).then(function(r){ if(r.ok) return r.json(); throw new Error('Erreur récupération bande JSON'); }).then(function(json){
+                try{
+                  var localMain = document.querySelector('main.rust-main');
+                  if(!localMain) { window.location.reload(); return; }
+                  // Update KPI grid (.rust-grid) if present
+                  var kpi = localMain.querySelector('.rust-grid');
+                  if(kpi && json.resume){
+                    var res = json.resume;
+                    // build simple KPI HTML consistent with template
+                    var kpiHtml = '';
+                    kpiHtml += '<div class="card kpi"><div class="v">'+(res.truies!==undefined?res.truies:'—')+'</div><div class="l">Truies actuelles</div></div>';
+                    kpiHtml += '<div class="card kpi"><div class="v">'+(res.portees!==undefined?res.portees:'—')+'</div><div class="l">Portées du cycle</div></div>';
+                    kpiHtml += '<div class="card kpi"><div class="v">'+(res.nv!==undefined?res.nv:'—')+'</div><div class="l">Nés vifs · '+(res.nv_portee||'—')+'/portée</div></div>';
+                    kpiHtml += '<div class="card kpi"><div class="v">'+(res.sevres!==undefined?res.sevres:'—')+'</div><div class="l">Sevrés · '+(res.sevres_portee||'—')+'/portée</div></div>';
+                    kpiHtml += '<div class="card kpi"><div class="v">'+(res.mortnes!==undefined?res.mortnes:'—')+' %</div><div class="l">Taux de mort-nés</div></div>';
+                    kpiHtml += '<div class="card kpi"><div class="v">'+(res.pertes!==undefined?res.pertes:'—')+' %</div><div class="l">Mortalité sous la mère</div></div>';
+                    kpi.innerHTML = kpiHtml;
+                  }
+                  // Update "Derniers emplacements enregistrés" table
+                  if(json.emplacements){
+                    var sections = Array.from(localMain.querySelectorAll('section.card'));
+                    var localEmpl = sections.find(function(s){ var h=s.querySelector('h2'); return h && /Derniers emplacements enregistrés/.test(h.textContent); });
+                    if(localEmpl){
+                      var tbody = localEmpl.querySelector('table tbody');
+                      if(tbody){
+                        tbody.replaceChildren();
+                        var rows = json.emplacements;
+                        if(rows && rows.length){
+                          rows.forEach(function(r){
+                            var tr = document.createElement('tr');
+                            var tdDate = document.createElement('td'); tdDate.textContent = r.date || ''; tr.appendChild(tdDate);
+                            var tdBat = document.createElement('td'); tdBat.textContent = r.batiment || ''; tr.appendChild(tdBat);
+                            var tdSalle = document.createElement('td'); tdSalle.textContent = r.salle || ''; tr.appendChild(tdSalle);
+                            var tdUnite = document.createElement('td'); tdUnite.textContent = r.unite || ''; tr.appendChild(tdUnite);
+                            var tdNb = document.createElement('td'); tdNb.textContent = r.nombre || ''; tr.appendChild(tdNb);
+                            tbody.appendChild(tr);
+                          });
+                        } else {
+                          var tr = document.createElement('tr'); var td = document.createElement('td'); td.colSpan=5; td.className='rust-empty'; td.textContent='Aucun emplacement enregistré — utilisez le bouton + puis Mouvement.'; tr.appendChild(td); tbody.appendChild(tr);
+                        }
+                      }
+                    }
+                  }
+                } catch(e){ /* fallback to full reload on error */ window.location.reload(); }
+              }).catch(function(){ window.location.reload(); });
+            }
+            showToast('Sevrage enregistré.','success');
+            setOpen(false);
+          } else { showToast('Sevrage enregistré.','success'); setOpen(false); }
+      } catch(e){ showToast('Sevrage enregistré (affichage non mis à jour).','info'); setOpen(false); }
+      setSubmitPending(false);
+      }).catch(function(err){ setSubmitPending(false); showToast('Erreur lors de l\'enregistrement: '+(err&&err.message?err.message:'Erreur'),'error'); });
+      return;
+      // collect selected truies
+      var mode=document.querySelector('[name="sevrage_mode"]:checked')?.value||'toute';
+      var selected=[]; var total=0;
+      if(mode==='toute'){
+        // collect all truies for band and use last known counts if available
+        var bandId=document.getElementById('fab-bande-sevrage').value;
+        _truieRows.filter(function(r){ return r.bande_code && String(getBandIdForCode(r.bande_code))===String(bandId);}).forEach(function(r){ var nb = (r.dernier_nes_vifs!=null)?(parseInt(r.dernier_nes_vifs)||0):((r.dernier_nb_sevres!=null)?(parseInt(r.dernier_nb_sevres)||0):0); selected.push({id:parseInt(r.id),nb:nb}); });
+      } else {
+        document.querySelectorAll('#fab-sevrage-truies-list div').forEach(function(div){ var cb=div.querySelector('.fab-sev-check'); if(cb && cb.checked){ var id=parseInt(cb.dataset.sowId); var nb=parseInt(div.querySelector('.fab-sev-nb').value)||0; selected.push({id:id,nb:nb}); total += nb; }});
+      }
+      // if mode toute, require user to enter numbers in list? We will require at least one selected or if mode toute take all but require distribution total later
+      if(mode==='truie' && selected.length===0){ event.preventDefault(); showToast('Sélectionne au moins une truie.','error'); return; }
+      // distribution
+      var dist=[]; var sum=0; document.querySelectorAll('#fab-sevrage-lines div').forEach(function(line){ var sel=line.querySelector('.fab-sev-dest'); var nb=parseInt(line.querySelector('.fab-sev-dest-nb').value)||0; if(sel && sel.value){ dist.push({case_id:parseInt(sel.value),nombre:nb}); sum += nb; }});
+      if(dist.length===0){ event.preventDefault(); showToast('Ajoute au moins une salle de destination.','error'); return; }
+      if(mode==='truie'){
+        // verify totals
+        var expected = selected.reduce(function(acc,item){return acc + (item.nb||0);},0);
+        if(sum !== expected){ event.preventDefault(); showToast('La somme des porcelets répartis ('+sum+') doit correspondre au total sélectionné ('+expected+').','error'); return; }
+      }
+      // set hidden inputs as JSON
+      document.getElementById('sevrage_truies').value = JSON.stringify(selected);
+      document.getElementById('sevrage_distribution').value = JSON.stringify(dist);
     }
   });
 })();
