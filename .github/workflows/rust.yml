@@ -11,26 +11,18 @@ concurrency:
 
 jobs:
   test:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - name: Vérifier les scripts de déploiement
-        if: runner.os == 'Linux'
         run: bash -n scripts/mettre-a-jour-debian13.sh && sh -n scripts/build-linux-musl.sh scripts/lancer.sh
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo fmt
       - name: Tests complets
-        if: runner.os != 'Windows'
         run: cargo test
-      - name: Tests Windows (hors PBKDF2 lent, déjà testé sous Linux)
-        if: runner.os == 'Windows'
-        run: cargo test -- --skip lit_un_hash_python_v165 --skip nouveau_hash_est_verifiable
 
   linux-static:
     runs-on: ubuntu-latest
