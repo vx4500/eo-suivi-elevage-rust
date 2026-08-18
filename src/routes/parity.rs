@@ -347,13 +347,112 @@ pub(super) async fn sanitaire_generer_protocole(State(state):State<AppState>,Ext
 pub(super) async fn stock_doses(State(state):State<AppState>,Extension(session):Extension<SessionData>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;let product=form_text(&form,"produit").ok_or_else(||AppError::Invalid("Produit obligatoire".into()))?;let doses=form_i64(&form,"doses_unite").filter(|v|*v>0).ok_or_else(||AppError::Invalid("Nombre de doses invalide".into()))?;let token=product.split_whitespace().next().unwrap_or(&product).to_lowercase();sqlx::query("UPDATE achatveto SET doses_unite=? WHERE lower(produit) LIKE ?").bind(doses).bind(format!("{token}%")).execute(&state.pool).await?;Ok(Redirect::to("/stock").into_response())}
 
 pub(super) async fn saisie_rapide(State(state):State<AppState>,Extension(session):Extension<SessionData>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{
-    require_writer(&session)?;verify_csrf(&session,&form)?;let kind=form_text(&form,"type").ok_or_else(||AppError::Invalid("Type de saisie obligatoire".into()))?;let date=form_date_or_today(&form,"date")?;
+    require_writer(&session)?;
+    verify_csrf(&session,&form)?;
+    let ajax_mode = form.get("ajax").map(|s|s=="1").unwrap_or(false);
+    let kind=form_text(&form,"type").ok_or_else(||AppError::Invalid("Type de saisie obligatoire".into()))?;
+    let date=form_date_or_today(&form,"date")?;
+    // track updated resources for ajax response
+    let mut updated_band_id: Option<i64> = None;
+    let mut updated_cases: Vec<i64> = Vec::new();
     match kind.as_str(){
         "perte"=>{let band_id=form_i64(&form,"bande_id").ok_or_else(||AppError::Invalid("Bande obligatoire".into()))?;let band:String=sqlx::query_scalar("SELECT code FROM bande WHERE id=?").bind(band_id).fetch_optional(&state.pool).await?.ok_or(AppError::NotFound)?;let number=form_i64(&form,"nombre").unwrap_or(1).max(1);sqlx::query("INSERT INTO declarationmort(bande_code,date,stade,case_id,cause,poids,nombre,declare_par,note) VALUES(?,?,?,?,?,?,?,?,?)").bind(band).bind(&date).bind(form_text(&form,"stade")).bind(form_i64(&form,"case_id")).bind(form_text(&form,"cause")).bind(form_f64(&form,"poids")).bind(number).bind(&session.nom).bind(form_text(&form,"note")).execute(&state.pool).await?;if let Some(sow_id)=form_i64(&form,"truie_id"){sqlx::query("INSERT INTO perteporcelet(truie_id,bande_id,age_j,nb,cause,date) VALUES(?,?,?,?,?,?)").bind(sow_id).bind(band_id).bind(form_i64(&form,"age_j")).bind(number).bind(form_text(&form,"cause")).bind(&date).execute(&state.pool).await?;}}
         "sortie"=>{let sow_id=form_i64(&form,"truie_id").ok_or_else(||AppError::Invalid("Truie obligatoire".into()))?;sqlx::query("UPDATE truie SET reformee=1,statut='sortie',date_reforme=?,motif_sortie=?,updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(date).bind(form_text(&form,"motif")).bind(sow_id).execute(&state.pool).await?;}
         "eld"=>{let sow_id=form_i64(&form,"truie_id").ok_or_else(||AppError::Invalid("Truie obligatoire".into()))?;let eld=form_f64(&form,"eld").filter(|v|*v>=0.0);let poids=form_f64(&form,"poids").filter(|v|*v>=0.0);let nec=form_f64(&form,"nec").filter(|v|(1.0..=5.0).contains(v));if eld.is_none()&&poids.is_none()&&nec.is_none(){return Err(AppError::Invalid("Saisissez au moins l’ELD, le poids ou la NEC".into()));}sqlx::query("INSERT INTO mesuretruie(truie_id,date,periode,eld,poids,nec,note) VALUES(?,?,?,?,?,?,?)").bind(sow_id).bind(date).bind(form_text(&form,"periode")).bind(eld).bind(poids).bind(nec).bind(form_text(&form,"note")).execute(&state.pool).await?;}
         "ia"|"echo"|"chaleur"=>{let sow_id=form_i64(&form,"truie_id").ok_or_else(||AppError::Invalid("Truie obligatoire".into()))?;let band_id=sow_band(&state.pool,sow_id).await?;sqlx::query("INSERT INTO evenement(type,date,truie_id,bande_id,resultat,produit,nb_doses,note) VALUES(?,?,?,?,?,?,?,?)").bind(&kind).bind(date).bind(sow_id).bind(band_id).bind(form_text(&form,"resultat")).bind(form_text(&form,"produit")).bind(form_i64(&form,"nb_doses")).bind(form_text(&form,"note")).execute(&state.pool).await?;}
+        "sevrage"=>{
+            // traitement batch de sevrage depuis la saisie rapide
+            let band_id=form_i64(&form,"bande_id").ok_or_else(||AppError::Invalid("Bande obligatoire".into()))?;
+            let band_code:String = sqlx::query_scalar("SELECT code FROM bande WHERE id=?").bind(band_id).fetch_optional(&state.pool).await?.ok_or(AppError::NotFound)?;
+            let _mode=form.get("sevrage_mode").map(|s|s.as_str()).unwrap_or("toute");
+            let sel = form.get("sevrage_truies").ok_or_else(||AppError::Invalid("Truies manquantes".into()))?;
+            let distrib = form.get("sevrage_distribution").ok_or_else(||AppError::Invalid("Répartition manquante".into()))?;
+            let selected: Vec<serde_json::Value> = serde_json::from_str(sel).map_err(|_|AppError::Invalid("Données truies invalides".into()))?;
+            let dist: Vec<serde_json::Value> = serde_json::from_str(distrib).map_err(|_|AppError::Invalid("Données répartition invalides".into()))?;
+            // calculs
+            let mut total_selected:i64 = 0;
+            let mut sows: Vec<(i64,i64)> = Vec::new();
+            for item in selected.iter(){
+                if let Some(id) = item.get("id").and_then(|v|v.as_i64()){
+                    let nb = item.get("nb").and_then(|v|v.as_i64()).unwrap_or(0);
+                    sows.push((id, nb));
+                    total_selected += nb;
+                }
+            }
+            let mut total_dist:i64 = 0;
+            let mut dlines: Vec<(i64,i64)> = Vec::new();
+            for item in dist.iter(){
+                if let Some(case_id) = item.get("case_id").and_then(|v|v.as_i64()){
+                    let nb = item.get("nombre").and_then(|v|v.as_i64()).unwrap_or(0);
+                    dlines.push((case_id, nb));
+                    total_dist += nb;
+                }
+            }
+            if total_dist != total_selected { return Err(AppError::Invalid("La somme des porcelets répartis doit correspondre au total sélectionné".into())); }
+            let mut tx = state.pool.begin().await?;
+            // pour chaque truie, enregistrer evenement sevrage (même si nb==0)
+            // avant d'enregistrer, vérifier qu'aucune truie sélectionnée n'a déjà un sevrage à la même date ou après
+            for (sow_id, nb) in sows.iter(){
+                let last_sev: Option<String> = sqlx::query_scalar("SELECT date FROM evenement WHERE truie_id=? AND type='sevrage' ORDER BY date DESC,id DESC LIMIT 1").bind(sow_id).fetch_optional(&state.pool).await?;
+                if let (Some(last), Some(given)) = (last_sev.as_deref(), parse_stored_date(&date)) {
+                    if let Some(ld) = parse_stored_date(last) {
+                        if ld >= given {
+                            return Err(AppError::Invalid(format!("Truie {} déjà sevrée le {}", sow_id, last)));
+                        }
+                    }
+                }
+                let existing:Option<i64> = sqlx::query_scalar("SELECT id FROM evenement WHERE truie_id=? AND type='sevrage' AND bande_id IS ? ORDER BY id DESC LIMIT 1").bind(sow_id).bind(band_id).fetch_optional(&state.pool).await?;
+                if let Some(event_id) = existing {
+                    sqlx::query("UPDATE evenement SET date=?,nb_sevres=?,note=? WHERE id=?").bind(&date).bind(*nb).bind(form_text(&form,"note")).bind(event_id).execute(&mut *tx).await?;
+                } else {
+                    sqlx::query("INSERT INTO evenement(type,date,truie_id,bande_id,nb_sevres,note) VALUES('sevrage',?,?,?,?,?)").bind(&date).bind(sow_id).bind(band_id).bind(*nb).bind(form_text(&form,"note")).execute(&mut *tx).await?;
+                }
+                // mettre à jour la truie (perf_sevres + potentiellement nettoyage bande_code)
+                sqlx::query("UPDATE truie SET perf_sevres=?,updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(*nb as f64).bind(sow_id).execute(&mut *tx).await?;
+                sqlx::query("UPDATE truie SET bande_code=CASE WHEN date(?)<=date('now') AND bande_code=(SELECT code FROM bande WHERE id=?) THEN NULL ELSE bande_code END,updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(&date).bind(band_id).bind(sow_id).execute(&mut *tx).await?;
+            }
+            // Vérification de capacité : pour chaque case destination, s'assurer que la somme actuelle + nb ne dépasse pas nb_max_porcs si défini
+            for (case_id, nb) in dlines.iter() {
+                if *nb <= 0 { continue; }
+                // récupérer capacité
+                let cap_opt: Option<i64> = sqlx::query_scalar("SELECT nb_max_porcs FROM casesalle WHERE id=?").bind(case_id).fetch_optional(&mut *tx).await?;
+                if let Some(cap) = cap_opt {
+                    // calculer l'occupation approximative actuelle
+                    let dest_str = format!("case:{}", case_id);
+                    let occupancy: i64 = sqlx::query_scalar(
+                        "SELECT COALESCE((SELECT SUM(COALESCE(nombre,0)) FROM mouvementstock WHERE destination=? AND est_stock=1),0) + COALESCE((SELECT CAST(COALESCE(SUM(nombre),0) AS INTEGER) FROM transfert WHERE case_dest_id=?),0) + COALESCE((SELECT nombre FROM inventairecase WHERE case_id=? ORDER BY date DESC,id DESC LIMIT 1),0)"
+                    ).bind(&dest_str).bind(case_id).bind(case_id).fetch_one(&mut *tx).await?;
+                    if occupancy + *nb > cap {
+                        return Err(AppError::Invalid(format!(
+                            "La case {} ne peut pas accueillir {} porcelet(s) (capacité {}, occupés {}).",
+                            case_id, nb, cap, occupancy
+                        )));
+                    }
+                }
+            }
+            // insert mouvementstock pour chaque destination
+            for (case_id, nb) in dlines.iter(){
+                if *nb>0 {
+                    sqlx::query("INSERT INTO mouvementstock(date,bande_code,nombre,libelle,destination,type_saisie,est_stock) VALUES(?,?,?,?,?,'sevrage',0)")
+                        .bind(&date).bind(&band_code).bind(*nb).bind("Sevrage").bind(format!("case:{}",case_id)).execute(&mut *tx).await?;
+                }
+            }
+            // maj bande.cs_total_sevres
+            if total_selected>0 {
+                sqlx::query("INSERT INTO bande(id,cs_total_sevres) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET cs_total_sevres=COALESCE(bande.cs_total_sevres,0)+excluded.cs_total_sevres")
+                    .bind(band_id).bind(total_selected).execute(&mut *tx).await?;
+            }
+            tx.commit().await?;
+            // remember updated band and cases for ajax response
+            updated_band_id = Some(band_id);
+            for (case_id, _nb) in dlines.iter(){ updated_cases.push(*case_id); }
+        }
         _=>return Err(AppError::Invalid("Type de saisie non reconnu".into())),
+    }
+    if ajax_mode {
+        // return a JSON summary for client-side refresh
+        let resp = json!({"ok": true, "band_id": updated_band_id, "cases": updated_cases});
+        return Ok(axum::Json(resp).into_response());
     }
     Ok(Redirect::to("/?saisie=ok").into_response())
 }

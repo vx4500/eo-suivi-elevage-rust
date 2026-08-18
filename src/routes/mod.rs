@@ -107,7 +107,11 @@ pub fn router(state: AppState) -> Router {
         .route("/api/bandes-actives", get(api_bandes_actives))
         .route("/api/bandes", get(api_bandes))
         .route("/api/truies", get(api_truies))
+        .route("/api/truies-sevrage", get(api_truies_sevrage))
+        .route("/api/bande/{id}/sevrage-estimate", get(api_bande_sevrage_estimate))
+        .route("/api/bande/{id}", get(api_bande_json))
         .route("/api/cases", get(api_cases))
+        .route("/api/cases-capacity", get(api_cases_capacity))
         .route("/energie", get(energie))
         .route("/energie/compteur", post(energie_compteur))
         .route("/energie/releve", post(energie_releve))
@@ -421,6 +425,177 @@ fn verify_csrf(session: &SessionData, form: &HashMap<String, String>) -> AppResu
         _ => Err(AppError::Forbidden),
     }
 }
+
+// API: fournir la liste des truies avec dernier "mise_bas" et dernier "sevrage" connus
+async fn api_truies_sevrage(State(state): State<AppState>) -> AppResult<axum::Json<Value>> {
+    // retourne : id, num_travail, rfid, bande_code, dernier_nes_vifs, dernier_nb_sevres
+    let rows = generic_rows(&state.pool, "SELECT t.id,t.num_travail,t.rfid,t.bande_code, (SELECT nes_vifs FROM evenement WHERE type='mise_bas' AND truie_id=t.id ORDER BY date DESC,id DESC LIMIT 1) AS dernier_nes_vifs, (SELECT nb_sevres FROM evenement WHERE type='sevrage' AND truie_id=t.id ORDER BY date DESC,id DESC LIMIT 1) AS dernier_nb_sevres FROM truie t WHERE t.reformee=0 ORDER BY t.num_travail")
+        .await?;
+    Ok(axum::Json(Value::Array(rows)))
+}
+
+async fn api_bande_sevrage_estimate(Path(id): Path<i64>, State(state): State<AppState>) -> AppResult<axum::Json<Value>> {
+    // récupère la liste des truies attachées à la bande (par code) et renvoie leurs estimations et le total
+    let rows = generic_rows(&state.pool, &format!("SELECT t.id,t.num_travail, (SELECT nes_vifs FROM evenement WHERE type='mise_bas' AND truie_id=t.id ORDER BY date DESC,id DESC LIMIT 1) AS dernier_nes_vifs, (SELECT nb_sevres FROM evenement WHERE type='sevrage' AND truie_id=t.id ORDER BY date DESC,id DESC LIMIT 1) AS dernier_nb_sevres FROM truie t WHERE t.reformee=0 AND t.bande_code=(SELECT code FROM bande WHERE id={}) ORDER BY t.num_travail", id)).await?;
+    let mut total: i64 = 0;
+    let mut list = Vec::new();
+    for v in &rows {
+        if let Some(obj) = v.as_object() {
+            let id = obj.get("id").and_then(Value::as_i64).unwrap_or(0);
+            let num = obj.get("num_travail").and_then(Value::as_str).unwrap_or("").to_string();
+            let nes = obj.get("dernier_nes_vifs").and_then(Value::as_f64).map(|f| f as i64).or_else(|| obj.get("dernier_nes_vifs").and_then(Value::as_i64));
+            let sev = obj.get("dernier_nb_sevres").and_then(Value::as_f64).map(|f| f as i64).or_else(|| obj.get("dernier_nb_sevres").and_then(Value::as_i64));
+            let est = nes.or(sev).unwrap_or(0);
+            total += est;
+            let mut entry = Map::new();
+            entry.insert("id".into(), json!(id));
+            entry.insert("num_travail".into(), json!(num));
+            entry.insert("estimate".into(), json!(est));
+            list.push(Value::Object(entry));
+        }
+    }
+    // also return band id for clients that may want to display it
+    Ok(axum::Json(json!({"band_id": id, "total_expected": total, "truies": list})))
+}
+
+// Fournit la capacité et l'occupation actuelle par case (pour affichage côté client)
+async fn api_cases_capacity(State(state): State<AppState>) -> AppResult<axum::Json<Value>> {
+    // retourne: id, nb_max_porcs, occupancy, remaining
+    let cases = generic_rows(&state.pool, "SELECT id,site,salle,nom,nb_max_porcs FROM casesalle ORDER BY site,salle,nom").await?;
+    let mut out = Vec::new();
+    for c in cases {
+        if let Some(obj) = c.as_object() {
+            let id = obj.get("id").and_then(Value::as_i64).unwrap_or(0);
+            let nb_max = obj.get("nb_max_porcs").and_then(Value::as_f64).map(|f| f as i64).or_else(|| obj.get("nb_max_porcs").and_then(Value::as_i64));
+            // calculer occupation approximative
+            let dest = format!("case:{}", id);
+            let occupancy: i64 = sqlx::query_scalar(
+                "SELECT COALESCE((SELECT SUM(COALESCE(nombre,0)) FROM mouvementstock WHERE destination=? AND est_stock=1),0) + COALESCE((SELECT COALESCE(SUM(nombre),0) FROM transfert WHERE case_dest_id=?),0) + COALESCE((SELECT nombre FROM inventairecase WHERE case_id=? ORDER BY date DESC,id DESC LIMIT 1),0)"
+            ).bind(&dest).bind(id).bind(id).fetch_one(&state.pool).await?;
+            let remaining = nb_max.map(|cap| cap - occupancy);
+            let mut entry = Map::new();
+            entry.insert("id".into(), json!(id));
+            entry.insert("nb_max_porcs".into(), json!(nb_max));
+            entry.insert("occupancy".into(), json!(occupancy));
+            entry.insert("remaining".into(), json!(remaining));
+            out.push(Value::Object(entry));
+        }
+    }
+    Ok(axum::Json(Value::Array(out)))
+}
+
+// API: bande detail minimal JSON for partial client refresh
+async fn api_bande_json(Path(id): Path<i64>, State(state): State<AppState>) -> AppResult<axum::Json<Value>> {
+    // mirror key parts of bande_detail but return JSON only
+    let sql = format!("SELECT {BAND_FIELDS} FROM bande WHERE id=?");
+    let band = sqlx::query_as::<_, Bande>(&sql)
+        .bind(id)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let sows = sqlx::query_as::<_, Truie>(TRUIE_SELECT_BY_BAND)
+        .bind(&band.code)
+        .fetch_all(&state.pool)
+        .await?;
+    let events = sqlx::query_as::<_, Evenement>(EVENT_SELECT_BY_BAND)
+        .bind(id)
+        .fetch_all(&state.pool)
+        .await?;
+    let litters = load_gttt_litters(&state.pool, Some(&band.code)).await?;
+    let technical_summary = if litters.is_empty() {
+        gttt_band_fallback(&band, &events)
+    } else {
+        gttt_summary(&litters)
+    };
+    let schedule = load_band_schedule(&state.pool).await?;
+    let porcs_presents = total_band_pigs(&state.pool, band.id, &band.code).await?;
+    let emplacements = generic_rows(
+        &state.pool,
+        &format!("SELECT t.date,si.code AS batiment,s.nom AS salle,c.nom AS unite,t.nombre FROM transfert t JOIN casesalle c ON c.id=t.case_dest_id JOIN salle s ON s.id=c.salle_id JOIN site si ON si.id=s.site_id WHERE t.espece='porc' AND t.bande_id={} ORDER BY t.date DESC,t.id DESC LIMIT 10", band.id),
+    )
+    .await?;
+    let vente_reelle: Option<String> = sqlx::query_scalar(
+        "SELECT MAX(date) FROM venteapport v WHERE v.bande_id=? OR (json_type(CASE WHEN json_valid(v.lots_json) THEN v.lots_json ELSE 'null' END)='array' AND EXISTS(SELECT 1 FROM json_each(v.lots_json) j WHERE CAST(json_extract(j.value,'$.bande_id') AS INTEGER)=?))",
+    )
+    .bind(band.id)
+    .bind(band.id)
+    .fetch_one(&state.pool)
+    .await?;
+    let depart_prevu = band.date_mb.as_deref().and_then(parse_stored_date).map(|date| date + Duration::days(schedule.departure));
+    let reference = vente_reelle.as_deref().and_then(parse_stored_date).unwrap_or_else(|| Local::now().date_naive());
+    let ecart_vente = depart_prevu.map(|date| (reference - date).num_days());
+    let statut_vente = match (vente_reelle.is_some(), ecart_vente) {
+        (true, Some(value)) if value < 0 => format!("Vendu avec {} jour(s) d'avance", -value),
+        (true, Some(value)) if value > 0 => format!("Vendu avec {value} jour(s) de retard"),
+        (true, Some(_)) => "Vendu à la date prévue".to_string(),
+        (false, Some(value)) if value > 0 && porcs_presents > 0 => format!("En retard de {value} jour(s)"),
+        (false, Some(value)) if value <= 0 => format!("Départ prévu dans {} jour(s)", -value),
+        (false, Some(_)) => "Date de départ dépassée, aucun porc présent".to_string(),
+        _ => "Date de mise-bas à renseigner".to_string(),
+    };
+    // build resume object similar to template
+    let resume = json!({
+        "truies": sows.len(),
+        "portees": technical_summary.portees,
+        "nv": technical_summary.total_nes_vifs,
+        "sevres": technical_summary.total_sevres,
+        "pertes": technical_summary.mortalite_allaitement,
+        "nv_portee": technical_summary.nes_vifs_moy,
+        "sevres_portee": technical_summary.sevres_moy,
+        "mortnes": technical_summary.taux_mortnes,
+    });
+    let suivi_porcs = json!({
+        "presents": porcs_presents,
+        "depart_prevu": depart_prevu.map(|d| d.format("%Y-%m-%d").to_string()),
+        "vente_reelle": vente_reelle,
+        "statut": statut_vente,
+        "ecart_jours": ecart_vente,
+    });
+    let resp = json!({
+        "band": band,
+        "resume": resume,
+        "emplacements": emplacements,
+        "suivi_porcs": suivi_porcs,
+    });
+    Ok(axum::Json(resp))
+}
+
+#[cfg(test)]
+mod sevrage_tests {
+    use super::*;
+    use crate::config::Config;
+    use minijinja::Environment;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    #[tokio::test]
+    async fn api_truies_sevrage_and_estimate_return_expected_values() -> AppResult<()> {
+        let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await?;
+        sqlx::raw_sql(include_str!("../../migrations/0001_schema.sql")).execute(&pool).await?;
+        // create a band
+        let band_id = sqlx::query("INSERT INTO bande(code,date_mb,active) VALUES('BTEST','2026-08-01',1)").execute(&pool).await?.last_insert_rowid();
+        // create truies
+        let sow1 = sqlx::query("INSERT INTO truie(num_travail,bande_code,statut,reformee) VALUES('T1','BTEST','active',0)").execute(&pool).await?.last_insert_rowid();
+        let sow2 = sqlx::query("INSERT INTO truie(num_travail,bande_code,statut,reformee) VALUES('T2','BTEST','active',0)").execute(&pool).await?.last_insert_rowid();
+        // add events: mise_bas for sow1 (nes_vifs 10), sow2 no mise_bas but prior sevrage of 8
+        sqlx::query("INSERT INTO evenement(type,date,truie_id,bande_id,nes_vifs) VALUES('mise_bas','2026-08-01',?,?,10)").bind(sow1).bind(band_id).execute(&pool).await?;
+        sqlx::query("INSERT INTO evenement(type,date,truie_id,bande_id,nb_sevres) VALUES('sevrage','2026-08-02',?,?,8)").bind(sow2).bind(band_id).execute(&pool).await?;
+        // build AppState
+        let config = Config { bind: "0.0.0.0:8080".parse().unwrap(), db_path: std::path::PathBuf::from("data/test.db"), secure_cookies: false };
+        let env = Environment::new();
+        let state = AppState::new(config, pool.clone(), env);
+        // call api_truies_sevrage
+        let json = api_truies_sevrage(State(state.clone())).await?;
+        let arr = json.0.as_array().cloned().unwrap_or_default();
+        assert!(arr.len() >= 2, "expected at least 2 truies returned");
+        // call estimate
+        let estimate = api_bande_sevrage_estimate(Path(band_id), State(state)).await?;
+        let obj = estimate.0.as_object().cloned().unwrap();
+        let total = obj.get("total_expected").and_then(Value::as_i64).unwrap_or(0);
+        assert_eq!(total, 10 + 8);
+        Ok(())
+    }
+}
+
 
 fn require_writer(session: &SessionData) -> AppResult<()> {
     if session.peut_modifier() {
