@@ -3955,8 +3955,8 @@ async fn gte(
     #[allow(clippy::type_complexity)]
     let rows: Vec<(i64, String, Option<String>, i64, f64, f64, f64, f64, i64)> = sqlx::query_as(
         "SELECT b.id,b.code,b.site,\
-         CAST(COALESCE(v.porcs,0) AS INTEGER),COALESCE(v.poids,0),COALESCE(v.recettes,0),\
-         COALESCE(a.tonnes,0),COALESCE(a.cout,0),\
+         CAST(COALESCE(v.porcs,0) AS INTEGER),CAST(COALESCE(v.poids,0) AS REAL),CAST(COALESCE(v.recettes,0) AS REAL),\
+         CAST(COALESCE(a.tonnes,0) AS REAL),CAST(COALESCE(a.cout,0) AS REAL),\
          CAST(COALESCE(t.truies,0) AS INTEGER) \
          FROM bande b \
          LEFT JOIN (SELECT bande_id,SUM(COALESCE(nb_porcs,0)) AS porcs,SUM(COALESCE(poids_total,0)) AS poids,SUM(COALESCE(montant_net,0)) AS recettes FROM venteapport GROUP BY bande_id) v ON v.bande_id=b.id \
