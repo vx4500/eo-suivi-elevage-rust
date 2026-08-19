@@ -364,8 +364,16 @@ pub(super) async fn demo_actif(State(state):State<AppState>,Extension(session):E
 
 pub(super) async fn demo_basculer(State(state):State<AppState>,Extension(session):Extension<SessionData>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{
     require_admin(&session)?;verify_csrf(&session,&form)?;let active:i64=sqlx::query_scalar("SELECT COUNT(*) FROM demoobjet").fetch_one(&state.pool).await?;let mut tx=state.pool.begin().await?;
-    if active>0{for table in ["evenement","truie","bande"]{let sql=format!("DELETE FROM {table} WHERE id IN(SELECT row_id FROM demoobjet WHERE table_name=?)");sqlx::query(&sql).bind(table).execute(&mut *tx).await?;}sqlx::query("DELETE FROM demoobjet").execute(&mut *tx).await?;}
-    else{let band_id=sqlx::query("INSERT INTO bande(code,date_mb,site,note,active) VALUES('DEMO-2.2',date('now'),'Démonstration','Donnée de démonstration identifiable',1)").execute(&mut *tx).await?.last_insert_rowid();sqlx::query("INSERT INTO demoobjet(table_name,row_id) VALUES('bande',?)").bind(band_id).execute(&mut *tx).await?;let sow_id=sqlx::query("INSERT INTO truie(num_travail,race,statut,rang,bande_code,note) VALUES('DEMO-T1','Large White','active',1,'DEMO-2.2','Donnée de démonstration')").execute(&mut *tx).await?.last_insert_rowid();sqlx::query("INSERT INTO demoobjet(table_name,row_id) VALUES('truie',?)").bind(sow_id).execute(&mut *tx).await?;let event_id=sqlx::query("INSERT INTO evenement(type,date,truie_id,bande_id,note) VALUES('chaleur',date('now'),?,?, 'Donnée de démonstration')").bind(sow_id).bind(band_id).execute(&mut *tx).await?.last_insert_rowid();sqlx::query("INSERT INTO demoobjet(table_name,row_id) VALUES('evenement',?)").bind(event_id).execute(&mut *tx).await?;}
+    if active>0{
+        // Ordre enfants → parents pour respecter les clés étrangères
+        // (foreign_keys=ON) : evenement référence truie et bande,
+        // truie/bande référencent site/utilisateur (via engraisseur_id).
+        for table in ["evenement","porccharcutier","truie","bande","utilisateur","site"]{let sql=format!("DELETE FROM {table} WHERE id IN(SELECT row_id FROM demoobjet WHERE table_name=?)");sqlx::query(&sql).bind(table).execute(&mut *tx).await?;}
+        sqlx::query("DELETE FROM demoobjet").execute(&mut *tx).await?;
+    }
+    else{
+        crate::demo::activer(&mut tx).await.map_err(AppError::Internal)?;
+    }
     tx.commit().await?;Ok(Redirect::to("/parametres#demo").into_response())
 }
 

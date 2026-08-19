@@ -1,6 +1,6 @@
 # EO-Suivi Élevage Rust — État du projet
 
-Version actuelle : **2.2.11** — Dernière mise à jour de ce document : 19 août 2026.
+Version actuelle : **2.2.12** — Dernière mise à jour de ce document : 19 août 2026.
 
 Ce fichier remplace et fusionne : `AUDIT-PORTAGE-RUST-2.1.2.md`,
 `DEMANDES-MODIFICATIONS-EOELEVAGE.md`, `LISTING-APPLICATION-EO-SUIVI.md`,
@@ -373,17 +373,37 @@ août 2026 ; la priorité actuelle porte sur la fiabilité des effectifs
       bandes » sur `/energie`, cumulée par bande et par type de compteur.
       Deux fonctions pures testées (`cout_consommation`,
       `repartir_cout_par_bande`).
-- [ ] Mode démo : générateur rejouable produisant plus de 850 truies
+- [x] Mode démo : générateur rejouable produisant plus de 850 truies
       actives, engraissement mixte sur place/extérieur et 5 ans
-      d'historique. *Non traité dans cet incrément :* le mécanisme de démo
-      actuel (`demo_toggle` dans `routes/parity.rs`) ne crée qu'une bande,
-      une truie et un événement — un geste symbolique, pas un jeu de
-      données exploitable pour se faire une idée de la durée d'utilisation.
-      Passer à l'échelle demandée (des dizaines de bandes sur 5 ans, des
-      centaines de truies, un historique GTTT cohérent, une répartition
-      sur/hors site) est un générateur à part entière, pas une extension
-      ponctuelle du toggle existant — laissé pour un incrément dédié plutôt
-      que bâclé dans la même session que les trois points ci-dessus.
+      d'historique. Nouveau module `src/demo.rs`, appelé par le même bouton
+      bascule qu'avant (`/parametres#demo`) — remplace le geste symbolique
+      précédent (une bande, une truie, un événement) sans changer son
+      fonctionnement pour l'éleveur : toujours un seul bouton, toujours
+      retiré proprement via `demoobjet`. Choix pour rester exécutable en
+      une seule transaction (~10 s en pratique, vérifié par un test bout en
+      bout sur une vraie base SQLite) sans générer des dizaines de milliers
+      de lignes inutiles : seules les ~7 bandes les plus récentes (actives,
+      un peu plus d'un cycle de reproduction) ont de vraies truies et des
+      porcs charcutiers individuels (7×125 = 875 truies actives) ; les
+      bandes plus anciennes, jusqu'à 5 ans en arrière (~86 bandes au
+      total), n'ont qu'une ligne `bande` avec ses agrégats de production
+      (`cs_truies_mb`, `cs_nt_portee`, etc.) déjà remplis — exactement ce
+      que lisent les écrans GTTT/productivité historiques, vérifié dans le
+      code existant avant d'écrire le générateur plutôt que supposé.
+      Engraissement : un tiers des bandes actives est confié à un
+      prestataire de démonstration (`bande.engraisseur_id`, même mécanisme
+      que les vrais prestataires), le reste reste sur place ; les porcs
+      charcutiers portent une `destination` cohérente avec leur bande.
+      Nouvelles tables tracées dans `demoobjet` (`site`, `utilisateur`,
+      `porccharcutier`) en plus des trois existantes ; suppression
+      symétrique mise à jour dans le bon ordre (enfants avant parents, pour
+      respecter les clés étrangères). Un vrai piège de compilation trouvé
+      et corrigé : `rand::thread_rng()` n'est pas `Send` et ne peut donc
+      pas être conservé à travers les nombreux `.await` d'un handler axum —
+      remplacé par `StdRng::from_entropy()`. Vérifié contre une vraie base
+      SQLite (pas seulement en théorie) : volumes, répartition sur/hors
+      site, traçabilité complète dans `demoobjet`, et suppression totale
+      sans violation de contrainte.
 
 ### Avec service externe (nécessite configuration explicite de l'éleveur)
 - [ ] Sauvegardes automatiques vers NAS, stockage en ligne ou messagerie.
@@ -491,7 +511,7 @@ l'arrêt déclenche le retour arrière ; la sauvegarde de la base est conservée
 ```bash
 systemctl status eo-suivi-rust --no-pager -l
 journalctl -u eo-suivi-rust -n 80 --no-pager -l -o cat
-curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.11"
+curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.12"
 ```
 
 Puis ouvrir `https://rust-elevage.basse-chevrie.ovh`.
