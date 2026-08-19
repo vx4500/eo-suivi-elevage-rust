@@ -3340,7 +3340,12 @@ async fn transferts(
     render(&state, "transferts.html", Value::Object(ctx))
 }
 
-async fn case_pig_count(pool: &SqlitePool, case_id: i64) -> AppResult<i64> {
+/// Effectif d'une case, sans plancher à zéro (`case_pig_count` applique ce
+/// plancher pour l'affichage normal). Une valeur négative signale un
+/// inventaire ou des mortalités incohérents ; voir aussi la même logique
+/// répliquée en SQL pur dans `etat_donnees` (« Cases avec effectif calculé
+/// négatif ») pour le rapport de contrôles structurels.
+async fn case_pig_count_raw(pool: &SqlitePool, case_id: i64) -> AppResult<i64> {
     let inventory: Option<(String, i64)> = sqlx::query_as(
         "SELECT date,nombre FROM inventairecase WHERE case_id=? ORDER BY date DESC,id DESC LIMIT 1",
     )
@@ -3368,7 +3373,11 @@ async fn case_pig_count(pool: &SqlitePool, case_id: i64) -> AppResult<i64> {
     .bind(&date)
     .fetch_one(pool)
     .await?;
-    Ok((base + movements - deaths).max(0))
+    Ok(base + movements - deaths)
+}
+
+async fn case_pig_count(pool: &SqlitePool, case_id: i64) -> AppResult<i64> {
+    Ok(case_pig_count_raw(pool, case_id).await?.max(0))
 }
 
 async fn remaining_band_pigs(pool: &SqlitePool, band_id: i64, code: &str) -> AppResult<i64> {
@@ -3675,7 +3684,7 @@ async fn etat_donnees(
         &session,
         "État des données",
         "Contrôles structurels en lecture seule. Une valeur à zéro signifie que le contrôle est conforme.",
-        "SELECT 'Doublons de numéros de truies actives' AS controle,COUNT(*) AS anomalies FROM (SELECT num_travail FROM truie WHERE reformee=0 GROUP BY lower(trim(num_travail)) HAVING COUNT(*)>1) UNION ALL SELECT 'Événements sans truie',COUNT(*) FROM evenement e LEFT JOIN truie t ON t.id=e.truie_id WHERE e.truie_id IS NOT NULL AND t.id IS NULL UNION ALL SELECT 'Événements sans bande',COUNT(*) FROM evenement e LEFT JOIN bande b ON b.id=e.bande_id WHERE e.bande_id IS NOT NULL AND b.id IS NULL UNION ALL SELECT 'Transferts vers une case absente',COUNT(*) FROM transfert t LEFT JOIN casesalle c ON c.id=t.case_dest_id WHERE t.case_dest_id IS NOT NULL AND c.id IS NULL UNION ALL SELECT 'Bandes actives sans date de mise-bas',COUNT(*) FROM bande WHERE active=1 AND (date_mb IS NULL OR trim(date_mb)='') UNION ALL SELECT 'Truies actives sans bande',COUNT(*) FROM truie WHERE reformee=0 AND (bande_code IS NULL OR trim(bande_code)='')",
+        "WITH effectif_case AS (SELECT c.id,c.nb_max_porcs,(SELECT date FROM inventairecase WHERE case_id=c.id ORDER BY date DESC,id DESC LIMIT 1) AS inv_date,COALESCE((SELECT nombre FROM inventairecase WHERE case_id=c.id ORDER BY date DESC,id DESC LIMIT 1),0) AS base FROM casesalle c),effectif_case2 AS (SELECT e.id,e.nb_max_porcs,e.base+COALESCE((SELECT SUM(CASE WHEN t.case_dest_id=e.id THEN COALESCE(t.nombre,0) ELSE -COALESCE(t.nombre,0) END) FROM transfert t WHERE t.espece='porc' AND (t.case_dest_id=e.id OR t.case_source_id=e.id) AND (e.inv_date IS NULL OR t.date>e.inv_date)),0)-COALESCE((SELECT SUM(d.nombre) FROM declarationmort d WHERE d.case_id=e.id AND (e.inv_date IS NULL OR d.date>e.inv_date)),0) AS effectif FROM effectif_case e) SELECT 'Doublons de numéros de truies actives' AS controle,COUNT(*) AS anomalies FROM (SELECT num_travail FROM truie WHERE reformee=0 GROUP BY lower(trim(num_travail)) HAVING COUNT(*)>1) UNION ALL SELECT 'Événements sans truie',COUNT(*) FROM evenement e LEFT JOIN truie t ON t.id=e.truie_id WHERE e.truie_id IS NOT NULL AND t.id IS NULL UNION ALL SELECT 'Événements sans bande',COUNT(*) FROM evenement e LEFT JOIN bande b ON b.id=e.bande_id WHERE e.bande_id IS NOT NULL AND b.id IS NULL UNION ALL SELECT 'Transferts vers une case absente',COUNT(*) FROM transfert t LEFT JOIN casesalle c ON c.id=t.case_dest_id WHERE t.case_dest_id IS NOT NULL AND c.id IS NULL UNION ALL SELECT 'Bandes actives sans date de mise-bas',COUNT(*) FROM bande WHERE active=1 AND (date_mb IS NULL OR trim(date_mb)='') UNION ALL SELECT 'Truies actives sans bande',COUNT(*) FROM truie WHERE reformee=0 AND (bande_code IS NULL OR trim(bande_code)='') UNION ALL SELECT 'Cases avec effectif calculé négatif',COUNT(*) FROM effectif_case2 WHERE effectif<0 UNION ALL SELECT 'Cases dépassant leur capacité déclarée',COUNT(*) FROM effectif_case2 WHERE nb_max_porcs IS NOT NULL AND nb_max_porcs>0 AND effectif>nb_max_porcs UNION ALL SELECT 'Déclarations de mortalité sans stade renseigné',COUNT(*) FROM declarationmort WHERE stade IS NULL OR trim(stade)='' UNION ALL SELECT 'Porcs charcutiers sans bande d''origine',COUNT(*) FROM porccharcutier WHERE bande_code IS NULL OR trim(bande_code)=''",
         &["controle", "anomalies"],
     )
     .await
