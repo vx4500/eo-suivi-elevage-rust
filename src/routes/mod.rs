@@ -675,6 +675,23 @@ mod aliment_tests {
         assert_eq!(jours_avant_rupture(21.0, 3.0), Some(7.0));
         assert_eq!(jours_avant_rupture(21.0, 0.0), None);
     }
+
+    #[test]
+    fn quantite_a_commander_ramene_a_la_capacite_sans_jamais_etre_negative() {
+        assert_eq!(quantite_a_commander(8.0, Some(20.0)), Some(12.0));
+        // Niveau déjà au-dessus de la capacité déclarée (erreur de saisie
+        // plausible) : rien à commander, pas une quantité négative.
+        assert_eq!(quantite_a_commander(25.0, Some(20.0)), Some(0.0));
+        assert_eq!(quantite_a_commander(8.0, None), None);
+    }
+
+    #[test]
+    fn commande_urgente_compare_au_delai_de_livraison() {
+        assert!(commande_urgente(Some(3.0), 5));
+        assert!(commande_urgente(Some(5.0), 5));
+        assert!(!commande_urgente(Some(6.0), 5));
+        assert!(!commande_urgente(None, 5));
+    }
 }
 
 #[cfg(test)]
@@ -3012,6 +3029,22 @@ fn consommation_quotidienne_tonnes(
 /// `None` si la consommation quotidienne est nulle (pas de rupture prévisible).
 fn jours_avant_rupture(niveau_actuel_tonnes: f64, consommation_quotidienne_tonnes: f64) -> Option<f64> {
     (consommation_quotidienne_tonnes > 0.0).then(|| niveau_actuel_tonnes / consommation_quotidienne_tonnes)
+}
+
+/// Tonnage à commander pour ramener le silo à sa capacité déclarée (§3
+/// « prévision de commande d'aliment avant rechargement »). `None` si la
+/// capacité n'est pas renseignée (rien à recommander sans référence).
+fn quantite_a_commander(niveau_actuel_tonnes: f64, capacite_tonnes: Option<f64>) -> Option<f64> {
+    capacite_tonnes.map(|capacite| (capacite - niveau_actuel_tonnes).max(0.0))
+}
+
+/// Vrai si une commande doit être passée maintenant compte tenu du délai de
+/// livraison habituel : le stock serait épuisé avant que la commande
+/// n'arrive. `jours_avant_rupture=None` (consommation nulle ou inconnue) ne
+/// déclenche jamais d'alerte — on ne prévient pas d'une rupture qu'on ne
+/// sait pas dater.
+fn commande_urgente(jours_avant_rupture: Option<f64>, delai_livraison_jours: i64) -> bool {
+    jours_avant_rupture.is_some_and(|jours| jours <= delai_livraison_jours as f64)
 }
 
 async fn reglage_i64(pool: &SqlitePool, cle: &str, default: i64) -> AppResult<i64> {
@@ -5560,6 +5593,7 @@ async fn aliment_previsions(
     State(state): State<AppState>,
     Extension(session): Extension<SessionData>,
 ) -> AppResult<Html<String>> {
+    let aliment_delai_commande_jours = reglage_i64(&state.pool, "aliment_delai_commande_jours", 5).await?;
     let silos = generic_rows(
         &state.pool,
         "SELECT id,nom,capacite_tonnes FROM silo_aliment WHERE actif=1 ORDER BY nom",
@@ -5580,10 +5614,12 @@ async fn aliment_previsions(
             "SELECT id,date,niveau_tonnes,note FROM releve_silo WHERE silo_id=? ORDER BY date DESC,id DESC LIMIT 20",
         )
         .await?;
+        let capacite = silo.get("capacite_tonnes").and_then(Value::as_f64);
         let mut entry = json!({
             "id": id, "nom": nom, "capacite_tonnes": silo.get("capacite_tonnes"),
             "historique": history, "niveau_actuel": Value::Null,
             "consommation_quotidienne": Value::Null, "jours_avant_rupture": Value::Null,
+            "quantite_a_commander": Value::Null, "commande_urgente": false,
         });
         if let [(date_actuel, niveau_actuel), (date_precedent, niveau_precedent)] = readings.as_slice() {
             if let (Some(actuel), Some(precedent)) = (parse_stored_date(date_actuel), parse_stored_date(date_precedent)) {
@@ -5602,18 +5638,36 @@ async fn aliment_previsions(
                     object.insert("niveau_actuel".into(), json!(niveau_actuel));
                     object.insert("consommation_quotidienne".into(), json!(conso.map(|v| (v * 100.0).round() / 100.0)));
                     object.insert("jours_avant_rupture".into(), json!(rupture.map(|v| v.round())));
+                    object.insert("quantite_a_commander".into(), json!(quantite_a_commander(*niveau_actuel, capacite)));
+                    object.insert("commande_urgente".into(), json!(commande_urgente(rupture, aliment_delai_commande_jours)));
                 }
             }
         } else if let [(_, niveau_actuel)] = readings.as_slice() {
             if let Some(object) = entry.as_object_mut() {
                 object.insert("niveau_actuel".into(), json!(niveau_actuel));
+                object.insert("quantite_a_commander".into(), json!(quantite_a_commander(*niveau_actuel, capacite)));
             }
         }
         previsions.push(entry);
     }
+    // Consommation d'aliment par bande (§3 « prévision de consommation… par
+    // bande ») : total livré aux 90 derniers jours, pour les bandes encore
+    // actives — donne une visibilité par bande complémentaire à la vue par
+    // silo ci-dessus, sans inventer une projection qu'aucune donnée ne
+    // permet de dater avec confiance (poids cible/effectif restant varient
+    // trop pour un chiffre fiable sans intervention de l'éleveur).
+    let consommation_bandes = generic_rows(
+        &state.pool,
+        "SELECT b.id,b.code,CAST(COALESCE(SUM(l.tonnage),0) AS REAL) AS tonnage_90j FROM bande b JOIN livraisonaliment l ON l.bande_id=b.id WHERE b.active=1 AND l.date>=date('now','-90 days') GROUP BY b.id,b.code ORDER BY tonnage_90j DESC",
+    )
+    .await?;
     let sites = generic_rows(&state.pool, "SELECT id,code,nom FROM site ORDER BY code").await?;
     let mut ctx = context(&session);
     ctx.insert("previsions".into(), Value::Array(previsions));
+    ctx.insert(
+        "consommation_bandes".into(),
+        Value::Array(consommation_bandes),
+    );
     ctx.insert("sites".into(), Value::Array(sites));
     ctx.insert("today".into(), json!(today_iso()));
     render(&state, "aliment_previsions.html", Value::Object(ctx))
