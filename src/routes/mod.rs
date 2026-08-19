@@ -203,6 +203,8 @@ pub fn router(state: AppState) -> Router {
         .route("/engraissement", get(engraissement))
         .route("/declaration", post(declaration_ajouter))
         .route("/declaration/{id}/supprimer", post(declaration_supprimer))
+        .route("/reception", get(reception).post(reception_ajouter))
+        .route("/reception/{id}/supprimer", post(reception_supprimer))
         .route("/abattoir", get(abattoir).post(abattoir_saisie))
         .route("/abattoir/saisie/{id}/supprimer", post(abattoir_saisie_supprimer))
         .route("/cahiers", get(cahiers).post(cahier_ajouter))
@@ -562,6 +564,26 @@ async fn api_bande_json(Path(id): Path<i64>, State(state): State<AppState>) -> A
         "suivi_porcs": suivi_porcs,
     });
     Ok(axum::Json(resp))
+}
+
+#[cfg(test)]
+mod reception_tests {
+    use super::*;
+
+    #[test]
+    fn quarantaine_active_couvre_la_date_de_fin_incluse() {
+        let today = NaiveDate::from_ymd_opt(2026, 8, 19).unwrap();
+        assert!(quarantaine_active(Some("2026-08-19"), today));
+        assert!(quarantaine_active(Some("2026-08-25"), today));
+        assert!(!quarantaine_active(Some("2026-08-18"), today));
+    }
+
+    #[test]
+    fn quarantaine_active_faux_sans_date_ou_avec_une_date_invalide() {
+        let today = NaiveDate::from_ymd_opt(2026, 8, 19).unwrap();
+        assert!(!quarantaine_active(None, today));
+        assert!(!quarantaine_active(Some("pas une date"), today));
+    }
 }
 
 #[cfg(test)]
@@ -4771,6 +4793,187 @@ async fn declaration_ajouter(
         .execute(&state.pool)
         .await?;
     Ok(Redirect::to("/engraissement").into_response())
+}
+
+/// Vrai si la quarantaine associée à une réception est toujours active à la
+/// date donnée (`quarantaine_jusqu` inclus). Fonction pure pour être testable
+/// indépendamment de la base.
+fn quarantaine_active(quarantaine_jusqu: Option<&str>, today: NaiveDate) -> bool {
+    quarantaine_jusqu
+        .and_then(parse_stored_date)
+        .is_some_and(|jusqu| jusqu >= today)
+}
+
+async fn reception(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+) -> AppResult<Html<String>> {
+    if !session.recoit_achats() {
+        return Err(AppError::Invalid(
+            "Ce type d'élevage ne reçoit pas d'animaux achetés (changez-le dans Paramètres si besoin).".into(),
+        ));
+    }
+    let receptions = generic_rows(
+        &state.pool,
+        "SELECT id,date,fournisseur,num_bon_livraison,lot_origine_fournisseur,bande_code,effectif,poids_moyen,poids_total,prix_total,quarantaine_jusqu,note FROM receptionachat ORDER BY date DESC,id DESC LIMIT 200",
+    )
+    .await?;
+    let today = today_iso();
+    let today_date = Local::now().date_naive();
+    let mut quarantaines_actives = generic_rows(
+        &state.pool,
+        "SELECT id,date,bande_code,effectif,fournisseur,quarantaine_jusqu FROM receptionachat WHERE quarantaine_jusqu IS NOT NULL ORDER BY quarantaine_jusqu",
+    )
+    .await?;
+    quarantaines_actives.retain(|row| {
+        quarantaine_active(row.get("quarantaine_jusqu").and_then(Value::as_str), today_date)
+    });
+    let bands = generic_rows(&state.pool, "SELECT code FROM bande WHERE active=1 ORDER BY code").await?;
+    let cases = generic_rows(
+        &state.pool,
+        "SELECT c.id,COALESCE(si.nom,si.code)||' · '||s.nom||' · '||c.nom AS nom FROM casesalle c JOIN salle s ON s.id=c.salle_id JOIN site si ON si.id=s.site_id ORDER BY si.nom,s.ordre,c.nom",
+    )
+    .await?;
+    let mut ctx = context(&session);
+    ctx.insert("receptions".into(), Value::Array(receptions));
+    ctx.insert("quarantaines_actives".into(), Value::Array(quarantaines_actives));
+    ctx.insert("bandes".into(), Value::Array(bands));
+    ctx.insert("cases".into(), Value::Array(cases));
+    ctx.insert("today".into(), json!(today));
+    render(&state, "reception.html", Value::Object(ctx))
+}
+
+async fn reception_ajouter(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    verify_csrf(&session, &form)?;
+    if !session.recoit_achats() {
+        return Err(AppError::Invalid(
+            "Ce type d'élevage ne reçoit pas d'animaux achetés (changez-le dans Paramètres si besoin).".into(),
+        ));
+    }
+    let bande_code = form_text(&form, "bande_code")
+        .ok_or_else(|| AppError::Invalid("Lot (code de bande) obligatoire".into()))?;
+    let effectif = form_i64(&form, "effectif")
+        .filter(|value| *value > 0 && *value <= 10_000)
+        .ok_or_else(|| AppError::Invalid("Effectif invalide".into()))?;
+    let date = form_date_or_today(&form, "date")?;
+    let case_id = form_i64(&form, "case_id");
+    let quarantaine_jusqu = form_i64(&form, "quarantaine_jours")
+        .filter(|jours| *jours > 0)
+        .and_then(|jours| parse_stored_date(&date).map(|start| (start + Duration::days(jours)).format("%Y-%m-%d").to_string()));
+
+    let mut tx = state.pool.begin().await?;
+    // Le lot (bande) est créé au premier arrivage s'il n'existe pas déjà ; les
+    // réceptions suivantes sur le même code s'y rattachent sans le dupliquer.
+    sqlx::query("INSERT INTO bande(code,note,active) SELECT ?,?,1 WHERE NOT EXISTS(SELECT 1 FROM bande WHERE code=?)")
+        .bind(&bande_code)
+        .bind(form_text(&form, "note"))
+        .bind(&bande_code)
+        .execute(&mut *tx)
+        .await?;
+    let band_id: i64 = sqlx::query_scalar("SELECT id FROM bande WHERE code=? ORDER BY id LIMIT 1")
+        .bind(&bande_code)
+        .fetch_one(&mut *tx)
+        .await?;
+    // Alimente le même registre de mouvements que le reste de l'effectif (voir
+    // remaining_band_pigs/total_band_pigs) : la réception devient le nouveau
+    // point de départ du décompte pour ce lot, jamais une valeur figée.
+    let mouvementstock_id = sqlx::query("INSERT INTO mouvementstock(date,bande_code,nombre,poids,montant,libelle,destination,type_saisie,est_stock) VALUES(?,?,?,?,?,'réception achat',NULL,'reception',1)")
+        .bind(&date)
+        .bind(&bande_code)
+        .bind(effectif)
+        .bind(form_f64(&form, "poids_total"))
+        .bind(form_f64(&form, "prix_total"))
+        .execute(&mut *tx)
+        .await?
+        .last_insert_rowid();
+    let transfert_id = if let Some(case_id) = case_id {
+        Some(
+            sqlx::query("INSERT INTO transfert(date,espece,bande_id,case_dest_id,nombre,note) VALUES(?,'porc',?,?,?,'Réception achat')")
+                .bind(&date)
+                .bind(band_id)
+                .bind(case_id)
+                .bind(effectif)
+                .execute(&mut *tx)
+                .await?
+                .last_insert_rowid(),
+        )
+    } else {
+        None
+    };
+    sqlx::query("INSERT INTO receptionachat(date,fournisseur,num_bon_livraison,lot_origine_fournisseur,bande_code,case_id,effectif,poids_moyen,poids_total,prix_total,quarantaine_jusqu,note,cree_par,mouvementstock_id,transfert_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+        .bind(&date)
+        .bind(form_text(&form, "fournisseur"))
+        .bind(form_text(&form, "num_bon_livraison"))
+        .bind(form_text(&form, "lot_origine_fournisseur"))
+        .bind(&bande_code)
+        .bind(case_id)
+        .bind(effectif)
+        .bind(form_f64(&form, "poids_moyen"))
+        .bind(form_f64(&form, "poids_total"))
+        .bind(form_f64(&form, "prix_total"))
+        .bind(&quarantaine_jusqu)
+        .bind(form_text(&form, "note"))
+        .bind(&session.identifiant)
+        .bind(mouvementstock_id)
+        .bind(transfert_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    db::journal(
+        &state.pool,
+        &session.nom,
+        "recevoir",
+        "réception",
+        &format!("{bande_code} · {effectif} porc(s) · {date}"),
+        "/reception",
+    )
+    .await;
+    Ok(Redirect::to("/reception").into_response())
+}
+
+async fn reception_supprimer(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Path(id): Path<i64>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    verify_csrf(&session, &form)?;
+    // Annule aussi le mouvement d'effectif et le transfert générés à la
+    // réception : supprimer la réception ne doit jamais laisser un effectif
+    // fantôme dans le registre (principe §10 de la spécification).
+    let refs: Option<(Option<i64>, Option<i64>)> = sqlx::query_as(
+        "SELECT mouvementstock_id,transfert_id FROM receptionachat WHERE id=?",
+    )
+    .bind(id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let mut tx = state.pool.begin().await?;
+    sqlx::query("DELETE FROM receptionachat WHERE id=?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    if let Some((mouvementstock_id, transfert_id)) = refs {
+        if let Some(mouvementstock_id) = mouvementstock_id {
+            sqlx::query("DELETE FROM mouvementstock WHERE id=?")
+                .bind(mouvementstock_id)
+                .execute(&mut *tx)
+                .await?;
+        }
+        if let Some(transfert_id) = transfert_id {
+            sqlx::query("DELETE FROM transfert WHERE id=?")
+                .bind(transfert_id)
+                .execute(&mut *tx)
+                .await?;
+        }
+    }
+    tx.commit().await?;
+    Ok(Redirect::to("/reception").into_response())
 }
 
 async fn declaration_supprimer(

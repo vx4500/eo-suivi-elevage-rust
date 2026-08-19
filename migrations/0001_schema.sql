@@ -709,6 +709,36 @@ CREATE TABLE IF NOT EXISTS inventairecase (
 
 CREATE INDEX IF NOT EXISTS ix_inventairecase_case_date ON inventairecase(case_id,date);
 
+-- Réception d'animaux achetés (§1bis de la spécification) : post-sevreur,
+-- post-sevreur-engraisseur et engraisseur seul démarrent leur cycle ici plutôt
+-- qu'à la mise-bas. Le lot d'origine du fournisseur est conservé comme
+-- traçabilité même si la mère n'est pas dans la base.
+CREATE TABLE IF NOT EXISTS receptionachat (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    date TEXT NOT NULL,
+    fournisseur TEXT,
+    num_bon_livraison TEXT,
+    lot_origine_fournisseur TEXT,
+    bande_code TEXT,
+    case_id INTEGER REFERENCES casesalle(id),
+    effectif INTEGER NOT NULL,
+    poids_moyen REAL,
+    poids_total REAL,
+    prix_total REAL,
+    quarantaine_jusqu TEXT,
+    note TEXT,
+    cree_par TEXT,
+    cree_le TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    -- Références vers les mouvements générés par cette réception (registre
+    -- d'effectifs et transfert éventuel), pour pouvoir les annuler proprement
+    -- si la réception est supprimée sans laisser d'effectif fantôme.
+    mouvementstock_id INTEGER REFERENCES mouvementstock(id),
+    transfert_id INTEGER REFERENCES transfert(id)
+);
+
+CREATE INDEX IF NOT EXISTS ix_receptionachat_date ON receptionachat(date);
+CREATE INDEX IF NOT EXISTS ix_receptionachat_bande ON receptionachat(bande_code);
+
 -- Les données de démonstration sont supprimées à partir de ce manifeste uniquement.
 -- Aucune ligne d'élevage réelle n'est reconnue ou supprimée par son nom.
 CREATE TABLE IF NOT EXISTS demoobjet (

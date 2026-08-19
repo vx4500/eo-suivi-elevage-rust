@@ -233,12 +233,17 @@ gros commit unique sur une application en production.
       direct pour les sessions déjà ouvertes) et utilisé pour masquer les
       menus Reproduction/Charcutiers-Prestataire selon le profil actif.
       Prépare les phases suivantes (§1bis, §7 GTE adaptée).
-- [ ] **Phase 2 — Réception d'animaux achetés (§1bis).** Table dédiée (date,
-      fournisseur, effectif, poids moyen/total, prix, lot d'origine
-      fournisseur conservé comme traçabilité), affectation directe à une
-      salle/case, alerte quarantaine à l'arrivée. Actif pour post-sevreur,
-      post-sevreur-engraisseur, engraisseur seul (`session.recoit_achats()`,
-      déjà en place depuis la Phase 1).
+- [x] **Phase 2 — Réception d'animaux achetés (§1bis).** Table
+      `receptionachat` (date, fournisseur, n° bon de livraison, lot d'origine
+      fournisseur conservé comme traçabilité, effectif, poids moyen/total,
+      prix), écran `/reception` avec formulaire + historique, affectation
+      directe à une salle/case (insère aussi un transfert), alerte quarantaine
+      à l'arrivée (bannière tant que `quarantaine_jusqu` n'est pas dépassé).
+      La réception alimente le registre de mouvements existant
+      (`mouvementstock`) au lieu d'une valeur figée, et sa suppression annule
+      proprement le mouvement et le transfert associés (pas d'effectif
+      fantôme). Visible uniquement pour les profils qui reçoivent des achats
+      (`session.recoit_achats()`).
 - [ ] **Phase 3 — GTE complète (§7), adaptée au type d'élevage.** Indice de
       consommation (IC) par phase, coût alimentaire par porc produit, marge
       sur coût alimentaire (MSA), marge brute par truie, taux de

@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Réception · EO-Suivi{% endblock %}
+{% block content %}
+<h1>Réception d'animaux achetés</h1><p>Bon de livraison, affectation directe à une salle/case et suivi de quarantaine à l'arrivée.</p>
+{% if quarantaines_actives %}<section class="card"><h2>⚠️ Quarantaines en cours</h2><div class="rust-scroll"><table><thead><tr><th>Lot</th><th>Fournisseur</th><th>Effectif</th><th>Réceptionné le</th><th>Quarantaine jusqu'au</th></tr></thead><tbody>{% for q in quarantaines_actives %}<tr><td><a href="/bandes">{{ q.bande_code or '—' }}</a></td><td>{{ q.fournisseur or '—' }}</td><td>{{ q.effectif }}</td><td>{{ q.date|date_fr }}</td><td>{{ q.quarantaine_jusqu|date_fr }}</td></tr>{% endfor %}</tbody></table></div></section>{% endif %}
+<form class="card rust-actions" method="post" action="/reception"><input type="hidden" name="csrf_token" value="{{ session.csrf }}">
+<label>Date<input type="date" name="date" value="{{ today }}" required></label>
+<label>Lot (code de bande)<input name="bande_code" list="bandes-existantes" required placeholder="ex. LOT-2026-08"></label>
+<datalist id="bandes-existantes">{% for b in bandes %}<option value="{{ b.code }}">{% endfor %}</datalist>
+<label>Fournisseur<input name="fournisseur"></label>
+<label>N° bon de livraison<input name="num_bon_livraison"></label>
+<label>Lot d'origine fournisseur<input name="lot_origine_fournisseur" placeholder="traçabilité, même sans mère en base"></label>
+<label>Case de destination<select name="case_id"><option value="">Non précisée</option>{% for c in cases %}<option value="{{ c.id }}">{{ c.nom }}</option>{% endfor %}</select></label>
+<label>Effectif<input type="number" name="effectif" min="1" required></label>
+<label>Poids moyen (kg)<input name="poids_moyen" inputmode="decimal"></label>
+<label>Poids total (kg)<input name="poids_total" inputmode="decimal"></label>
+<label>Prix total (€)<input name="prix_total" inputmode="decimal"></label>
+<label>Quarantaine (jours)<input type="number" name="quarantaine_jours" min="0" placeholder="0 = aucune"></label>
+<label>Observation<input name="note"></label>
+<button>Enregistrer la réception</button></form>
+<div class="rust-scroll"><table><thead><tr><th>Date</th><th>Lot</th><th>Fournisseur</th><th>Bon</th><th>Origine fournisseur</th><th>Effectif</th><th>Poids</th><th>Prix</th><th>Quarantaine</th><th>Note</th><th></th></tr></thead><tbody>{% for r in receptions %}<tr><td>{{ r.date|date_fr }}</td><td><a href="/bandes">{{ r.bande_code or '—' }}</a></td><td>{{ r.fournisseur or '—' }}</td><td>{{ r.num_bon_livraison or '—' }}</td><td>{{ r.lot_origine_fournisseur or '—' }}</td><td>{{ r.effectif }}</td><td>{{ r.poids_total or '—' }}</td><td>{{ r.prix_total or '—' }}</td><td>{{ r.quarantaine_jusqu|date_fr if r.quarantaine_jusqu else '—' }}</td><td>{{ r.note or '—' }}</td><td><form method="post" action="/reception/{{ r.id }}/supprimer"><input type="hidden" name="csrf_token" value="{{ session.csrf }}"><button class="ghost danger">Supprimer</button></form></td></tr>{% else %}<tr><td colspan="11" class="rust-empty">Aucune réception</td></tr>{% endfor %}</tbody></table></div>
+{% endblock %}
