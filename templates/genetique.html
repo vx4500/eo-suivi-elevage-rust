@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Génétique · EO-Suivi{% endblock %}
+{% block content %}
+<h1>Catalogue génétique</h1><p>Lignées suivies avec leur fournisseur, leurs index (prolificité, croissance, indice de consommation) et leur contrat de renouvellement.</p>
+{% if session.peut_modifier %}<form class="card rust-actions" method="post" action="/genetique"><input type="hidden" name="csrf_token" value="{{ session.csrf }}">
+<label>Nom de la lignée<input name="nom" required></label>
+<label>Fournisseur<input name="fournisseur"></label>
+<label>Index prolificité<input name="index_prolificite" inputmode="decimal"></label>
+<label>Index croissance<input name="index_croissance" inputmode="decimal"></label>
+<label>Index IC<input name="index_ic" inputmode="decimal"></label>
+<label>Contrat de renouvellement<input name="contrat_renouvellement"></label>
+<label>Note<input name="note"></label>
+<button>Ajouter la lignée</button></form>{% endif %}
+<div class="rust-scroll"><table><thead><tr><th>Lignée</th><th>Fournisseur</th><th>Index prolificité</th><th>Index croissance</th><th>Index IC</th><th>Contrat</th><th>Note</th><th></th></tr></thead><tbody>{% for l in lignees %}<tr><td><b>{{ l.nom }}</b></td><td>{{ l.fournisseur or '—' }}</td><td>{{ l.index_prolificite or '—' }}</td><td>{{ l.index_croissance or '—' }}</td><td>{{ l.index_ic or '—' }}</td><td>{{ l.contrat_renouvellement or '—' }}</td><td>{{ l.note or '—' }}</td><td>{% if session.peut_modifier %}<form method="post" action="/genetique/{{ l.id }}/supprimer"><input type="hidden" name="csrf_token" value="{{ session.csrf }}"><button class="ghost danger">Supprimer</button></form>{% endif %}</td></tr>{% else %}<tr><td colspan="8" class="rust-empty">Aucune lignée enregistrée</td></tr>{% endfor %}</tbody></table></div>
+{% endblock %}

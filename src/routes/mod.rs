@@ -206,6 +206,8 @@ pub fn router(state: AppState) -> Router {
         .route("/declaration/{id}/supprimer", post(declaration_supprimer))
         .route("/reception", get(reception).post(reception_ajouter))
         .route("/reception/{id}/supprimer", post(reception_supprimer))
+        .route("/genetique", get(genetique).post(genetique_ajouter))
+        .route("/genetique/{id}/supprimer", post(genetique_supprimer))
         .route("/abattoir", get(abattoir).post(abattoir_saisie))
         .route("/abattoir/saisie/{id}/supprimer", post(abattoir_saisie_supprimer))
         .route("/cahiers", get(cahiers).post(cahier_ajouter))
@@ -320,6 +322,8 @@ fn session_value(session: &SessionData) -> Value {
         "a_truies": session.a_truies(),
         "engraisse": session.engraisse(),
         "recoit_achats": session.recoit_achats(),
+        "module_genetique": session.module_genetique,
+        "module_prestataires": session.module_prestataires,
     })
 }
 
@@ -715,6 +719,8 @@ async fn login_post(
                 .map(str::to_string)
                 .collect();
             let type_elevage = type_elevage_actif(&state.pool).await?;
+            let module_genetique = module_actif(&state.pool, "module_genetique", false).await?;
+            let module_prestataires = module_actif(&state.pool, "module_prestataires", true).await?;
             state.sessions.insert(
                 session_id.clone(),
                 SessionData {
@@ -726,6 +732,8 @@ async fn login_post(
                     csrf: auth::new_csrf(),
                     doit_changer_mdp: user.doit_changer_mdp,
                     type_elevage,
+                    module_genetique,
+                    module_prestataires,
                 },
             );
             let cookie = Cookie::build(("eo_session", session_id))
@@ -2816,6 +2824,20 @@ async fn type_elevage_actif(pool: &SqlitePool) -> AppResult<String> {
     Ok(value
         .filter(|value| auth::TYPES_ELEVAGE.iter().any(|(code, _)| *code == value))
         .unwrap_or_else(|| auth::TYPE_ELEVAGE_DEFAUT.to_string()))
+}
+
+/// Lit un module optionnel booléen (`parametre.cle` = "1"/"0"). `default` est
+/// utilisé pour les bases existantes qui n'ont jamais enregistré le réglage :
+/// `true` préserve le comportement actuel (module déjà utilisé de fait),
+/// `false` respecte le principe « la complexité s'active, elle ne s'impose
+/// pas » pour un module réellement nouveau.
+async fn module_actif(pool: &SqlitePool, cle: &str, default: bool) -> AppResult<bool> {
+    let value: Option<String> = sqlx::query_scalar("SELECT valeur FROM parametre WHERE cle=?")
+        .bind(cle)
+        .fetch_optional(pool)
+        .await?
+        .flatten();
+    Ok(value.map(|value| value == "1").unwrap_or(default))
 }
 
 async fn reformes_seuils(State(state):State<AppState>,Extension(session):Extension<SessionData>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;let keys=["seuil_nv_min","seuil_sevres_min","seuil_retours_max","seuil_ecrases_max","seuil_rang_max","seuil_chetifs_max"];let mut tx=state.pool.begin().await?;for key in keys{if let Some(value)=form_f64(&form,key).filter(|value|value.is_finite()&&*value>=0.0){sqlx::query("INSERT INTO parametre(cle,valeur) VALUES(?,?) ON CONFLICT(cle) DO UPDATE SET valeur=excluded.valeur").bind(key).bind(value.to_string()).execute(&mut *tx).await?;}}tx.commit().await?;Ok(Redirect::to("/reformes").into_response())}
@@ -5070,6 +5092,66 @@ async fn reception_ajouter(
     )
     .await;
     Ok(Redirect::to("/reception").into_response())
+}
+
+async fn genetique(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+) -> AppResult<Html<String>> {
+    if !session.module_genetique {
+        return Err(AppError::Invalid(
+            "Le module Génétique avancée n'est pas activé (Paramètres > Type d'élevage et modules).".into(),
+        ));
+    }
+    let lignees = generic_rows(
+        &state.pool,
+        "SELECT id,nom,fournisseur,index_prolificite,index_croissance,index_ic,contrat_renouvellement,note FROM lignee_genetique ORDER BY nom",
+    )
+    .await?;
+    let mut ctx = context(&session);
+    ctx.insert("lignees".into(), Value::Array(lignees));
+    render(&state, "genetique.html", Value::Object(ctx))
+}
+
+async fn genetique_ajouter(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    verify_csrf(&session, &form)?;
+    if !session.module_genetique {
+        return Err(AppError::Invalid(
+            "Le module Génétique avancée n'est pas activé (Paramètres > Type d'élevage et modules).".into(),
+        ));
+    }
+    let nom = form_text(&form, "nom").ok_or_else(|| AppError::Invalid("Nom de la lignée obligatoire".into()))?;
+    sqlx::query("INSERT INTO lignee_genetique(nom,fournisseur,index_prolificite,index_croissance,index_ic,contrat_renouvellement,note) VALUES(?,?,?,?,?,?,?)")
+        .bind(&nom)
+        .bind(form_text(&form, "fournisseur"))
+        .bind(form_f64(&form, "index_prolificite"))
+        .bind(form_f64(&form, "index_croissance"))
+        .bind(form_f64(&form, "index_ic"))
+        .bind(form_text(&form, "contrat_renouvellement"))
+        .bind(form_text(&form, "note"))
+        .execute(&state.pool)
+        .await?;
+    Ok(Redirect::to("/genetique").into_response())
+}
+
+async fn genetique_supprimer(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Path(id): Path<i64>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    verify_csrf(&session, &form)?;
+    sqlx::query("DELETE FROM lignee_genetique WHERE id=?")
+        .bind(id)
+        .execute(&state.pool)
+        .await?;
+    Ok(Redirect::to("/genetique").into_response())
 }
 
 async fn reception_supprimer(

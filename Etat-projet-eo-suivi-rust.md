@@ -258,10 +258,21 @@ gros commit unique sur une application en production.
       de cette phase : l'imputation explicite du coût d'achat d'un animal
       entrant comme charge d'entrée pour les profils achats (Phase 2), qui
       affinera le MSA de ces profils dans un prochain incrément.*
-- [ ] **Phase 4 — Modules optionnels (§0, §2, §4).** Cases à cocher
-      « Génétique avancée » et « Prestataires/équipe » dans Paramètres,
-      catalogue de lignées (index prolificité/croissance/IC, contrat de
-      renouvellement) si activé, masquage des écrans correspondants sinon.
+- [x] **Phase 4 — Modules optionnels (§0, §2, §4).** Cases à cocher
+      « Génétique avancée » (décochée par défaut) et « Prestataires externes »
+      (cochée par défaut, préserve le comportement des bases existantes) dans
+      Paramètres. Catalogue de lignées (`/genetique` : nom, fournisseur,
+      index prolificité/croissance/IC, contrat de renouvellement) visible
+      uniquement module actif. Lien « Prestataire » masqué quand le module
+      est désactivé (Charcutiers/engraissement restent disponibles : seule la
+      sous-traitance externe est masquée). Piège vérifié en conditions
+      réelles : la page Paramètres a deux formulaires distincts postant vers
+      `/parametres/maj` (type d'élevage+modules, et informations générales) —
+      soumettre l'un ne doit pas réinitialiser les cases à cocher de l'autre ;
+      un garde-fou (`form.contains_key("type_elevage")`) l'empêche, testé par
+      soumission successive des deux formulaires. *Reste hors périmètre : le
+      rattachement d'une truie à une lignée du catalogue (actuellement
+      `truie.race` en texte libre uniquement) — prochain incrément naturel.*
 - [ ] **Phase 5 — Capacités par étape et conduite continue (§0, §3).**
       Capacités maternité/post-sevrage/engraissement (comme
       `capacite_verraterie` existant), et mode « conduite en continu / hors

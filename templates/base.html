@@ -41,7 +41,7 @@
   </div></div>{% endif %}
   <div class="rust-menu"><span>Élevage ▾</span><div class="rust-sub">
     <a href="/planning">Planning</a><a href="/quotidien">Quotidien</a><a href="/transferts">Transferts</a>
-    <a href="/effectifs">Effectifs</a><a href="/stock">Stocks</a>{% if session.recoit_achats %}<a href="/reception">Réception</a>{% endif %}{% if session.engraisse %}<a href="/charcutiers">Charcutiers</a><a href="/engraissement">Prestataire</a>{% endif %}
+    <a href="/effectifs">Effectifs</a><a href="/stock">Stocks</a>{% if session.recoit_achats %}<a href="/reception">Réception</a>{% endif %}{% if session.module_genetique %}<a href="/genetique">Génétique</a>{% endif %}{% if session.engraisse %}<a href="/charcutiers">Charcutiers</a>{% endif %}{% if session.engraisse and session.module_prestataires %}<a href="/engraissement">Prestataire</a>{% endif %}
   </div></div>
   <div class="rust-menu"><span>Pilotage ▾</span><div class="rust-sub">
     <a href="/economique">Économie</a><a href="/gte">GTE</a><a href="/abattoir">Abattoir</a><a href="/ifip">IFIP</a>

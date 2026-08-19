@@ -739,6 +739,22 @@ CREATE TABLE IF NOT EXISTS receptionachat (
 CREATE INDEX IF NOT EXISTS ix_receptionachat_date ON receptionachat(date);
 CREATE INDEX IF NOT EXISTS ix_receptionachat_bande ON receptionachat(bande_code);
 
+-- Catalogue de lignées génétiques (module optionnel « Génétique avancée »,
+-- §2 de la spécification). Un petit élevage garde le champ texte libre
+-- truie.race ; ce catalogue n'est utile qu'aux élevages en sélection ou
+-- multiplication qui suivent un fournisseur, des index et un contrat.
+CREATE TABLE IF NOT EXISTS lignee_genetique (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nom TEXT NOT NULL,
+    fournisseur TEXT,
+    index_prolificite REAL,
+    index_croissance REAL,
+    index_ic REAL,
+    contrat_renouvellement TEXT,
+    note TEXT,
+    cree_le TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Les données de démonstration sont supprimées à partir de ce manifeste uniquement.
 -- Aucune ligne d'élevage réelle n'est reconnue ou supprimée par son nom.
 CREATE TABLE IF NOT EXISTS demoobjet (

@@ -73,6 +73,11 @@ pub struct SessionData {
     /// écrans de reproduction/verraterie/maternité. Mis en cache dans la session
     /// à la connexion et rafraîchi en direct quand un admin change le réglage.
     pub type_elevage: String,
+    /// Modules optionnels (§0/§2/§4 de la spécification) : désactivés par
+    /// défaut pour un petit élevage, activables sans changer d'outil. Même
+    /// mécanisme de cache/rafraîchissement en direct que `type_elevage`.
+    pub module_genetique: bool,
+    pub module_prestataires: bool,
 }
 
 impl SessionData {
@@ -302,6 +307,8 @@ mod tests {
             csrf: "csrf".into(),
             doit_changer_mdp: false,
             type_elevage: type_elevage.into(),
+            module_genetique: false,
+            module_prestataires: true,
         }
     }
 

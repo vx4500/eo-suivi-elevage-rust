@@ -334,12 +334,29 @@ pub(super) async fn parametres_maj(State(state):State<AppState>,Extension(sessio
     if let Some(value)=&new_type_elevage{
         sqlx::query("INSERT INTO parametre(cle,valeur) VALUES('type_elevage',?) ON CONFLICT(cle) DO UPDATE SET valeur=excluded.valeur").bind(value).execute(&mut *tx).await?;
     }
-    tx.commit().await?;
-    if let Some(value)=new_type_elevage{
-        // Les sessions déjà ouvertes voient le nouveau type d'élevage sans avoir à
-        // se reconnecter, pour éviter un affichage incohérent le temps que chacun
-        // se reconnecte.
-        for mut entry in state.sessions.iter_mut(){entry.value_mut().type_elevage=value.clone();}
+    // Modules optionnels (§0/§2/§4) : ces cases partagent le même formulaire
+    // que le type d'élevage (marqueur : le champ type_elevage, un <select>,
+    // est toujours présent quand CE formulaire est soumis). Sans ce garde-fou,
+    // soumettre un des *autres* formulaires de cette page (qui postent aussi
+    // vers /parametres/maj mais n'ont pas de cases à cocher module_*)
+    // désactiverait silencieusement les modules à chaque enregistrement.
+    let formulaire_type_elevage=form.contains_key("type_elevage");
+    if formulaire_type_elevage{
+        let module_genetique=form.contains_key("module_genetique");
+        let module_prestataires=form.contains_key("module_prestataires");
+        sqlx::query("INSERT INTO parametre(cle,valeur) VALUES('module_genetique',?) ON CONFLICT(cle) DO UPDATE SET valeur=excluded.valeur").bind(if module_genetique{"1"}else{"0"}).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO parametre(cle,valeur) VALUES('module_prestataires',?) ON CONFLICT(cle) DO UPDATE SET valeur=excluded.valeur").bind(if module_prestataires{"1"}else{"0"}).execute(&mut *tx).await?;
+        tx.commit().await?;
+        // Les sessions déjà ouvertes voient les nouveaux réglages sans avoir à
+        // se reconnecter, pour éviter un affichage incohérent le temps que
+        // chacun se reconnecte.
+        for mut entry in state.sessions.iter_mut(){
+            if let Some(value)=&new_type_elevage{entry.value_mut().type_elevage=value.clone();}
+            entry.value_mut().module_genetique=module_genetique;
+            entry.value_mut().module_prestataires=module_prestataires;
+        }
+    }else{
+        tx.commit().await?;
     }
     Ok(Redirect::to("/parametres").into_response())}
 
