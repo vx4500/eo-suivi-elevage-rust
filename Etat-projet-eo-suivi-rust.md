@@ -1,6 +1,6 @@
 # EO-Suivi Élevage Rust — État du projet
 
-Version actuelle : **2.2.7** — Dernière mise à jour de ce document : 19 août 2026.
+Version actuelle : **2.2.10** — Dernière mise à jour de ce document : 19 août 2026.
 
 Ce fichier remplace et fusionne : `AUDIT-PORTAGE-RUST-2.1.2.md`,
 `DEMANDES-MODIFICATIONS-EOELEVAGE.md`, `LISTING-APPLICATION-EO-SUIVI.md`,
@@ -169,14 +169,109 @@ août 2026 ; la priorité actuelle porte sur la fiabilité des effectifs
       (poids cible/effectif restant varient trop pour un chiffre fiable
       sans intervention de l'éleveur) — visibilité historique par bande,
       volontairement pas une estimation inventée.
-- [ ] Importer les consommations des machines à soupe. *Non traité :*
-      nécessite le format d'export réel d'une machine à soupe (marque/
-      modèle utilisé par l'éleveur) pour écrire un import fiable — deviner
-      un format aurait produit un import qui semble fonctionner sans
-      jamais avoir été validé contre un vrai fichier.
+- [x] Importer les consommations des machines à soupe. Livré une fois le
+      vrai format obtenu (machine Asserva, éleveur ORY EMMANUEL, 5 fichiers
+      réels fournis). Trois formats CSV coexistent sur ces machines :
+      `Histo_dis` (routage formule → vannes, sans quantité), `Histo_Modif`
+      (journal de réglages par vanne) et `Histo_fab` (fabrication —
+      quantité consigne/reçue d'eau et de chaque produit nommé par gâchée).
+      Seul `Histo_fab` porte de vraies quantités consommées ; c'est le seul
+      traité (`src/machine_soupe.rs`). Un cinquième fichier fourni (`Sv_7`,
+      sans extension) s'est révélé être un instantané interne au format
+      binaire propriétaire (chaînes préfixées par leur longueur, confirmé
+      par une lecture hexadécimale) — pas un CSV, délibérément pas géré.
+      Deux points techniques réels rencontrés en analysant le vrai fichier :
+      encodage Windows-1252/Latin-1 (accents sur un octet, ex. 0xE9 pour
+      « é »), pas UTF-8 — un décodage direct aurait échoué ou tronqué le
+      fichier ; et le même bug de siècle sur les dates à 2 chiffres que
+      les imports PDF Cooperl (`chrono` ne préfixe pas l'année de 2000).
+      Import en deux étapes comme les truies (`importjournal`/`importligne`) :
+      aperçu listant les produits réels distincts trouvés (les 32 slots
+      placeholder `Produit_N` jamais configurés sont filtrés), puis écran de
+      correspondance manuelle produit → silo — nouveau silo créé à la volée
+      si besoin, mais rien n'est deviné automatiquement, comme demandé.
+      Nouvelle table additive `consommationsoupe` (garde le nom exact du
+      produit machine pour traçabilité). Affichée en complément
+      (pas en remplacement) du bilan de matière existant sur
+      `/aliment-previsions`, avec un avertissement sur l'unité (litres ou kg
+      selon la machine, jamais convertie au hasard) — l'intégrer au calcul
+      de « jours avant rupture » est un incrément naturel séparé si le
+      besoin se confirme. Testé contre le vrai fichier `Histo_fab01-26.csv`
+      (62 gâchées, 2 produits réels identifiés, dates et quantités
+      vérifiées une à une) et par 4 tests unitaires dédiés.
 
 ### Économie et imports (demandes en attente)
-- [ ] Permettre deux lots sur une même facture d'apport Cooperl.
+- [x] Permettre deux lots sur une même facture d'apport Cooperl. Le
+      découpage par « Bon n° » (`split_lots`/`parse_lot`) gérait déjà
+      plusieurs lots en théorie, mais n'avait jamais été exercé par un test
+      ni vérifié contre un vrai PDF. Vérifié et corrigé contre neuf vrais
+      bordereaux Cooperl (ORY EMMANUEL) fournis par l'éleveur, dont un à deux
+      lots (APPORT N° 226081270686, Bon n° 35776 et 35777) : les 134 porcs et
+      les deux poids/montants par lot se retrouvent exactement, et le net à
+      payer global se répartit correctement au prorata entre les deux
+      lignes de vente. Trois vrais bugs trouvés et corrigés au passage :
+      1) un bordereau Cooperl généré par « LDPRX 4.54 » a un octet
+      `startxref` qui pointe à côté du mot-clé `xref` (décalage constaté de
+      31 octets) — lopdf refusait alors le PDF entier
+      (`ParseError::InvalidTrailer`, « Le PDF est illisible, chiffré ou
+      endommagé ») alors que le contenu était intact ; `extract_pdf_text`
+      retente maintenant avec l'offset réel du mot-clé `xref` quand le
+      premier chargement échoue (`repair_startxref_offset`) ; 2) sur le
+      modèle de bordereau réellement produit par Cooperl (« duplicata »
+      comme « bordereau simplifié »), le libellé « ENLEVEMENT DU » fait
+      partie du fond de page (image), pas du texte extrait : la date
+      d'enlèvement se retrouvait donc être systématiquement la date de
+      facturation (qui suit « LE », elle bien présente comme texte) — la
+      date d'enlèvement, elle, apparaît seule sur sa ligne juste avant le
+      profil d'élevage (NAISSEUR/ENGRAISSEUR...) ; ajout d'un repli qui la
+      capture avant de retomber sur « LE » ; 3) `iso_date` acceptait une
+      année à deux chiffres via `%d/%m/%Y` (chrono n'exige pas 4 chiffres à
+      la lecture) sans lui ajouter 2000 : chaque date d'un vrai bordereau
+      Cooperl (toujours en JJ/MM/AA) était importée avec l'année 0026 au
+      lieu de 2026. Les trois corrections sont couvertes par des tests
+      dédiés (`repare_un_startxref_decale_comme_le_produit_ldprx`,
+      `apport_repartit_deux_bons_sur_la_meme_facture`,
+      `apport_prend_la_date_denlevement_pas_la_date_de_facturation`,
+      `date_a_deux_chiffres_prend_le_21e_siecle`) construits à partir des
+      vrais chiffres et de la vraie mise en forme observée.
+- [x] Facture génétique : bien différencier facture et avoir (même
+      fournisseur, même modèle de document). En creusant la demande contre
+      onze vrais bordereaux Cooperl « ANIMAUX REPRODUCTEURS » fournis par
+      l'éleveur (7 factures distinctes + 2 avoirs), constat plus grave que
+      prévu : **l'import génétique ne fonctionnait sur aucun vrai
+      document**, avoir ou facture — `parse_genetique` cherchait les
+      libellés « FACTURE N° », « NET A PAYER » et « BASE H.T. », qui
+      n'existent nulle part dans le texte extrait de ce modèle (les libellés
+      appartiennent au fond de page image, seules les valeurs sont du vrai
+      texte, comme découvert sur les bordereaux d'apport). Résultat vérifié
+      avant correction : erreur « aucun montant fiable n'a été trouvé » sur
+      la facture réelle la plus simple. Un ancien correctif reclassait à la
+      main deux avoirs par leur référence (« 1443203 », « 1441836 ») plutôt
+      que de corriger l'extraction — mais cette référence n'était elle-même
+      jamais extraite (même défaut de libellé absent), rendant ce correctif
+      mort depuis son écriture. Réécrit intégralement sans dépendre d'aucun
+      libellé : la référence du document se lit après « Semaine N° » (seul
+      repère fiable, ex. « 14.41649 » → 1441649) ; la base H.T. et le total
+      T.T.C. se lisent sur l'unique ligne de synthèse TVA sans en-tête
+      (« 10400,65   2 5,5%   572,04   10972,69 ») ; le signe (facture ou
+      avoir) vient directement du tiret final déjà présent sur chaque nombre
+      côté avoir, plus robuste que chercher le mot « AVOIR » — dont
+      l'affichage en bannière a ses lettres espacées par le générateur
+      (« **** A V O I R **** ») et ne correspond donc jamais à un simple
+      mot ; la référence de la facture créditée (« AVOIR SUR FACTURE NO
+      1441649 »), elle en toutes lettres, est récupérée et ajoutée au
+      libellé (« AVOIR — 28 cochettes (sur facture 1441649) ») pour que
+      facture et avoir restent visuellement et durablement reliés sans
+      migration de schéma. Bug additionnel corrigé au passage : le comptage
+      des animaux (`^([0-9]+)\s+COCHETTE...`) ne reconnaissait aucune ligne
+      d'un avoir, où la quantité est elle-même suivie d'un tiret
+      (« 27-   COCHETTE... ») — un avoir donnait donc 0 animal quelle que
+      soit sa taille réelle. Vérifié contre les onze bordereaux réels (tous
+      s'importent désormais, factures et avoirs) ; deux tests dédiés
+      (`genetique_reconnait_une_vraie_facture`,
+      `genetique_reconnait_un_vrai_avoir_et_le_relie_a_sa_facture`)
+      remplacent l'ancien test qui vérifiait le mécanisme mort plutôt que le
+      comportement réel.
 - [x] Fusionner les variantes de « Charte Qualité Régionale » et vérifier les
       doublons similaires sur toutes les pages. Vrai bug trouvé en écrivant
       le test : `canonical_label` comparait par sous-chaîne sur un texte
@@ -349,7 +444,7 @@ l'arrêt déclenche le retour arrière ; la sauvegarde de la base est conservée
 ```bash
 systemctl status eo-suivi-rust --no-pager -l
 journalctl -u eo-suivi-rust -n 80 --no-pager -l -o cat
-curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.7"
+curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.10"
 ```
 
 Puis ouvrir `https://rust-elevage.basse-chevrie.ovh`.

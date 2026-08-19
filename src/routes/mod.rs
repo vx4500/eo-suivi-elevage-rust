@@ -3,6 +3,7 @@ use crate::config::Config;
 use crate::db;
 use crate::economic_import::{self, ImportLine};
 use crate::error::{AppError, AppResult};
+use crate::machine_soupe;
 use crate::models::{
     Bande, CompteurEnergie, Evenement, ProduitVenteDirecte, ReleveCompteur, Truie, Utilisateur,
 };
@@ -118,6 +119,9 @@ pub fn router(state: AppState) -> Router {
         .route("/aliment-previsions/silo", post(silo_ajouter))
         .route("/aliment-previsions/silo/{id}/releve", post(silo_releve_ajouter))
         .route("/aliment-previsions/silo/{id}/supprimer", post(silo_supprimer))
+        .route("/aliment-previsions/machine-soupe", post(machine_soupe_import).layer(DefaultBodyLimit::max(10 * 1024 * 1024)))
+        .route("/aliment-previsions/machine-soupe/confirmer", post(machine_soupe_import_confirmer))
+        .route("/aliment-previsions/machine-soupe/annuler", post(machine_soupe_import_annuler))
         .route("/energie/compteur", post(energie_compteur))
         .route("/energie/releve", post(energie_releve))
         .route("/energie/compteur/{id}/rappel", post(energie_rappel))
@@ -5615,11 +5619,25 @@ async fn aliment_previsions(
         )
         .await?;
         let capacite = silo.get("capacite_tonnes").and_then(Value::as_f64);
+        // Consommation réellement mesurée par une machine à soupe (import
+        // Histo_fab), quand l'éleveur en a relié une à ce silo — purement
+        // informatif : ne remplace pas le bilan de matière ci-dessous (basé
+        // sur les relevés manuels), qui reste la seule source utilisée pour
+        // « jours avant rupture »/« quantité à commander ». Les unités
+        // machine (souvent litres ou kg) ne sont pas forcément des tonnes ;
+        // affiché tel quel plutôt que converti au hasard.
+        let machine_90j: f64 = sqlx::query_scalar(
+            "SELECT CAST(COALESCE(SUM(quantite_recue),0) AS REAL) FROM consommationsoupe WHERE silo_id=? AND date>=date('now','-90 days')",
+        )
+        .bind(id)
+        .fetch_one(&state.pool)
+        .await?;
         let mut entry = json!({
             "id": id, "nom": nom, "capacite_tonnes": silo.get("capacite_tonnes"),
             "historique": history, "niveau_actuel": Value::Null,
             "consommation_quotidienne": Value::Null, "jours_avant_rupture": Value::Null,
             "quantite_a_commander": Value::Null, "commande_urgente": false,
+            "machine_soupe_90j": if machine_90j > 0.0 { json!((machine_90j * 100.0).round() / 100.0) } else { Value::Null },
         });
         if let [(date_actuel, niveau_actuel), (date_precedent, niveau_precedent)] = readings.as_slice() {
             if let (Some(actuel), Some(precedent)) = (parse_stored_date(date_actuel), parse_stored_date(date_precedent)) {
@@ -5722,6 +5740,213 @@ async fn silo_supprimer(
     verify_csrf(&session, &form)?;
     sqlx::query("UPDATE silo_aliment SET actif=0 WHERE id=?")
         .bind(id)
+        .execute(&state.pool)
+        .await?;
+    Ok(Redirect::to("/aliment-previsions").into_response())
+}
+
+/// Importe un export « Histo_fab » de machine à soupe Asserva (§ « aliment
+/// et stock » des demandes en attente). Étape 1/2 : dépose chaque gâchée
+/// dans `importligne` (même mécanisme que l'import truies) et présente les
+/// produits distincts trouvés, pour que l'éleveur les relie lui-même à un
+/// silo existant — aucune correspondance de nom devinée automatiquement.
+async fn machine_soupe_import(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    mut multipart: Multipart,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    let mut data = None;
+    let mut filename = "histo_fab.csv".to_string();
+    let mut csrf = None;
+    while let Some(field) = multipart.next_field().await.map_err(|error| AppError::Invalid(error.to_string()))? {
+        match field.name().map(str::to_string).as_deref() {
+            Some("csrf_token") => csrf = Some(field.text().await.map_err(|error| AppError::Invalid(error.to_string()))?),
+            Some("fichier") => {
+                filename = field
+                    .file_name()
+                    .unwrap_or("histo_fab.csv")
+                    .chars()
+                    .filter(|character| character.is_alphanumeric() || ".-_ ".contains(*character))
+                    .take(180)
+                    .collect();
+                data = Some(field.bytes().await.map_err(|error| AppError::Invalid(error.to_string()))?);
+            }
+            _ => {}
+        }
+    }
+    if csrf.as_deref() != Some(session.csrf.as_str()) {
+        return Err(AppError::Forbidden);
+    }
+    let bytes = data.ok_or_else(|| AppError::Invalid("Fichier CSV manquant".into()))?;
+    if bytes.len() > 10 * 1024 * 1024 {
+        return Err(AppError::Invalid("Fichier trop volumineux".into()));
+    }
+    let lignes = machine_soupe::parse_fabrication_csv(&bytes).map_err(AppError::Invalid)?;
+    if lignes.is_empty() {
+        return Err(AppError::Invalid(
+            "Aucune gâchée avec un produit réel et une quantité non nulle dans ce fichier".into(),
+        ));
+    }
+
+    let token = uuid::Uuid::new_v4().simple().to_string();
+    let mut tx = state.pool.begin().await?;
+    sqlx::query("DELETE FROM importjournal WHERE statut='apercu' AND cree_le<datetime('now','-1 day')")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("INSERT INTO importjournal(token,type_import,nom_fichier,statut,cree_par) VALUES(?,'machine_soupe',?,'apercu',?)")
+        .bind(&token)
+        .bind(&filename)
+        .bind(session.uid)
+        .execute(&mut *tx)
+        .await?;
+    for (index, ligne) in lignes.iter().enumerate() {
+        let deja_importe: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM consommationsoupe WHERE COALESCE(date,'')=COALESCE(?,'') AND COALESCE(heure_debut,'')=COALESCE(?,'') AND lower(trim(produit_machine))=lower(trim(?))",
+        )
+        .bind(&ligne.date)
+        .bind(&ligne.heure_debut)
+        .bind(&ligne.produit)
+        .fetch_one(&mut *tx)
+        .await?;
+        let (action, anomalie) = if deja_importe > 0 {
+            ("ignorer", Some("Déjà importé".to_string()))
+        } else {
+            ("ajouter", None)
+        };
+        let payload = json!(ligne);
+        sqlx::query("INSERT INTO importligne(token,numero_ligne,action,anomalie,donnees_json) VALUES(?,?,?,?,?)")
+            .bind(&token)
+            .bind(index as i64 + 1)
+            .bind(action)
+            .bind(&anomalie)
+            .bind(payload.to_string())
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+
+    let a_importer: Vec<machine_soupe::LigneFabrication> = sqlx::query_scalar::<_, String>(
+        "SELECT donnees_json FROM importligne WHERE token=? AND action='ajouter' ORDER BY numero_ligne",
+    )
+    .bind(&token)
+    .fetch_all(&state.pool)
+    .await?
+    .into_iter()
+    .filter_map(|raw| serde_json::from_str(&raw).ok())
+    .collect();
+    let ignorees = lignes.len() as i64 - a_importer.len() as i64;
+    let mut produits = Vec::new();
+    for nom in machine_soupe::produits_distincts(&a_importer) {
+        let sous_total: f64 = a_importer.iter().filter(|l| l.produit == nom).map(|l| l.quantite_recue).sum();
+        let nb_gachees = a_importer.iter().filter(|l| l.produit == nom).count();
+        produits.push(json!({"nom": nom, "nb_gachees": nb_gachees, "total_recue": (sous_total * 100.0).round() / 100.0}));
+    }
+    let silos = generic_rows(&state.pool, "SELECT id,nom FROM silo_aliment WHERE actif=1 ORDER BY nom").await?;
+
+    let mut ctx = context(&session);
+    ctx.insert("token".into(), json!(token));
+    ctx.insert("nom_fichier".into(), json!(filename));
+    ctx.insert("nb_gachees".into(), json!(a_importer.len()));
+    ctx.insert("nb_ignorees".into(), json!(ignorees));
+    ctx.insert("produits".into(), Value::Array(produits));
+    ctx.insert("silos".into(), Value::Array(silos));
+    Ok(render(&state, "machine_soupe_apercu.html", Value::Object(ctx))?.into_response())
+}
+
+/// Étape 2/2 : applique la correspondance produit → silo choisie par
+/// l'éleveur (un champ `silo_{index}` par produit distinct, valeur
+/// « nouveau:Nom du silo » pour en créer un, ou l'id d'un silo existant) et
+/// enregistre chaque gâchée dans `consommationsoupe`.
+async fn machine_soupe_import_confirmer(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    verify_csrf(&session, &form)?;
+    let token = form_text(&form, "token").ok_or_else(|| AppError::Invalid("Aperçu d'import manquant".into()))?;
+    let mut tx = state.pool.begin().await?;
+    let owner: Option<i64> = sqlx::query_scalar(
+        "SELECT cree_par FROM importjournal WHERE token=? AND statut='apercu' AND type_import='machine_soupe'",
+    )
+    .bind(&token)
+    .fetch_optional(&mut *tx)
+    .await?
+    .flatten();
+    if owner != Some(session.uid) && !session.est_admin() {
+        return Err(AppError::Forbidden);
+    }
+    let lignes: Vec<machine_soupe::LigneFabrication> = sqlx::query_scalar::<_, String>(
+        "SELECT donnees_json FROM importligne WHERE token=? AND action='ajouter' ORDER BY numero_ligne",
+    )
+    .bind(&token)
+    .fetch_all(&mut *tx)
+    .await?
+    .into_iter()
+    .filter_map(|raw| serde_json::from_str(&raw).ok())
+    .collect();
+    if lignes.is_empty() {
+        return Err(AppError::Invalid("Aucune gâchée à importer (aperçu vide ou déjà appliqué)".into()));
+    }
+
+    let mut silo_par_produit: HashMap<String, i64> = HashMap::new();
+    for (index, produit) in machine_soupe::produits_distincts(&lignes).into_iter().enumerate() {
+        let choix = form.get(&format!("silo_{index}")).map(String::as_str).unwrap_or("");
+        let silo_id = if let Some(nom_nouveau) = choix.strip_prefix("nouveau:") {
+            let nom = if nom_nouveau.trim().is_empty() { produit.clone() } else { nom_nouveau.trim().to_string() };
+            let existant: Option<i64> = sqlx::query_scalar("SELECT id FROM silo_aliment WHERE lower(trim(nom))=lower(trim(?))")
+                .bind(&nom)
+                .fetch_optional(&mut *tx)
+                .await?;
+            match existant {
+                Some(id) => id,
+                None => sqlx::query("INSERT INTO silo_aliment(nom,actif) VALUES(?,1)")
+                    .bind(&nom)
+                    .execute(&mut *tx)
+                    .await?
+                    .last_insert_rowid(),
+            }
+        } else {
+            choix.parse::<i64>().map_err(|_| AppError::Invalid(format!("Silo non choisi pour « {produit} »")))?
+        };
+        silo_par_produit.insert(produit, silo_id);
+    }
+
+    for ligne in &lignes {
+        let Some(silo_id) = silo_par_produit.get(&ligne.produit) else { continue };
+        sqlx::query("INSERT INTO consommationsoupe(date,heure_debut,no_formule,produit_machine,silo_id,quantite_consigne,quantite_recue,token_import) VALUES(?,?,?,?,?,?,?,?)")
+            .bind(&ligne.date)
+            .bind(&ligne.heure_debut)
+            .bind(ligne.no_formule)
+            .bind(&ligne.produit)
+            .bind(silo_id)
+            .bind(ligne.quantite_consigne)
+            .bind(ligne.quantite_recue)
+            .bind(&token)
+            .execute(&mut *tx)
+            .await?;
+    }
+    sqlx::query("UPDATE importjournal SET statut='applique', applique_le=CURRENT_TIMESTAMP WHERE token=?")
+        .bind(&token)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(Redirect::to("/aliment-previsions").into_response())
+}
+
+async fn machine_soupe_import_annuler(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    verify_csrf(&session, &form)?;
+    let token = form_text(&form, "token").ok_or_else(|| AppError::Invalid("Aperçu d'import manquant".into()))?;
+    sqlx::query("DELETE FROM importjournal WHERE token=? AND statut='apercu' AND (cree_par=? OR ?='admin')")
+        .bind(token)
+        .bind(session.uid)
+        .bind(&session.role)
         .execute(&state.pool)
         .await?;
     Ok(Redirect::to("/aliment-previsions").into_response())

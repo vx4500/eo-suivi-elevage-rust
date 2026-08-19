@@ -776,6 +776,26 @@ CREATE TABLE IF NOT EXISTS releve_silo (
 CREATE INDEX IF NOT EXISTS ix_releve_silo_silo ON releve_silo(silo_id);
 CREATE INDEX IF NOT EXISTS ix_releve_silo_date ON releve_silo(date);
 
+-- Consommations importées depuis les exports « Histo_fab » d'une machine à
+-- soupe (§ « machines à soupe » des demandes en attente). Chaque ligne est
+-- une gâchée réelle (quantité consigne/reçue par produit). `produit_machine`
+-- garde le nom exact tel qu'exporté par la machine, pour traçabilité même
+-- après que l'éleveur l'a relié à un silo existant lors de l'import.
+CREATE TABLE IF NOT EXISTS consommationsoupe (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    date TEXT,
+    heure_debut TEXT,
+    no_formule INTEGER,
+    produit_machine TEXT NOT NULL,
+    silo_id INTEGER REFERENCES silo_aliment(id),
+    quantite_consigne REAL,
+    quantite_recue REAL,
+    token_import TEXT REFERENCES importjournal(token)
+);
+
+CREATE INDEX IF NOT EXISTS ix_consommationsoupe_silo ON consommationsoupe(silo_id);
+CREATE INDEX IF NOT EXISTS ix_consommationsoupe_date ON consommationsoupe(date);
+
 -- Catalogue de lignées génétiques (module optionnel « Génétique avancée »,
 -- §2 de la spécification). Un petit élevage garde le champ texte libre
 -- truie.race ; ce catalogue n'est utile qu'aux élevages en sélection ou
