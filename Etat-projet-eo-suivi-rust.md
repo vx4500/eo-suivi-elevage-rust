@@ -215,3 +215,48 @@ curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.4"
 ```
 
 Puis ouvrir `https://rust-elevage.basse-chevrie.ovh`.
+
+---
+
+## 8. Chantier — mise en conformité avec la spécification « naisseur-engraisseur évolutif »
+
+Suivi de l'audit du 19/08/2026 comparant l'application à la spécification
+complète (petit élevage familial → structure multi-sites, principe « la
+complexité s'active, elle ne s'impose pas »). Chaque phase est une branche et
+une PR séparée, testée (`cargo build`/`clippy`/`test`) avant fusion — pas de
+gros commit unique sur une application en production.
+
+- [x] **Phase 1 — Type d'élevage (§0bis).** Réglage `parametre.type_elevage`
+      (5 profils : naisseur-engraisseur, naisseur, post-sevreur seul,
+      post-sevreur-engraisseur, engraisseur seul), écran dans Paramètres,
+      propagé dans la session (`SessionData::type_elevage`, rafraîchi en
+      direct pour les sessions déjà ouvertes) et utilisé pour masquer les
+      menus Reproduction/Charcutiers-Prestataire selon le profil actif.
+      Prépare les phases suivantes (§1bis, §7 GTE adaptée).
+- [ ] **Phase 2 — Réception d'animaux achetés (§1bis).** Table dédiée (date,
+      fournisseur, effectif, poids moyen/total, prix, lot d'origine
+      fournisseur conservé comme traçabilité), affectation directe à une
+      salle/case, alerte quarantaine à l'arrivée. Actif pour post-sevreur,
+      post-sevreur-engraisseur, engraisseur seul (`session.recoit_achats()`,
+      déjà en place depuis la Phase 1).
+- [ ] **Phase 3 — GTE complète (§7), adaptée au type d'élevage.** Indice de
+      consommation (IC) par phase, coût alimentaire par porc produit, marge
+      sur coût alimentaire (MSA), marge brute par truie, taux de
+      renouvellement du cheptel. Le périmètre calculé dépend du profil actif
+      (ex. post-sevreur seul : IC/GMQ post-sevrage uniquement, coût d'achat du
+      porcelet en charge d'entrée).
+- [ ] **Phase 4 — Modules optionnels (§0, §2, §4).** Cases à cocher
+      « Génétique avancée » et « Prestataires/équipe » dans Paramètres,
+      catalogue de lignées (index prolificité/croissance/IC, contrat de
+      renouvellement) si activé, masquage des écrans correspondants sinon.
+- [ ] **Phase 5 — Capacités par étape et conduite continue (§0, §3).**
+      Capacités maternité/post-sevrage/engraissement (comme
+      `capacite_verraterie` existant), et mode « conduite en continu / hors
+      bande » comme option de premier rang pour les très petites structures.
+- [ ] **Phase 6 — Prévision d'aliment et rappels sanitaires par catégorie**
+      (déjà identifiés au §3 ci-dessus, regroupés ici dans le même effort
+      d'audit).
+- [ ] **Phase 7 — Fiche de mise-bas au format A4 définitif** (actuellement
+      export CSV uniquement, §9 de la spécification).
+
+Chaque case cochée référence sa PR dans l'historique Git de ce dépôt.

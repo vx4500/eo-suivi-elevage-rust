@@ -313,6 +313,10 @@ fn session_value(session: &SessionData) -> Value {
         "doit_changer_mdp": session.doit_changer_mdp,
         "peut_modifier": session.peut_modifier(),
         "est_admin": session.est_admin(),
+        "type_elevage": session.type_elevage,
+        "a_truies": session.a_truies(),
+        "engraisse": session.engraisse(),
+        "recoit_achats": session.recoit_achats(),
     })
 }
 
@@ -653,6 +657,7 @@ async fn login_post(
                 .filter(|value| !value.is_empty())
                 .map(str::to_string)
                 .collect();
+            let type_elevage = type_elevage_actif(&state.pool).await?;
             state.sessions.insert(
                 session_id.clone(),
                 SessionData {
@@ -663,6 +668,7 @@ async fn login_post(
                     sections,
                     csrf: auth::new_csrf(),
                     doit_changer_mdp: user.doit_changer_mdp,
+                    type_elevage,
                 },
             );
             let cookie = Cookie::build(("eo_session", session_id))
@@ -2742,6 +2748,18 @@ async fn productivite(
 
 async fn parameter_f64(pool:&SqlitePool,key:&str,default:f64)->AppResult<f64>{let value:Option<String>=sqlx::query_scalar("SELECT valeur FROM parametre WHERE cle=?").bind(key).fetch_optional(pool).await?.flatten();Ok(value.and_then(|value|parse_french_number(&value)).unwrap_or(default))}
 async fn parameter_list(pool:&SqlitePool,key:&str,defaults:&[&str])->AppResult<Vec<String>>{let value:Option<String>=sqlx::query_scalar("SELECT valeur FROM parametre WHERE cle=?").bind(key).fetch_optional(pool).await?.flatten();Ok(value.filter(|value|!value.trim().is_empty()).map(|value|value.split(',').map(str::trim).filter(|value|!value.is_empty()).map(str::to_string).collect()).unwrap_or_else(||defaults.iter().map(|value|(*value).to_string()).collect()))}
+
+/// Type d'élevage actif (`parametre.type_elevage`), retombe sur le cycle complet
+/// historique si non renseigné ou si la valeur enregistrée n'est plus reconnue.
+async fn type_elevage_actif(pool: &SqlitePool) -> AppResult<String> {
+    let value: Option<String> = sqlx::query_scalar("SELECT valeur FROM parametre WHERE cle='type_elevage'")
+        .fetch_optional(pool)
+        .await?
+        .flatten();
+    Ok(value
+        .filter(|value| auth::TYPES_ELEVAGE.iter().any(|(code, _)| *code == value))
+        .unwrap_or_else(|| auth::TYPE_ELEVAGE_DEFAUT.to_string()))
+}
 
 async fn reformes_seuils(State(state):State<AppState>,Extension(session):Extension<SessionData>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;let keys=["seuil_nv_min","seuil_sevres_min","seuil_retours_max","seuil_ecrases_max","seuil_rang_max","seuil_chetifs_max"];let mut tx=state.pool.begin().await?;for key in keys{if let Some(value)=form_f64(&form,key).filter(|value|value.is_finite()&&*value>=0.0){sqlx::query("INSERT INTO parametre(cle,valeur) VALUES(?,?) ON CONFLICT(cle) DO UPDATE SET valeur=excluded.valeur").bind(key).bind(value.to_string()).execute(&mut *tx).await?;}}tx.commit().await?;Ok(Redirect::to("/reformes").into_response())}
 async fn reformes_criteres(State(state):State<AppState>,Extension(session):Extension<SessionData>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;let allowed=["nv","sevres","retours","ecrases","rang","chetifs"];let selected=allowed.iter().filter(|code|form.contains_key(&format!("crit_{code}"))).copied().collect::<Vec<_>>();if selected.is_empty(){return Err(AppError::Invalid("Sélectionne au moins un critère".into()))}sqlx::query("INSERT INTO parametre(cle,valeur) VALUES('reforme_criteres',?) ON CONFLICT(cle) DO UPDATE SET valeur=excluded.valeur").bind(selected.join(",")).execute(&state.pool).await?;Ok(Redirect::to("/reformes").into_response())}
@@ -5123,7 +5141,8 @@ async fn parametres(
     let feed=generic_rows(&state.pool,"SELECT id,categorie,jour_debut,jour_fin,aliment,quantite,unite,note,ordre FROM planaliment ORDER BY ordre,categorie,jour_debut").await?;
     let causes=generic_rows(&state.pool,"SELECT id,libelle FROM causeperte ORDER BY libelle").await?;
     let demo:i64=sqlx::query_scalar("SELECT COUNT(*) FROM demoobjet").fetch_one(&state.pool).await?;
-    let mut ctx=context(&session);ctx.insert("parametres".into(),Value::Array(params));ctx.insert("reglages".into(),Value::Array(settings));ctx.insert("plans_aliment".into(),Value::Array(feed));ctx.insert("causes".into(),Value::Array(causes));ctx.insert("demo_actif".into(),json!(demo>0));render(&state,"parametres.html",Value::Object(ctx))
+    let types_elevage:Vec<Value>=auth::TYPES_ELEVAGE.iter().map(|(code,libelle)|json!({"code":code,"libelle":libelle})).collect();
+    let mut ctx=context(&session);ctx.insert("parametres".into(),Value::Array(params));ctx.insert("reglages".into(),Value::Array(settings));ctx.insert("plans_aliment".into(),Value::Array(feed));ctx.insert("causes".into(),Value::Array(causes));ctx.insert("demo_actif".into(),json!(demo>0));ctx.insert("types_elevage".into(),Value::Array(types_elevage));render(&state,"parametres.html",Value::Object(ctx))
 }
 
 async fn correctifs(State(state):State<AppState>,Extension(session):Extension<SessionData>)->AppResult<Html<String>>{render(&state,"correctifs.html",Value::Object(context(&session)))}

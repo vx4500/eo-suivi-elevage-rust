@@ -46,6 +46,20 @@ const ADMIN_ONLY: &[&str] = &[
     "/maj",
 ];
 
+/// Valeur par défaut de `parametre.type_elevage` quand rien n'est enregistré :
+/// préserve le comportement historique (cycle complet) pour les bases existantes.
+pub const TYPE_ELEVAGE_DEFAUT: &str = "naisseur_engraisseur";
+
+/// Les cinq profils reconnus par le paramétrage « Type d'élevage » (voir Étape 0bis
+/// de la spécification). Toute valeur inconnue en base retombe sur le défaut.
+pub const TYPES_ELEVAGE: &[(&str, &str)] = &[
+    ("naisseur_engraisseur", "Naisseur-engraisseur"),
+    ("naisseur", "Naisseur"),
+    ("postsevreur", "Post-sevreur seul"),
+    ("postsevreur_engraisseur", "Post-sevreur-engraisseur"),
+    ("engraisseur", "Engraisseur seul"),
+];
+
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct SessionData {
     pub uid: i64,
@@ -55,6 +69,10 @@ pub struct SessionData {
     pub sections: Vec<String>,
     pub csrf: String,
     pub doit_changer_mdp: bool,
+    /// Type d'élevage actif (voir `TYPES_ELEVAGE`) — conditionne l'affichage des
+    /// écrans de reproduction/verraterie/maternité. Mis en cache dans la session
+    /// à la connexion et rafraîchi en direct quand un admin change le réglage.
+    pub type_elevage: String,
 }
 
 impl SessionData {
@@ -64,6 +82,32 @@ impl SessionData {
 
     pub fn est_admin(&self) -> bool {
         self.role == "admin"
+    }
+
+    /// Vrai si le type d'élevage actif conduit des truies (naisseur ou
+    /// naisseur-engraisseur) : conditionne l'affichage de la reproduction,
+    /// de la verraterie/maternité et de la GTTT.
+    pub fn a_truies(&self) -> bool {
+        matches!(self.type_elevage.as_str(), "naisseur_engraisseur" | "naisseur")
+    }
+
+    /// Vrai si le type d'élevage actif engraisse des porcs (naisseur-engraisseur,
+    /// post-sevreur-engraisseur ou engraisseur seul) : conditionne l'affichage
+    /// de l'engraissement et du GMQ/IC de cette phase.
+    pub fn engraisse(&self) -> bool {
+        matches!(
+            self.type_elevage.as_str(),
+            "naisseur_engraisseur" | "postsevreur_engraisseur" | "engraisseur"
+        )
+    }
+
+    /// Vrai si le type d'élevage actif reçoit des animaux achetés (tout sauf le
+    /// naisseur pur, qui vend ses porcelets au sevrage).
+    pub fn recoit_achats(&self) -> bool {
+        matches!(
+            self.type_elevage.as_str(),
+            "postsevreur" | "postsevreur_engraisseur" | "engraisseur"
+        )
     }
 }
 
@@ -246,5 +290,54 @@ mod tests {
         let sections = vec!["economique".to_string()];
         assert!(salarie_path_allowed("/economique", &sections));
         assert!(!salarie_path_allowed("/bandes", &sections));
+    }
+
+    fn session_avec_type(type_elevage: &str) -> SessionData {
+        SessionData {
+            uid: 1,
+            identifiant: "test".into(),
+            nom: "Test".into(),
+            role: "eleveur".into(),
+            sections: vec![],
+            csrf: "csrf".into(),
+            doit_changer_mdp: false,
+            type_elevage: type_elevage.into(),
+        }
+    }
+
+    #[test]
+    fn type_elevage_conditionne_les_ecrans_actifs() {
+        let naisseur_engraisseur = session_avec_type("naisseur_engraisseur");
+        assert!(naisseur_engraisseur.a_truies());
+        assert!(naisseur_engraisseur.engraisse());
+        assert!(!naisseur_engraisseur.recoit_achats());
+
+        let naisseur = session_avec_type("naisseur");
+        assert!(naisseur.a_truies());
+        assert!(!naisseur.engraisse());
+        assert!(!naisseur.recoit_achats());
+
+        let postsevreur = session_avec_type("postsevreur");
+        assert!(!postsevreur.a_truies());
+        assert!(!postsevreur.engraisse());
+        assert!(postsevreur.recoit_achats());
+
+        let postsevreur_engraisseur = session_avec_type("postsevreur_engraisseur");
+        assert!(!postsevreur_engraisseur.a_truies());
+        assert!(postsevreur_engraisseur.engraisse());
+        assert!(postsevreur_engraisseur.recoit_achats());
+
+        let engraisseur = session_avec_type("engraisseur");
+        assert!(!engraisseur.a_truies());
+        assert!(engraisseur.engraisse());
+        assert!(engraisseur.recoit_achats());
+    }
+
+    #[test]
+    fn valeur_inconnue_ne_donne_acces_a_rien() {
+        let inconnu = session_avec_type("valeur-jamais-enregistree");
+        assert!(!inconnu.a_truies());
+        assert!(!inconnu.engraisse());
+        assert!(!inconnu.recoit_achats());
     }
 }

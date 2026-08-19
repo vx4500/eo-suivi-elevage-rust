@@ -327,7 +327,21 @@ pub(super) async fn reglages_maj(
 }
 
 pub(super) async fn parametres_maj(State(state):State<AppState>,Extension(session):Extension<SessionData>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_admin(&session)?;verify_csrf(&session,&form)?;let allowed=["nom_elevage","adresse_elevage","telephone_elevage","email_elevage","public_url","echo_j","seuil_stock","nas_path","cloud_path","mail_sauvegarde"];
-    let mut tx=state.pool.begin().await?;for key in allowed{if let Some(value)=form.get(key){sqlx::query("INSERT INTO parametre(cle,valeur) VALUES(?,?) ON CONFLICT(cle) DO UPDATE SET valeur=excluded.valeur").bind(key).bind(value.trim()).execute(&mut *tx).await?;}}tx.commit().await?;Ok(Redirect::to("/parametres").into_response())}
+    let mut tx=state.pool.begin().await?;for key in allowed{if let Some(value)=form.get(key){sqlx::query("INSERT INTO parametre(cle,valeur) VALUES(?,?) ON CONFLICT(cle) DO UPDATE SET valeur=excluded.valeur").bind(key).bind(value.trim()).execute(&mut *tx).await?;}}
+    // Type d'élevage : seule valeur reconnue parmi les 5 profils (voir 0bis de la
+    // spécification) est acceptée ; une soumission corrompue est ignorée en silence.
+    let new_type_elevage=form.get("type_elevage").map(|v|v.trim().to_string()).filter(|v|auth::TYPES_ELEVAGE.iter().any(|(code,_)|code==v));
+    if let Some(value)=&new_type_elevage{
+        sqlx::query("INSERT INTO parametre(cle,valeur) VALUES('type_elevage',?) ON CONFLICT(cle) DO UPDATE SET valeur=excluded.valeur").bind(value).execute(&mut *tx).await?;
+    }
+    tx.commit().await?;
+    if let Some(value)=new_type_elevage{
+        // Les sessions déjà ouvertes voient le nouveau type d'élevage sans avoir à
+        // se reconnecter, pour éviter un affichage incohérent le temps que chacun
+        // se reconnecte.
+        for mut entry in state.sessions.iter_mut(){entry.value_mut().type_elevage=value.clone();}
+    }
+    Ok(Redirect::to("/parametres").into_response())}
 
 pub(super) async fn demo_actif(State(state):State<AppState>,Extension(session):Extension<SessionData>)->AppResult<Response>{require_admin(&session)?;let active:i64=sqlx::query_scalar("SELECT COUNT(*) FROM demoobjet").fetch_one(&state.pool).await?;Ok(axum::Json(json!({"actif":active>0})).into_response())}
 
