@@ -5198,6 +5198,17 @@ async fn engraissement(
             .to_string()
     };
     let bands = generic_rows(&state.pool, &band_sql).await?;
+    // Effectif réel par bande (au lieu d'un total générique d'engraissement
+    // toutes bandes confondues) : même calcul que la fiche bande
+    // (`total_band_pigs`), pour que le prestataire/engraisseur sache combien
+    // de porcs sont réellement présents pour chaque bande qui lui est
+    // confiée.
+    let mut effectifs_bandes = Vec::new();
+    for band in &bands {
+        let (Some(id), Some(code)) = (band.get("id").and_then(Value::as_i64), band.get("code").and_then(Value::as_str)) else { continue };
+        let effectif = total_band_pigs(&state.pool, id, code).await?;
+        effectifs_bandes.push(json!({"code": code, "effectif": effectif}));
+    }
     let cases = generic_rows(
         &state.pool,
         "SELECT c.id,COALESCE(si.nom,si.code)||' · '||s.nom||' · '||c.nom AS nom FROM casesalle c JOIN salle s ON s.id=c.salle_id JOIN site si ON si.id=s.site_id ORDER BY si.nom,s.ordre,c.nom",
@@ -5206,6 +5217,7 @@ async fn engraissement(
     let mut ctx = context(&session);
     ctx.insert("declarations".into(), Value::Array(declarations));
     ctx.insert("bandes".into(), Value::Array(bands));
+    ctx.insert("effectifs_bandes".into(), Value::Array(effectifs_bandes));
     ctx.insert("cases".into(), Value::Array(cases));
     ctx.insert(
         "today".into(),

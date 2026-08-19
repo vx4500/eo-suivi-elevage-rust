@@ -74,8 +74,16 @@ août 2026 ; la priorité actuelle porte sur la fiabilité des effectifs
       même contrôle d'effectif insuffisant que `/declaration`. La saisie
       manuelle de « stade » reste utilisée telle quelle quand aucune case
       n'est renseignée (perte sous la mère, cas « Autre »).
-- [ ] Rattacher les porcs charcutiers à leur bande d'origine (au lieu d'un
-      total générique d'engraissement).
+- [x] Rattacher les porcs charcutiers à leur bande d'origine (au lieu d'un
+      total générique d'engraissement). La donnée existait déjà par bande
+      (`total_band_pigs`, utilisé sur la fiche bande), mais l'écran
+      Prestataire/Engraissement (`/engraissement`) n'affichait que le
+      formulaire de déclaration et le journal de mortalité, sans effectif par
+      bande : un prestataire suivant plusieurs bandes ne pouvait pas savoir
+      combien de porcs étaient réellement présents pour chacune. Ajout d'un
+      tableau « Porcs présents par bande » en tête de cet écran, avec le même
+      calcul que la fiche bande (limité aux bandes actives confiées à
+      l'engraisseur pour ce rôle, comme le reste de l'écran).
 
 ### Conduite d'élevage et productivité
 - [ ] Produire une GTE complète en complément de la GTTT.
