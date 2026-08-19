@@ -97,10 +97,20 @@ août 2026 ; la priorité actuelle porte sur la fiabilité des effectifs
       l'engraisseur pour ce rôle, comme le reste de l'écran).
 
 ### Conduite d'élevage et productivité
-- [ ] Produire une GTE complète en complément de la GTTT.
-- [ ] Afficher les ELD dans les fiches truies **sans** garder la moyenne ELD
-      par bande.
-- [ ] Afficher TMP et données techniques d'abattage par bande.
+- [x] Produire une GTE complète en complément de la GTTT — déjà livré par le
+      chantier §8/Phase 3 (écran `/gte`) ; entrée laissée par erreur dans
+      cette liste lors de la clôture du chantier §8, corrigée ici.
+- [x] Afficher les ELD dans les fiches truies **sans** garder la moyenne ELD
+      par bande. L'historique ELD par truie était déjà affiché sur la fiche
+      truie (`/truie/{id}`, section « Mesures ELD, poids et état
+      corporel ») ; en revanche `eld_bandes` (moyenne ELD par bande) était
+      calculé à chaque chargement de `/productivite` sans être utilisé par
+      aucun modèle — code mort supprimé (la moyenne globale `eld_resume`,
+      elle, reste affichée et est conservée).
+- [x] Afficher TMP et données techniques d'abattage par bande — déjà livré :
+      tableau « technique » de `/productivite` (TMP, muscle, plus-value, prix
+      net, montant net par bande). Entrée laissée par erreur dans cette
+      liste, corrigée ici.
 - [x] Afficher stade, emplacement actuel et effectif réel des porcs.
       L'effectif réel était déjà affiché (`suivi_porcs.presents`), mais la
       fiche bande n'avait qu'un journal brut des mouvements (« Derniers

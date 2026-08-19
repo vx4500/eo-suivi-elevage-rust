@@ -2893,11 +2893,6 @@ async fn productivite(
     .into_iter()
     .next()
     .unwrap_or_else(|| json!({}));
-    let eld_by_band = generic_rows(
-        &state.pool,
-        "WITH latest AS (SELECT m.truie_id,m.eld,m.date FROM mesuretruie m WHERE m.eld IS NOT NULL AND NOT EXISTS(SELECT 1 FROM mesuretruie n WHERE n.truie_id=m.truie_id AND n.eld IS NOT NULL AND (n.date>m.date OR (n.date=m.date AND n.id>m.id)))) SELECT b.id,b.code,COUNT(l.eld) AS truies_mesurees,CAST(ROUND(AVG(l.eld),2) AS REAL) AS eld_moyenne,MAX(l.date) AS derniere_mesure FROM bande b JOIN truie t ON t.bande_code=b.code AND t.reformee=0 JOIN latest l ON l.truie_id=t.id WHERE b.active=1 GROUP BY b.id,b.code ORDER BY b.date_mb,b.id",
-    )
-    .await?;
     let ranks = gttt_rank_rows(&gttt_litters)?;
     let schedule = load_band_schedule(&state.pool).await?;
     let today = Local::now().date_naive();
@@ -2954,7 +2949,6 @@ async fn productivite(
     ctx.insert("entonnoir".into(), funnel);
     ctx.insert("truies_actives".into(), json!(active_sows));
     ctx.insert("eld_resume".into(), eld_summary);
-    ctx.insert("eld_bandes".into(), Value::Array(eld_by_band));
     ctx.insert("stades".into(), Value::Array(stages));
     ctx.insert("rangs".into(), Value::Array(ranks));
     ctx.insert("objectifs".into(), Value::Array(objectives));
