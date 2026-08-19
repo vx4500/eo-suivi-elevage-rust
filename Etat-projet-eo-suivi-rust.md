@@ -62,8 +62,18 @@ août 2026 ; la priorité actuelle porte sur la fiabilité des effectifs
 ### Fiabilité des données
 - [ ] Fiabiliser les effectifs réels (anciens inventaires incohérents,
       mortalités avec un stade erroné).
-- [ ] Corriger l'affectation du stade lors des déclarations de mortalité et
-      détecter les effectifs incohérents.
+- [x] Corriger l'affectation du stade lors des déclarations de mortalité et
+      détecter les effectifs incohérents. Les deux points de saisie
+      (`/declaration` et la saisie rapide « perte ») laissaient l'utilisateur
+      choisir un stade dans une liste fixe indépendante de la case
+      sélectionnée, et seul `/declaration` vérifiait l'effectif présent dans
+      la case avant d'enregistrer une perte. Le stade est désormais déduit
+      automatiquement du type de la salle de la case choisie (mêmes motifs
+      que les capacités par étape du §8/Phase 5 — `stade_pour_type_salle`,
+      fonction pure testée unitairement), et la saisie rapide applique le
+      même contrôle d'effectif insuffisant que `/declaration`. La saisie
+      manuelle de « stade » reste utilisée telle quelle quand aucune case
+      n'est renseignée (perte sous la mère, cas « Autre »).
 - [ ] Rattacher les porcs charcutiers à leur bande d'origine (au lieu d'un
       total générique d'engraissement).
 

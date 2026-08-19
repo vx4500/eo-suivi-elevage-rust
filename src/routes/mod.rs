@@ -606,6 +606,32 @@ mod capacite_tests {
         assert_eq!(places_disponibles(31, 31), 0);
         assert_eq!(places_disponibles(31, 45), 0);
     }
+
+    #[test]
+    fn stade_pour_type_salle_reconnait_les_memes_motifs_que_les_capacites() {
+        assert_eq!(
+            stade_pour_type_salle("Verraterie A"),
+            Some("Verraterie".to_string())
+        );
+        assert_eq!(
+            stade_pour_type_salle("Maternité 2"),
+            Some("Maternité".to_string())
+        );
+        assert_eq!(
+            stade_pour_type_salle("Post-sevrage"),
+            Some("Post-sevrage".to_string())
+        );
+        assert_eq!(
+            stade_pour_type_salle("Engraissement B"),
+            Some("Engraissement".to_string())
+        );
+        assert_eq!(
+            stade_pour_type_salle("Salle de finition"),
+            Some("Engraissement".to_string())
+        );
+        assert_eq!(stade_pour_type_salle("Local technique"), None);
+        assert_eq!(stade_pour_type_salle(""), None);
+    }
 }
 
 #[cfg(test)]
@@ -2988,6 +3014,41 @@ async fn occupation_truies(pool: &SqlitePool, type_like: &str) -> AppResult<i64>
     .await?)
 }
 
+/// Stade déduit du type de salle (mêmes motifs que `occupation_porcs`/
+/// `occupation_truies`), fonction pure testable indépendamment de la base.
+/// `None` si le type de salle n'est pas reconnu (ex. salle non renseignée).
+fn stade_pour_type_salle(type_salle: &str) -> Option<String> {
+    let t = type_salle.to_lowercase();
+    if t.contains("verrater") {
+        Some("Verraterie".to_string())
+    } else if t.contains("matern") {
+        Some("Maternité".to_string())
+    } else if t.contains("sevr") {
+        Some("Post-sevrage".to_string())
+    } else if t.contains("engrais") || t.contains("finition") {
+        Some("Engraissement".to_string())
+    } else {
+        None
+    }
+}
+
+/// Stade déduit du type de la salle contenant la case donnée, pour ne plus
+/// dépendre d'une sélection manuelle qui peut ne pas correspondre à la case
+/// réellement choisie lors d'une déclaration de mortalité. `None` si la case
+/// est inconnue ou si le type de sa salle n'est pas reconnu : dans ce cas
+/// l'appelant retombe sur la valeur du formulaire.
+async fn stade_from_case(pool: &SqlitePool, case_id: i64) -> AppResult<Option<String>> {
+    let salle_type: Option<Option<String>> = sqlx::query_scalar(
+        "SELECT s.type FROM casesalle c JOIN salle s ON s.id=c.salle_id WHERE c.id=?",
+    )
+    .bind(case_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(salle_type
+        .flatten()
+        .and_then(|t| stade_pour_type_salle(&t)))
+}
+
 /// Effectif de porcs présents dans les cases dont la salle correspond à l'un
 /// des motifs LIKE donnés, recalculé à partir des mouvements réels (voir
 /// `case_pig_count`) plutôt qu'une valeur figée.
@@ -5179,6 +5240,7 @@ async fn declaration_ajouter(
         .filter(|value| *value > 0 && *value <= 10_000)
         .ok_or_else(|| AppError::Invalid("Nombre invalide".into()))?;
     let case_id = form_i64(&form, "case_id");
+    let mut stade = form_text(&form, "stade");
     if let Some(case_id) = case_id {
         let present = case_pig_count(&state.pool, case_id).await?;
         if number > present {
@@ -5186,11 +5248,16 @@ async fn declaration_ajouter(
                 "Effectif insuffisant dans la case : {present} porc(s) présent(s)"
             )));
         }
+        // La case choisie fait foi : évite un stade saisi manuellement en
+        // décalage avec la salle réellement sélectionnée.
+        if let Some(deduced) = stade_from_case(&state.pool, case_id).await? {
+            stade = Some(deduced);
+        }
     }
     sqlx::query("INSERT INTO declarationmort(bande_code,date,stade,case_id,cause,poids,nombre,declare_par,note) VALUES(?,?,?,?,?,?,?,?,?)")
         .bind(&band)
         .bind(form_date_or_today(&form, "date")?)
-        .bind(form_text(&form, "stade"))
+        .bind(stade)
         .bind(case_id)
         .bind(form_text(&form, "cause"))
         .bind(form_f64(&form, "poids"))
