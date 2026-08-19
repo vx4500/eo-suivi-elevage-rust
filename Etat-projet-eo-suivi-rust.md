@@ -161,20 +161,54 @@ août 2026 ; la priorité actuelle porte sur la fiabilité des effectifs
 
 ### Économie et imports (demandes en attente)
 - [ ] Permettre deux lots sur une même facture d'apport Cooperl.
-- [ ] Fusionner les variantes de « Charte Qualité Régionale » et vérifier les
-      doublons similaires sur toutes les pages.
-- [ ] Reconnaître les libellés de plus-value suivants :
+- [x] Fusionner les variantes de « Charte Qualité Régionale » et vérifier les
+      doublons similaires sur toutes les pages. Vrai bug trouvé en écrivant
+      le test : `canonical_label` comparait par sous-chaîne sur un texte
+      seulement mis en majuscules, donc « CHARTE QUALITE REGI » (sans
+      accent) et « CHARTE QUALITÉ RÉGIONALE » (avec accents) ne
+      fusionnaient pas — deux lignes distinctes au lieu d'une seule cumulée
+      sur *toutes* les pages qui utilisent cette fonction partagée (imports
+      PDF Cooperl/Uniporc et saisies manuelles). Corrigé par
+      `strip_french_accents`, appliquée avant la comparaison. Vérifié par
+      `economic_import::tests::les_10_libelles_de_plus_value_demandes_sont_reconnus`.
+- [x] Reconnaître les libellés de plus-value suivants :
       `PARTICIPATION P.S.A. 0J`, `+ VALUE R.S.E.`,
       `PRIME SOLIDARITE JEUNE 5 CT`, `+ VALUE QUALIVIANDE PBE`,
       `COMPLEMENT COCHON DU DIMANC`, `+ VALUE CHARTE QUALITE REGI`,
       `+ VALUE COOPERL LPF`, `+ VALUE PORC SANS ANTIBIOTI`,
-      `+ VALUE QUEUE LONGUE (RSE)`, `PARTICIPATION COUT RFID`.
-- [ ] Intégrer le tableau « Cahiers des charges — valorisations » dans
-      Économie et retirer sa page séparée.
-- [ ] Supprimer l'estimation prévisionnelle (obsolète).
-- [ ] Regrouper « Lier automatiquement » avec l'import Cooperl et renommer
-      l'action « Importer des documents PDF ».
+      `+ VALUE QUEUE LONGUE (RSE)`, `PARTICIPATION COUT RFID`. Déjà
+      reconnus par les entrées existantes de `canonical_label` (vérifié un
+      par un, pas supposé) ; ajout du test dédié ci-dessus pour éviter une
+      régression silencieuse si `mappings` est modifié plus tard.
+- [x] Intégrer le tableau « Cahiers des charges — valorisations » dans
+      Économie et retirer sa page séparée. La page `/cahiers` n'apparaissait
+      déjà plus dans la navigation (`base.html`) mais restait accessible et
+      autonome par URL directe. Son contenu (paramètres des cahiers +
+      valorisations réelles importées) est désormais une section de
+      `/economique#cahiers` ; `/cahiers` et les actions
+      `/cahiers/{id}/maj`/`supprimer` redirigent vers cette ancre pour tout
+      favori existant. `templates/cahiers.html` supprimé.
+- [x] Supprimer l'estimation prévisionnelle (obsolète) — déjà fait : aucune
+      trace de cette fonctionnalité dans le code actuel (recherché sans
+      résultat). Entrée laissée par erreur dans cette liste, corrigée ici.
+- [x] Regrouper « Lier automatiquement » avec l'import Cooperl et renommer
+      l'action « Importer des documents PDF ». Déjà regroupé en une seule
+      action (aucun bouton « Lier automatiquement » séparé dans aucun
+      template — seules des routes historiques `/economique/auto-lier` et
+      `/economique/rattacher-auto` restent enregistrées sans point d'entrée
+      dans l'UI, gardées pour la parité des routes Python) ; bouton renommé
+      « Importer des documents PDF » (au lieu de « Analyser et lier
+      automatiquement ») pour correspondre exactement à la demande.
 - [ ] Ajouter un modèle d'import des factures génétiques, téléchargeable.
+      *Non traité :* contrairement aux modèles CSV existants (truies, eau/
+      électricité), aucun n'est un simple document de référence — chacun est
+      systématiquement couplé à un vrai point d'entrée d'import en masse
+      (aperçu, doublons, transaction). Pour la génétique, seuls existent
+      aujourd'hui l'import PDF (déjà fonctionnel) et la saisie manuelle
+      ligne à ligne ; ajouter *seulement* un modèle CSV sans pipeline
+      d'import en masse pour le consommer aurait été trompeur. Construire
+      ce pipeline complet est un incrément à part entière, pas un
+      nettoyage rapide.
 
 ### Présentation et navigation
 - [ ] Retirer l'ancien texte générique de mise à jour (« remplacer le dossier
