@@ -197,6 +197,7 @@ pub fn router(state: AppState) -> Router {
         .route("/sanitaire/acte/modifier", post(sanitaire_acte_modifier))
         .route("/sanitaire/acte/supprimer", post(sanitaire_acte_supprimer))
         .route("/sanitaire/fait", post(sanitaire_fait))
+        .route("/sanitaire/fait-verrat", post(sanitaire_fait_verrat))
         .route("/pharmacie/mouvement", post(pharmacie_mouvement))
         .route("/pharmacie/regler", post(pharmacie_regler))
         .route("/planning", get(planning))
@@ -4885,7 +4886,21 @@ async fn sanitaire(
 ) -> AppResult<Html<String>> {
     let protocols = generic_rows(&state.pool, "SELECT id,libelle,cible,reference,jour,produit,dose,unite,voie,duree_j,delai_attente,aiguille,preconisations,note FROM acteprotocole WHERE actif=1 ORDER BY cible,jour,id").await?;
     let bands = generic_rows(&state.pool, "SELECT id,code,date_mb FROM bande WHERE active=1 ORDER BY date_mb,code").await?;
-    let completed = generic_rows(&state.pool, "SELECT ar.id,ar.date_realise,b.code AS bande,a.libelle,a.produit,ar.note FROM acterealise ar JOIN bande b ON b.id=ar.bande_id JOIN acteprotocole a ON a.id=ar.acte_id ORDER BY ar.date_realise DESC,ar.id DESC LIMIT 250").await?;
+    let verrats = generic_rows(&state.pool, "SELECT id,code FROM verrat WHERE actif=1 ORDER BY code").await?;
+    // Réunit les deux tables d'historique (bande et verrat, voir
+    // acterealiseverrat dans les migrations) pour un seul tableau « Réalisés ».
+    let completed = generic_rows(
+        &state.pool,
+        // Alias explicites sur id/date_realise nécessaires : sans eux, SQLite
+        // refuse l'ORDER BY sur un SELECT composé (UNION ALL) avec l'erreur
+        // « ORDER BY term does not match any column in the result set »
+        // (trouvé en écrivant le test associé, tests/schema.rs).
+        "SELECT ar.id AS id,ar.date_realise AS date_realise,b.code AS cible_nom,a.libelle,a.produit,ar.note FROM acterealise ar JOIN bande b ON b.id=ar.bande_id JOIN acteprotocole a ON a.id=ar.acte_id \
+         UNION ALL \
+         SELECT arv.id AS id,arv.date_realise AS date_realise,v.code AS cible_nom,a.libelle,a.produit,arv.note FROM acterealiseverrat arv JOIN verrat v ON v.id=arv.verrat_id JOIN acteprotocole a ON a.id=arv.acte_id \
+         ORDER BY date_realise DESC,id DESC LIMIT 250",
+    )
+    .await?;
     let treated_pigs = generic_rows(&state.pool, "SELECT tc.id,tc.date,COALESCE(NULLIF(p.rfid,''),'Porc #'||p.id) AS animal,COALESCE(tc.bande_code,p.bande_code) AS bande,tc.produit,tc.dose,tc.motif,tc.delai_attente,tc.note FROM traitementcharcutier tc JOIN porccharcutier p ON p.id=tc.charcutier_id WHERE lower(COALESCE(tc.motif,'')) NOT LIKE '%vaccin%' AND lower(COALESCE(tc.produit,'')) NOT LIKE '%vaccin%' ORDER BY tc.date DESC,tc.id DESC LIMIT 500").await?;
     let today = Local::now().date_naive();
     // Rappels sanitaires (§8) : un protocole marqué rappel=1 dont l'échéance
@@ -4917,6 +4932,7 @@ async fn sanitaire(
     let mut ctx = context(&session);
     ctx.insert("protocoles".into(), Value::Array(protocols));
     ctx.insert("bandes".into(), Value::Array(bands));
+    ctx.insert("verrats".into(), Value::Array(verrats));
     ctx.insert("realises".into(), Value::Array(completed));
     ctx.insert("porcs_traites".into(), Value::Array(treated_pigs));
     ctx.insert("rappels".into(), Value::Array(reminders));
@@ -4981,6 +4997,23 @@ async fn sanitaire_fait(
     let date=form_date_or_today(&form,"date_realise")?;
     sqlx::query("INSERT INTO acterealise(acte_id,bande_id,date_realise,note) SELECT ?,?,?,? WHERE EXISTS(SELECT 1 FROM acteprotocole WHERE id=? AND actif=1) AND EXISTS(SELECT 1 FROM bande WHERE id=?)")
         .bind(act).bind(band).bind(date).bind(form_text(&form,"note")).bind(act).bind(band).execute(&state.pool).await?;
+    Ok(Redirect::to("/sanitaire").into_response())
+}
+
+/// Équivalent de `sanitaire_fait` pour un verrat : un verrat n'appartenant à
+/// aucune bande, `acterealise` (bande_id NOT NULL) ne peut pas l'accueillir
+/// — voir `acterealiseverrat` dans les migrations. Sans cette route, un
+/// protocole ciblant un verrat n'était réalisable qu'en le rattachant à une
+/// bande sans rapport, ce qui aurait corrompu l'historique sanitaire.
+async fn sanitaire_fait_verrat(
+    State(state): State<AppState>, Extension(session): Extension<SessionData>, Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    verify_csrf(&session,&form)?;
+    let act=form_i64(&form,"acte_id").ok_or_else(||AppError::Invalid("Acte manquant".into()))?;
+    let verrat=form_i64(&form,"verrat_id").ok_or_else(||AppError::Invalid("Verrat manquant".into()))?;
+    let date=form_date_or_today(&form,"date_realise")?;
+    sqlx::query("INSERT INTO acterealiseverrat(acte_id,verrat_id,date_realise,note) SELECT ?,?,?,? WHERE EXISTS(SELECT 1 FROM acteprotocole WHERE id=? AND actif=1) AND EXISTS(SELECT 1 FROM verrat WHERE id=?)")
+        .bind(act).bind(verrat).bind(date).bind(form_text(&form,"note")).bind(act).bind(verrat).execute(&state.pool).await?;
     Ok(Redirect::to("/sanitaire").into_response())
 }
 

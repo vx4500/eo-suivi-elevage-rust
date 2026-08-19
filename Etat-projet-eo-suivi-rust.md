@@ -77,8 +77,26 @@ août 2026 ; la priorité actuelle porte sur la fiabilité des effectifs
 - [ ] Permettre d'ordonner librement les salles dans l'implantation.
 
 ### Sanitaire
-- [ ] Rappels sanitaires calculés séparément pour truies, cochettes,
-      porcelets et verrats (avec historique).
+- [x] Rappels sanitaires calculés séparément pour truies, cochettes,
+      porcelets et verrats (avec historique). Truies/cochettes/porcelets
+      étaient déjà couverts (§8/Phase 6, colonne « Catégorie » = `cible` sur
+      `/sanitaire`) ; les verrats restaient un trou documenté (« un verrat
+      n'appartient pas à une bande », `acterealise.bande_id` étant
+      `NOT NULL`). Fermé par une table additive `acterealiseverrat`
+      (mêmes colonnes qu'`acterealise`, sans toucher à sa contrainte
+      existante — recréer la table pour l'assouplir aurait été un risque
+      inutile sur une base de production) et une route dédiée
+      `/sanitaire/fait-verrat`. L'historique « Actes réalisés » réunit
+      maintenant bande et verrat par `UNION ALL`. *Limite assumée,
+      inchangée :* pas d'échéance calculée pour les rappels verrats (aucune
+      date de référence par verrat en base, comme documenté en Phase 6 pour
+      les références autres que mise-bas) — seul l'historique était visé ici.
+      Un vrai bug SQLite trouvé en écrivant le test dédié
+      (`historique_sanitaire_reunit_bandes_et_verrats` dans
+      `tests/schema.rs`) : sans alias explicite sur `id`/`date_realise`,
+      SQLite refuse l'`ORDER BY` d'un `UNION ALL` (« ORDER BY term does not
+      match any column in the result set ») — corrigé avant d'atteindre la
+      production.
 
 ### Aliment et stock
 - [ ] Prévision de consommation et de commande d'aliment par bande avant
