@@ -1,6 +1,7 @@
 mod auth;
 mod config;
 mod db;
+mod demo;
 mod economic_import;
 mod error;
 mod machine_soupe;
