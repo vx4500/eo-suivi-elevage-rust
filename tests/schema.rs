@@ -33,9 +33,10 @@ async fn schema_complet_et_ecritures_compatibles() -> anyhow::Result<()> {
     )
     .fetch_one(&pool)
     .await?;
-    // 59 depuis l'ajout de receptionachat (§1bis), lignee_genetique (§2), et
-    // silo_aliment/releve_silo (prévisions aliment, §5).
-    assert_eq!(tables, 59);
+    // 60 depuis l'ajout de receptionachat (§1bis), lignee_genetique (§2),
+    // silo_aliment/releve_silo (prévisions aliment, §5), et acterealiseverrat
+    // (historique sanitaire des verrats, §3).
+    assert_eq!(tables, 60);
     let objectives: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM objectif")
         .fetch_one(&pool)
         .await?;
@@ -197,5 +198,137 @@ async fn inventaire_est_un_point_de_depart_sans_double_comptage() -> anyhow::Res
         .fetch_one(&pool)
         .await?;
     assert_eq!(corrected, (1, 98));
+    Ok(())
+}
+
+/// Vérifie en conditions réelles (base SQLite en mémoire) les contrôles
+/// ajoutés à `/etat-donnees` pour le §3 « Fiabiliser les effectifs réels » :
+/// même requête (WITH `effectif_case`/`effectif_case2`) que celle utilisée
+/// par `etat_donnees` dans `src/routes/mod.rs`, pour attraper une régression
+/// SQL — cette requête n'est exécutée nulle part ailleurs dans les tests.
+#[tokio::test]
+async fn etat_donnees_detecte_les_incoherences_deffectif() -> anyhow::Result<()> {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await?;
+    sqlx::raw_sql(include_str!("../migrations/0001_schema.sql"))
+        .execute(&pool)
+        .await?;
+    let site = sqlx::query("INSERT INTO site(code,nom) VALUES('TEST','Site test')")
+        .execute(&pool)
+        .await?
+        .last_insert_rowid();
+    let room = sqlx::query("INSERT INTO salle(site_id,nom,nb_cases,ordre) VALUES(?,'Engraissement',2,1)")
+        .bind(site)
+        .execute(&pool)
+        .await?
+        .last_insert_rowid();
+    // Case avec un effectif calculé négatif : 5 déclarés présents, 8 morts
+    // déclarées ensuite -> 5-8=-3.
+    let pen_negative = sqlx::query("INSERT INTO casesalle(salle_id,nom,nb_max_porcs) VALUES(?,'Case négative',20)")
+        .bind(room)
+        .execute(&pool)
+        .await?
+        .last_insert_rowid();
+    sqlx::query("INSERT INTO inventairecase(case_id,date,nombre,note,cree_par) VALUES(?,'2026-08-01',5,'Stock initial','test')")
+        .bind(pen_negative)
+        .execute(&pool)
+        .await?;
+    sqlx::query("INSERT INTO declarationmort(bande_code,date,stade,case_id,nombre) VALUES('B-TEST','2026-08-10','Engraissement',?,8)")
+        .bind(pen_negative)
+        .execute(&pool)
+        .await?;
+    // Case en dépassement de capacité : 3 présents pour 2 places.
+    let pen_over = sqlx::query("INSERT INTO casesalle(salle_id,nom,nb_max_porcs) VALUES(?,'Case pleine',2)")
+        .bind(room)
+        .execute(&pool)
+        .await?
+        .last_insert_rowid();
+    sqlx::query("INSERT INTO inventairecase(case_id,date,nombre,note,cree_par) VALUES(?,'2026-08-01',3,'Stock initial','test')")
+        .bind(pen_over)
+        .execute(&pool)
+        .await?;
+    // Mortalité sans stade renseigné.
+    sqlx::query("INSERT INTO declarationmort(bande_code,date,nombre) VALUES('B-TEST','2026-08-11',1)")
+        .execute(&pool)
+        .await?;
+    // Porc charcutier sans bande d'origine (donnée legacy).
+    sqlx::query("INSERT INTO porccharcutier(rfid,date_naissance) VALUES('RFID-TEST','2026-05-01')")
+        .execute(&pool)
+        .await?;
+
+    let sql = "WITH effectif_case AS (SELECT c.id,c.nb_max_porcs,(SELECT date FROM inventairecase WHERE case_id=c.id ORDER BY date DESC,id DESC LIMIT 1) AS inv_date,COALESCE((SELECT nombre FROM inventairecase WHERE case_id=c.id ORDER BY date DESC,id DESC LIMIT 1),0) AS base FROM casesalle c),effectif_case2 AS (SELECT e.id,e.nb_max_porcs,e.base+COALESCE((SELECT SUM(CASE WHEN t.case_dest_id=e.id THEN COALESCE(t.nombre,0) ELSE -COALESCE(t.nombre,0) END) FROM transfert t WHERE t.espece='porc' AND (t.case_dest_id=e.id OR t.case_source_id=e.id) AND (e.inv_date IS NULL OR t.date>e.inv_date)),0)-COALESCE((SELECT SUM(d.nombre) FROM declarationmort d WHERE d.case_id=e.id AND (e.inv_date IS NULL OR d.date>e.inv_date)),0) AS effectif FROM effectif_case e) SELECT 'Cases avec effectif calculé négatif' AS controle,COUNT(*) AS anomalies FROM effectif_case2 WHERE effectif<0 UNION ALL SELECT 'Cases dépassant leur capacité déclarée',COUNT(*) FROM effectif_case2 WHERE nb_max_porcs IS NOT NULL AND nb_max_porcs>0 AND effectif>nb_max_porcs UNION ALL SELECT 'Déclarations de mortalité sans stade renseigné',COUNT(*) FROM declarationmort WHERE stade IS NULL OR trim(stade)='' UNION ALL SELECT 'Porcs charcutiers sans bande d''origine',COUNT(*) FROM porccharcutier WHERE bande_code IS NULL OR trim(bande_code)=''";
+    let rows: Vec<(String, i64)> = sqlx::query_as(sql).fetch_all(&pool).await?;
+    assert_eq!(
+        rows,
+        vec![
+            ("Cases avec effectif calculé négatif".to_string(), 1),
+            ("Cases dépassant leur capacité déclarée".to_string(), 1),
+            (
+                "Déclarations de mortalité sans stade renseigné".to_string(),
+                1
+            ),
+            ("Porcs charcutiers sans bande d'origine".to_string(), 1),
+        ]
+    );
+    Ok(())
+}
+
+/// Vérifie qu'un acte réalisé sur un verrat (acterealiseverrat, §3
+/// « Rappels sanitaires… avec historique ») rejoint bien l'historique
+/// « Actes réalisés » aux côtés des actes par bande (acterealise), avec la
+/// même requête UNION ALL que celle utilisée par `sanitaire` dans
+/// `src/routes/mod.rs`.
+#[tokio::test]
+async fn historique_sanitaire_reunit_bandes_et_verrats() -> anyhow::Result<()> {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await?;
+    sqlx::raw_sql(include_str!("../migrations/0001_schema.sql"))
+        .execute(&pool)
+        .await?;
+    let band = sqlx::query("INSERT INTO bande(code,date_mb,active) VALUES('B-TEST','2026-08-01',1)")
+        .execute(&pool)
+        .await?
+        .last_insert_rowid();
+    let verrat = sqlx::query("INSERT INTO verrat(code,actif) VALUES('V-TEST',1)")
+        .execute(&pool)
+        .await?
+        .last_insert_rowid();
+    let acte_bande = sqlx::query("INSERT INTO acteprotocole(libelle,cible,reference,jour,actif) VALUES('Vermifuge','Bande','mise_bas',0,1)")
+        .execute(&pool)
+        .await?
+        .last_insert_rowid();
+    let acte_verrat = sqlx::query("INSERT INTO acteprotocole(libelle,cible,reference,jour,actif) VALUES('Bilan sanitaire','Verrat','mise_bas',0,1)")
+        .execute(&pool)
+        .await?
+        .last_insert_rowid();
+    sqlx::query("INSERT INTO acterealise(acte_id,bande_id,date_realise) VALUES(?,?,'2026-08-10')")
+        .bind(acte_bande)
+        .bind(band)
+        .execute(&pool)
+        .await?;
+    sqlx::query("INSERT INTO acterealiseverrat(acte_id,verrat_id,date_realise) VALUES(?,?,'2026-08-12')")
+        .bind(acte_verrat)
+        .bind(verrat)
+        .execute(&pool)
+        .await?;
+
+    let sql = "SELECT ar.id AS id,ar.date_realise AS date_realise,b.code AS cible_nom,a.libelle,a.produit,ar.note FROM acterealise ar JOIN bande b ON b.id=ar.bande_id JOIN acteprotocole a ON a.id=ar.acte_id UNION ALL SELECT arv.id AS id,arv.date_realise AS date_realise,v.code AS cible_nom,a.libelle,a.produit,arv.note FROM acterealiseverrat arv JOIN verrat v ON v.id=arv.verrat_id JOIN acteprotocole a ON a.id=arv.acte_id ORDER BY date_realise DESC,id DESC LIMIT 250";
+    let rows: Vec<(i64, String, String, String, Option<String>, Option<String>)> =
+        sqlx::query_as(sql).fetch_all(&pool).await?;
+    let simplified: Vec<(i64, String, String, String)> = rows
+        .into_iter()
+        .map(|(id, date, cible, libelle, _, _)| (id, date, cible, libelle))
+        .collect();
+    assert_eq!(
+        simplified,
+        vec![
+            (1, "2026-08-12".to_string(), "V-TEST".to_string(), "Bilan sanitaire".to_string()),
+            (1, "2026-08-10".to_string(), "B-TEST".to_string(), "Vermifuge".to_string()),
+        ]
+    );
     Ok(())
 }

@@ -737,8 +737,28 @@ fn parse_economic_lines(text: &str, reference: Option<&str>, date: Option<&str>)
         .collect()
 }
 
+/// Remplace les lettres françaises accentuées par leur équivalent ASCII, afin
+/// que la comparaison par sous-chaîne de `canonical_label` fusionne les
+/// variantes accentuées et non accentuées d'un même libellé (ex. « CHARTE
+/// QUALITE REGI » et « CHARTE QUALITÉ RÉGIONALE ») plutôt que d'en faire
+/// deux postes distincts dans le relevé — trouvé en écrivant le test associé.
+fn strip_french_accents(input: &str) -> String {
+    input
+        .chars()
+        .map(|character| match character {
+            'À' | 'Â' | 'Ä' => 'A',
+            'É' | 'È' | 'Ê' | 'Ë' => 'E',
+            'Î' | 'Ï' => 'I',
+            'Ô' | 'Ö' => 'O',
+            'Ù' | 'Û' | 'Ü' => 'U',
+            'Ç' => 'C',
+            other => other,
+        })
+        .collect()
+}
+
 fn canonical_label(raw: &str) -> String {
-    let upper = raw.to_uppercase();
+    let upper = strip_french_accents(&raw.to_uppercase());
     let compact: String = upper.chars().filter(|character| character.is_alphabetic()).collect();
     let mappings = [
         ("COTISATIONAUJESKY", "Cotisation Aujeszky"),
@@ -969,5 +989,38 @@ mod tests {
         assert_eq!(canonical_label("PRODUIT COTISATION AUJESKY 12,00"), "Cotisation Aujeszky");
         assert_eq!(canonical_label("SERVICE COCHETTE 20,00"), "Service cochette");
         assert_eq!(canonical_label("PRIME COCHETTE SERENIS 30,00"), "Prime cochette Serenis");
+    }
+
+    /// Les 10 libellés de plus-value demandés en §3 : vérifie qu'ils sont
+    /// tous reconnus (`canonical_label` ne retombe pas sur le texte brut
+    /// nettoyé, seul indice qu'aucune correspondance de `mappings` n'a joué).
+    #[test]
+    fn les_10_libelles_de_plus_value_demandes_sont_reconnus() {
+        for raw in [
+            "PARTICIPATION P.S.A. 0J",
+            "+ VALUE R.S.E.",
+            "PRIME SOLIDARITE JEUNE 5 CT",
+            "+ VALUE QUALIVIANDE PBE",
+            "COMPLEMENT COCHON DU DIMANC",
+            "+ VALUE CHARTE QUALITE REGI",
+            "+ VALUE COOPERL LPF",
+            "+ VALUE PORC SANS ANTIBIOTI",
+            "+ VALUE QUEUE LONGUE (RSE)",
+            "PARTICIPATION COUT RFID",
+        ] {
+            let label = canonical_label(raw);
+            assert_ne!(
+                label, raw,
+                "« {raw} » n'a été reconnu par aucune entrée de `mappings` (canonicalisé tel quel)"
+            );
+        }
+        // Deux formes du même poste (avec/sans accent, abrégée/complète)
+        // doivent fusionner sous le même libellé canonique — sinon
+        // apport_ordonne_les_lignes (le regroupement par label) les compte
+        // comme deux lignes distinctes au lieu d'une seule cumulée.
+        assert_eq!(
+            canonical_label("+ VALUE CHARTE QUALITE REGI"),
+            canonical_label("+ VALUE CHARTE QUALITÉ RÉGIONALE")
+        );
     }
 }

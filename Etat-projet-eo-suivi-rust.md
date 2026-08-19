@@ -60,53 +60,188 @@ août 2026 ; la priorité actuelle porte sur la fiabilité des effectifs
 ## 3. Reste à faire — priorités
 
 ### Fiabilité des données
-- [ ] Fiabiliser les effectifs réels (anciens inventaires incohérents,
-      mortalités avec un stade erroné).
-- [ ] Corriger l'affectation du stade lors des déclarations de mortalité et
-      détecter les effectifs incohérents.
-- [ ] Rattacher les porcs charcutiers à leur bande d'origine (au lieu d'un
-      total générique d'engraissement).
+- [x] Fiabiliser les effectifs réels (anciens inventaires incohérents,
+      mortalités avec un stade erroné) — première étape : détection, sans
+      correction automatique (l'éleveur reste seul juge de la correction).
+      Quatre contrôles ajoutés à l'écran existant `/etat-donnees` (même
+      principe que ses contrôles actuels : une valeur à zéro signifie que le
+      contrôle est conforme), plutôt qu'un nouvel écran séparé :
+      « Cases avec effectif calculé négatif » (mortalités/sorties
+      supérieures aux entrées connues depuis le dernier inventaire),
+      « Cases dépassant leur capacité déclarée », « Déclarations de
+      mortalité sans stade renseigné » et « Porcs charcutiers sans bande
+      d'origine ». Vérifié par un test dédié (`etat_donnees_detecte_les_incoherences_deffectif`
+      dans `tests/schema.rs`) qui fabrique les quatre situations dans une
+      base SQLite en mémoire et vérifie que chaque contrôle les détecte.
+- [x] Corriger l'affectation du stade lors des déclarations de mortalité et
+      détecter les effectifs incohérents. Les deux points de saisie
+      (`/declaration` et la saisie rapide « perte ») laissaient l'utilisateur
+      choisir un stade dans une liste fixe indépendante de la case
+      sélectionnée, et seul `/declaration` vérifiait l'effectif présent dans
+      la case avant d'enregistrer une perte. Le stade est désormais déduit
+      automatiquement du type de la salle de la case choisie (mêmes motifs
+      que les capacités par étape du §8/Phase 5 — `stade_pour_type_salle`,
+      fonction pure testée unitairement), et la saisie rapide applique le
+      même contrôle d'effectif insuffisant que `/declaration`. La saisie
+      manuelle de « stade » reste utilisée telle quelle quand aucune case
+      n'est renseignée (perte sous la mère, cas « Autre »).
+- [x] Rattacher les porcs charcutiers à leur bande d'origine (au lieu d'un
+      total générique d'engraissement). La donnée existait déjà par bande
+      (`total_band_pigs`, utilisé sur la fiche bande), mais l'écran
+      Prestataire/Engraissement (`/engraissement`) n'affichait que le
+      formulaire de déclaration et le journal de mortalité, sans effectif par
+      bande : un prestataire suivant plusieurs bandes ne pouvait pas savoir
+      combien de porcs étaient réellement présents pour chacune. Ajout d'un
+      tableau « Porcs présents par bande » en tête de cet écran, avec le même
+      calcul que la fiche bande (limité aux bandes actives confiées à
+      l'engraisseur pour ce rôle, comme le reste de l'écran).
 
 ### Conduite d'élevage et productivité
-- [ ] Produire une GTE complète en complément de la GTTT.
-- [ ] Afficher les ELD dans les fiches truies **sans** garder la moyenne ELD
-      par bande.
-- [ ] Afficher TMP et données techniques d'abattage par bande.
-- [ ] Afficher stade, emplacement actuel et effectif réel des porcs.
-- [ ] Finaliser la fiche de mise-bas au format A4 définitif.
-- [ ] Permettre d'ordonner librement les salles dans l'implantation.
+- [x] Produire une GTE complète en complément de la GTTT — déjà livré par le
+      chantier §8/Phase 3 (écran `/gte`) ; entrée laissée par erreur dans
+      cette liste lors de la clôture du chantier §8, corrigée ici.
+- [x] Afficher les ELD dans les fiches truies **sans** garder la moyenne ELD
+      par bande. L'historique ELD par truie était déjà affiché sur la fiche
+      truie (`/truie/{id}`, section « Mesures ELD, poids et état
+      corporel ») ; en revanche `eld_bandes` (moyenne ELD par bande) était
+      calculé à chaque chargement de `/productivite` sans être utilisé par
+      aucun modèle — code mort supprimé (la moyenne globale `eld_resume`,
+      elle, reste affichée et est conservée).
+- [x] Afficher TMP et données techniques d'abattage par bande — déjà livré :
+      tableau « technique » de `/productivite` (TMP, muscle, plus-value, prix
+      net, montant net par bande). Entrée laissée par erreur dans cette
+      liste, corrigée ici.
+- [x] Afficher stade, emplacement actuel et effectif réel des porcs.
+      L'effectif réel était déjà affiché (`suivi_porcs.presents`), mais la
+      fiche bande n'avait qu'un journal brut des mouvements (« Derniers
+      emplacements enregistrés »), sans vue consolidée. Nouvelle section
+      « Emplacement actuel » : une ligne par case où la bande a été
+      affectée, avec le stade déduit (même logique que
+      `stade_pour_type_salle`, §3 précédent) et l'effectif réellement
+      présent dans la case aujourd'hui (`case_pig_count`, temps réel).
+      Limite assumée et documentée dans le code : cet effectif compte tous
+      les porcs de la case, pas seulement ceux de cette bande, si plusieurs
+      bandes y ont été mêlées (le schéma ne trace pas la bande porc par
+      porc au-delà du premier mouvement).
+- [x] Finaliser la fiche de mise-bas au format A4 définitif — déjà livré par
+      le chantier §8/Phase 7 (`/bande/{id}/fiche-mise-bas`). Entrée laissée
+      par erreur dans cette liste, corrigée ici.
+- [x] Permettre d'ordonner librement les salles dans l'implantation — déjà
+      livré : boutons Monter/Descendre sur `/structure`
+      (`structure_salle_ordre`, échange transactionnel de l'ordre avec la
+      salle voisine du même site). Entrée laissée par erreur dans cette
+      liste, corrigée ici.
 
 ### Sanitaire
-- [ ] Rappels sanitaires calculés séparément pour truies, cochettes,
-      porcelets et verrats (avec historique).
+- [x] Rappels sanitaires calculés séparément pour truies, cochettes,
+      porcelets et verrats (avec historique). Truies/cochettes/porcelets
+      étaient déjà couverts (§8/Phase 6, colonne « Catégorie » = `cible` sur
+      `/sanitaire`) ; les verrats restaient un trou documenté (« un verrat
+      n'appartient pas à une bande », `acterealise.bande_id` étant
+      `NOT NULL`). Fermé par une table additive `acterealiseverrat`
+      (mêmes colonnes qu'`acterealise`, sans toucher à sa contrainte
+      existante — recréer la table pour l'assouplir aurait été un risque
+      inutile sur une base de production) et une route dédiée
+      `/sanitaire/fait-verrat`. L'historique « Actes réalisés » réunit
+      maintenant bande et verrat par `UNION ALL`. *Limite assumée,
+      inchangée :* pas d'échéance calculée pour les rappels verrats (aucune
+      date de référence par verrat en base, comme documenté en Phase 6 pour
+      les références autres que mise-bas) — seul l'historique était visé ici.
+      Un vrai bug SQLite trouvé en écrivant le test dédié
+      (`historique_sanitaire_reunit_bandes_et_verrats` dans
+      `tests/schema.rs`) : sans alias explicite sur `id`/`date_realise`,
+      SQLite refuse l'`ORDER BY` d'un `UNION ALL` (« ORDER BY term does not
+      match any column in the result set ») — corrigé avant d'atteindre la
+      production.
 
 ### Aliment et stock
-- [ ] Prévision de consommation et de commande d'aliment par bande avant
-      rechargement.
-- [ ] Importer les consommations des machines à soupe.
+- [x] Prévision de consommation et de commande d'aliment par bande avant
+      rechargement. `/aliment-previsions` calculait déjà « jours avant
+      rupture » par silo (§8/Phase 6) mais ne suggérait aucune quantité à
+      commander, et n'avait aucune vue par bande. Ajout de deux fonctions
+      pures testées (`quantite_a_commander` : tonnage pour ramener le silo à
+      sa capacité déclarée ; `commande_urgente` : compare les jours avant
+      rupture à un délai de livraison réglable,
+      `aliment_delai_commande_jours`, 5 jours par défaut) affichées en badge
+      sur chaque silo, et d'une section « Consommation aliment par bande
+      (90 derniers jours) » à partir des livraisons déjà rattachées à une
+      bande. *Limite assumée :* pas de projection prédictive par bande
+      (poids cible/effectif restant varient trop pour un chiffre fiable
+      sans intervention de l'éleveur) — visibilité historique par bande,
+      volontairement pas une estimation inventée.
+- [ ] Importer les consommations des machines à soupe. *Non traité :*
+      nécessite le format d'export réel d'une machine à soupe (marque/
+      modèle utilisé par l'éleveur) pour écrire un import fiable — deviner
+      un format aurait produit un import qui semble fonctionner sans
+      jamais avoir été validé contre un vrai fichier.
 
 ### Économie et imports (demandes en attente)
 - [ ] Permettre deux lots sur une même facture d'apport Cooperl.
-- [ ] Fusionner les variantes de « Charte Qualité Régionale » et vérifier les
-      doublons similaires sur toutes les pages.
-- [ ] Reconnaître les libellés de plus-value suivants :
+- [x] Fusionner les variantes de « Charte Qualité Régionale » et vérifier les
+      doublons similaires sur toutes les pages. Vrai bug trouvé en écrivant
+      le test : `canonical_label` comparait par sous-chaîne sur un texte
+      seulement mis en majuscules, donc « CHARTE QUALITE REGI » (sans
+      accent) et « CHARTE QUALITÉ RÉGIONALE » (avec accents) ne
+      fusionnaient pas — deux lignes distinctes au lieu d'une seule cumulée
+      sur *toutes* les pages qui utilisent cette fonction partagée (imports
+      PDF Cooperl/Uniporc et saisies manuelles). Corrigé par
+      `strip_french_accents`, appliquée avant la comparaison. Vérifié par
+      `economic_import::tests::les_10_libelles_de_plus_value_demandes_sont_reconnus`.
+- [x] Reconnaître les libellés de plus-value suivants :
       `PARTICIPATION P.S.A. 0J`, `+ VALUE R.S.E.`,
       `PRIME SOLIDARITE JEUNE 5 CT`, `+ VALUE QUALIVIANDE PBE`,
       `COMPLEMENT COCHON DU DIMANC`, `+ VALUE CHARTE QUALITE REGI`,
       `+ VALUE COOPERL LPF`, `+ VALUE PORC SANS ANTIBIOTI`,
-      `+ VALUE QUEUE LONGUE (RSE)`, `PARTICIPATION COUT RFID`.
-- [ ] Intégrer le tableau « Cahiers des charges — valorisations » dans
-      Économie et retirer sa page séparée.
-- [ ] Supprimer l'estimation prévisionnelle (obsolète).
-- [ ] Regrouper « Lier automatiquement » avec l'import Cooperl et renommer
-      l'action « Importer des documents PDF ».
+      `+ VALUE QUEUE LONGUE (RSE)`, `PARTICIPATION COUT RFID`. Déjà
+      reconnus par les entrées existantes de `canonical_label` (vérifié un
+      par un, pas supposé) ; ajout du test dédié ci-dessus pour éviter une
+      régression silencieuse si `mappings` est modifié plus tard.
+- [x] Intégrer le tableau « Cahiers des charges — valorisations » dans
+      Économie et retirer sa page séparée. La page `/cahiers` n'apparaissait
+      déjà plus dans la navigation (`base.html`) mais restait accessible et
+      autonome par URL directe. Son contenu (paramètres des cahiers +
+      valorisations réelles importées) est désormais une section de
+      `/economique#cahiers` ; `/cahiers` et les actions
+      `/cahiers/{id}/maj`/`supprimer` redirigent vers cette ancre pour tout
+      favori existant. `templates/cahiers.html` supprimé.
+- [x] Supprimer l'estimation prévisionnelle (obsolète) — déjà fait : aucune
+      trace de cette fonctionnalité dans le code actuel (recherché sans
+      résultat). Entrée laissée par erreur dans cette liste, corrigée ici.
+- [x] Regrouper « Lier automatiquement » avec l'import Cooperl et renommer
+      l'action « Importer des documents PDF ». Déjà regroupé en une seule
+      action (aucun bouton « Lier automatiquement » séparé dans aucun
+      template — seules des routes historiques `/economique/auto-lier` et
+      `/economique/rattacher-auto` restent enregistrées sans point d'entrée
+      dans l'UI, gardées pour la parité des routes Python) ; bouton renommé
+      « Importer des documents PDF » (au lieu de « Analyser et lier
+      automatiquement ») pour correspondre exactement à la demande.
 - [ ] Ajouter un modèle d'import des factures génétiques, téléchargeable.
+      *Non traité :* contrairement aux modèles CSV existants (truies, eau/
+      électricité), aucun n'est un simple document de référence — chacun est
+      systématiquement couplé à un vrai point d'entrée d'import en masse
+      (aperçu, doublons, transaction). Pour la génétique, seuls existent
+      aujourd'hui l'import PDF (déjà fonctionnel) et la saisie manuelle
+      ligne à ligne ; ajouter *seulement* un modèle CSV sans pipeline
+      d'import en masse pour le consommer aurait été trompeur. Construire
+      ce pipeline complet est un incrément à part entière, pas un
+      nettoyage rapide.
 
 ### Présentation et navigation
-- [ ] Retirer l'ancien texte générique de mise à jour (« remplacer le dossier
-      de l'application »).
-- [ ] Continuer à simplifier la navigation et regrouper les pages proches
-      dans des sous-menus (voir structure proposée en §5).
+- [x] Retirer l'ancien texte générique de mise à jour (« remplacer le dossier
+      de l'application ») — déjà fait : `templates/maj.html` ne contient
+      plus que le texte spécifique au service Debian (dépôt d'archive
+      contrôlée, script `mettre-a-jour-debian13.sh`). Recherché sans
+      résultat, entrée laissée par erreur dans cette liste.
+- [x] Continuer à simplifier la navigation et regrouper les pages proches
+      dans des sous-menus (voir structure proposée en §5) — déjà largement
+      fait : le menu (`templates/base.html`) est organisé en cinq groupes
+      déroulants (Reproduction, Élevage, Pilotage, Aide, Administration)
+      plutôt qu'une liste plate, avec un regroupement proche de celui
+      suggéré en §5 (ex. Administration ≈ « Paramètres (utilisateurs,
+      archives, journal) »). Pas de nouveau regroupement forcé pour
+      coller mot à mot à la structure de référence : les pages sont déjà
+      correctement classées et un remaniement cosmétique sans besoin
+      identifié aurait été du bikeshedding.
 
 ### Avec service externe (nécessite configuration explicite de l'éleveur)
 - [ ] Sauvegardes automatiques vers NAS, stockage en ligne ou messagerie.

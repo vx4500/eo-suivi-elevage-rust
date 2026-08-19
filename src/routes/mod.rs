@@ -197,6 +197,7 @@ pub fn router(state: AppState) -> Router {
         .route("/sanitaire/acte/modifier", post(sanitaire_acte_modifier))
         .route("/sanitaire/acte/supprimer", post(sanitaire_acte_supprimer))
         .route("/sanitaire/fait", post(sanitaire_fait))
+        .route("/sanitaire/fait-verrat", post(sanitaire_fait_verrat))
         .route("/pharmacie/mouvement", post(pharmacie_mouvement))
         .route("/pharmacie/regler", post(pharmacie_regler))
         .route("/planning", get(planning))
@@ -606,6 +607,32 @@ mod capacite_tests {
         assert_eq!(places_disponibles(31, 31), 0);
         assert_eq!(places_disponibles(31, 45), 0);
     }
+
+    #[test]
+    fn stade_pour_type_salle_reconnait_les_memes_motifs_que_les_capacites() {
+        assert_eq!(
+            stade_pour_type_salle("Verraterie A"),
+            Some("Verraterie".to_string())
+        );
+        assert_eq!(
+            stade_pour_type_salle("Maternité 2"),
+            Some("Maternité".to_string())
+        );
+        assert_eq!(
+            stade_pour_type_salle("Post-sevrage"),
+            Some("Post-sevrage".to_string())
+        );
+        assert_eq!(
+            stade_pour_type_salle("Engraissement B"),
+            Some("Engraissement".to_string())
+        );
+        assert_eq!(
+            stade_pour_type_salle("Salle de finition"),
+            Some("Engraissement".to_string())
+        );
+        assert_eq!(stade_pour_type_salle("Local technique"), None);
+        assert_eq!(stade_pour_type_salle(""), None);
+    }
 }
 
 #[cfg(test)]
@@ -647,6 +674,23 @@ mod aliment_tests {
     fn jours_avant_rupture_ignore_consommation_nulle() {
         assert_eq!(jours_avant_rupture(21.0, 3.0), Some(7.0));
         assert_eq!(jours_avant_rupture(21.0, 0.0), None);
+    }
+
+    #[test]
+    fn quantite_a_commander_ramene_a_la_capacite_sans_jamais_etre_negative() {
+        assert_eq!(quantite_a_commander(8.0, Some(20.0)), Some(12.0));
+        // Niveau déjà au-dessus de la capacité déclarée (erreur de saisie
+        // plausible) : rien à commander, pas une quantité négative.
+        assert_eq!(quantite_a_commander(25.0, Some(20.0)), Some(0.0));
+        assert_eq!(quantite_a_commander(8.0, None), None);
+    }
+
+    #[test]
+    fn commande_urgente_compare_au_delai_de_livraison() {
+        assert!(commande_urgente(Some(3.0), 5));
+        assert!(commande_urgente(Some(5.0), 5));
+        assert!(!commande_urgente(Some(6.0), 5));
+        assert!(!commande_urgente(None, 5));
     }
 }
 
@@ -1174,6 +1218,26 @@ async fn bande_detail(
         &state.pool,
         &format!("SELECT t.date,si.code AS batiment,s.nom AS salle,c.nom AS unite,t.nombre FROM transfert t JOIN casesalle c ON c.id=t.case_dest_id JOIN salle s ON s.id=c.salle_id JOIN site si ON si.id=s.site_id WHERE t.espece='porc' AND t.bande_id={} ORDER BY t.date DESC,t.id DESC LIMIT 10", band.id),
     ).await?;
+    // Emplacement actuel (stade + effectif réel), déduit des cases où la
+    // bande a été affectée : contrairement au journal ci-dessus (historique
+    // brut des mouvements), chaque case n'apparaît qu'une fois, avec son
+    // stade actuel et son effectif réellement présent aujourd'hui. Limite
+    // connue : l'effectif compte tous les porcs de la case, pas seulement
+    // ceux de cette bande, si plusieurs bandes y ont été mêlées.
+    let emplacement_cases = generic_rows(
+        &state.pool,
+        &format!("SELECT c.id,COALESCE(si.nom,si.code) AS site,s.nom AS salle,c.nom AS unite,MAX(t.date) AS derniere_arrivee FROM transfert t JOIN casesalle c ON c.id=t.case_dest_id JOIN salle s ON s.id=c.salle_id JOIN site si ON si.id=s.site_id WHERE t.espece='porc' AND t.bande_id={} GROUP BY c.id ORDER BY derniere_arrivee DESC", band.id),
+    ).await?;
+    let mut emplacement_actuel = Vec::new();
+    for case in &emplacement_cases {
+        let Some(case_id) = case.get("id").and_then(Value::as_i64) else { continue };
+        let effectif = case_pig_count(&state.pool, case_id).await?;
+        let stade = stade_from_case(&state.pool, case_id).await?;
+        emplacement_actuel.push(json!({
+            "site": case.get("site"), "salle": case.get("salle"), "unite": case.get("unite"),
+            "stade": stade, "effectif": effectif,
+        }));
+    }
     let vente_reelle: Option<String> = sqlx::query_scalar(
         "SELECT MAX(date) FROM venteapport v WHERE v.bande_id=? OR (json_type(CASE WHEN json_valid(v.lots_json) THEN v.lots_json ELSE 'null' END)='array' AND EXISTS(SELECT 1 FROM json_each(v.lots_json) j WHERE CAST(json_extract(j.value,'$.bande_id') AS INTEGER)=?))",
     ).bind(band.id).bind(band.id).fetch_one(&state.pool).await?;
@@ -1195,6 +1259,10 @@ async fn bande_detail(
     ctx.insert("evenements".into(), serde_json::to_value(&events).unwrap_or_default());
     ctx.insert("dates".into(), Value::Array(dates));
     ctx.insert("emplacements".into(), Value::Array(emplacements));
+    ctx.insert(
+        "emplacement_actuel".into(),
+        Value::Array(emplacement_actuel),
+    );
     ctx.insert("suivi_porcs".into(), json!({"presents":porcs_presents,"depart_prevu":depart_prevu.map(|d|d.format("%Y-%m-%d").to_string()),"vente_reelle":vente_reelle,"statut":statut_vente,"ecart_jours":ecart_vente}));
     ctx.insert(
         "resume".into(),
@@ -2843,11 +2911,6 @@ async fn productivite(
     .into_iter()
     .next()
     .unwrap_or_else(|| json!({}));
-    let eld_by_band = generic_rows(
-        &state.pool,
-        "WITH latest AS (SELECT m.truie_id,m.eld,m.date FROM mesuretruie m WHERE m.eld IS NOT NULL AND NOT EXISTS(SELECT 1 FROM mesuretruie n WHERE n.truie_id=m.truie_id AND n.eld IS NOT NULL AND (n.date>m.date OR (n.date=m.date AND n.id>m.id)))) SELECT b.id,b.code,COUNT(l.eld) AS truies_mesurees,CAST(ROUND(AVG(l.eld),2) AS REAL) AS eld_moyenne,MAX(l.date) AS derniere_mesure FROM bande b JOIN truie t ON t.bande_code=b.code AND t.reformee=0 JOIN latest l ON l.truie_id=t.id WHERE b.active=1 GROUP BY b.id,b.code ORDER BY b.date_mb,b.id",
-    )
-    .await?;
     let ranks = gttt_rank_rows(&gttt_litters)?;
     let schedule = load_band_schedule(&state.pool).await?;
     let today = Local::now().date_naive();
@@ -2904,7 +2967,6 @@ async fn productivite(
     ctx.insert("entonnoir".into(), funnel);
     ctx.insert("truies_actives".into(), json!(active_sows));
     ctx.insert("eld_resume".into(), eld_summary);
-    ctx.insert("eld_bandes".into(), Value::Array(eld_by_band));
     ctx.insert("stades".into(), Value::Array(stages));
     ctx.insert("rangs".into(), Value::Array(ranks));
     ctx.insert("objectifs".into(), Value::Array(objectives));
@@ -2969,6 +3031,22 @@ fn jours_avant_rupture(niveau_actuel_tonnes: f64, consommation_quotidienne_tonne
     (consommation_quotidienne_tonnes > 0.0).then(|| niveau_actuel_tonnes / consommation_quotidienne_tonnes)
 }
 
+/// Tonnage à commander pour ramener le silo à sa capacité déclarée (§3
+/// « prévision de commande d'aliment avant rechargement »). `None` si la
+/// capacité n'est pas renseignée (rien à recommander sans référence).
+fn quantite_a_commander(niveau_actuel_tonnes: f64, capacite_tonnes: Option<f64>) -> Option<f64> {
+    capacite_tonnes.map(|capacite| (capacite - niveau_actuel_tonnes).max(0.0))
+}
+
+/// Vrai si une commande doit être passée maintenant compte tenu du délai de
+/// livraison habituel : le stock serait épuisé avant que la commande
+/// n'arrive. `jours_avant_rupture=None` (consommation nulle ou inconnue) ne
+/// déclenche jamais d'alerte — on ne prévient pas d'une rupture qu'on ne
+/// sait pas dater.
+fn commande_urgente(jours_avant_rupture: Option<f64>, delai_livraison_jours: i64) -> bool {
+    jours_avant_rupture.is_some_and(|jours| jours <= delai_livraison_jours as f64)
+}
+
 async fn reglage_i64(pool: &SqlitePool, cle: &str, default: i64) -> AppResult<i64> {
     Ok(sqlx::query_scalar("SELECT valeur FROM reglage WHERE cle=?")
         .bind(cle)
@@ -2986,6 +3064,41 @@ async fn occupation_truies(pool: &SqlitePool, type_like: &str) -> AppResult<i64>
     .bind(type_like)
     .fetch_one(pool)
     .await?)
+}
+
+/// Stade déduit du type de salle (mêmes motifs que `occupation_porcs`/
+/// `occupation_truies`), fonction pure testable indépendamment de la base.
+/// `None` si le type de salle n'est pas reconnu (ex. salle non renseignée).
+fn stade_pour_type_salle(type_salle: &str) -> Option<String> {
+    let t = type_salle.to_lowercase();
+    if t.contains("verrater") {
+        Some("Verraterie".to_string())
+    } else if t.contains("matern") {
+        Some("Maternité".to_string())
+    } else if t.contains("sevr") {
+        Some("Post-sevrage".to_string())
+    } else if t.contains("engrais") || t.contains("finition") {
+        Some("Engraissement".to_string())
+    } else {
+        None
+    }
+}
+
+/// Stade déduit du type de la salle contenant la case donnée, pour ne plus
+/// dépendre d'une sélection manuelle qui peut ne pas correspondre à la case
+/// réellement choisie lors d'une déclaration de mortalité. `None` si la case
+/// est inconnue ou si le type de sa salle n'est pas reconnu : dans ce cas
+/// l'appelant retombe sur la valeur du formulaire.
+async fn stade_from_case(pool: &SqlitePool, case_id: i64) -> AppResult<Option<String>> {
+    let salle_type: Option<Option<String>> = sqlx::query_scalar(
+        "SELECT s.type FROM casesalle c JOIN salle s ON s.id=c.salle_id WHERE c.id=?",
+    )
+    .bind(case_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(salle_type
+        .flatten()
+        .and_then(|t| stade_pour_type_salle(&t)))
 }
 
 /// Effectif de porcs présents dans les cases dont la salle correspond à l'un
@@ -3279,7 +3392,12 @@ async fn transferts(
     render(&state, "transferts.html", Value::Object(ctx))
 }
 
-async fn case_pig_count(pool: &SqlitePool, case_id: i64) -> AppResult<i64> {
+/// Effectif d'une case, sans plancher à zéro (`case_pig_count` applique ce
+/// plancher pour l'affichage normal). Une valeur négative signale un
+/// inventaire ou des mortalités incohérents ; voir aussi la même logique
+/// répliquée en SQL pur dans `etat_donnees` (« Cases avec effectif calculé
+/// négatif ») pour le rapport de contrôles structurels.
+async fn case_pig_count_raw(pool: &SqlitePool, case_id: i64) -> AppResult<i64> {
     let inventory: Option<(String, i64)> = sqlx::query_as(
         "SELECT date,nombre FROM inventairecase WHERE case_id=? ORDER BY date DESC,id DESC LIMIT 1",
     )
@@ -3307,7 +3425,11 @@ async fn case_pig_count(pool: &SqlitePool, case_id: i64) -> AppResult<i64> {
     .bind(&date)
     .fetch_one(pool)
     .await?;
-    Ok((base + movements - deaths).max(0))
+    Ok(base + movements - deaths)
+}
+
+async fn case_pig_count(pool: &SqlitePool, case_id: i64) -> AppResult<i64> {
+    Ok(case_pig_count_raw(pool, case_id).await?.max(0))
 }
 
 async fn remaining_band_pigs(pool: &SqlitePool, band_id: i64, code: &str) -> AppResult<i64> {
@@ -3614,7 +3736,7 @@ async fn etat_donnees(
         &session,
         "État des données",
         "Contrôles structurels en lecture seule. Une valeur à zéro signifie que le contrôle est conforme.",
-        "SELECT 'Doublons de numéros de truies actives' AS controle,COUNT(*) AS anomalies FROM (SELECT num_travail FROM truie WHERE reformee=0 GROUP BY lower(trim(num_travail)) HAVING COUNT(*)>1) UNION ALL SELECT 'Événements sans truie',COUNT(*) FROM evenement e LEFT JOIN truie t ON t.id=e.truie_id WHERE e.truie_id IS NOT NULL AND t.id IS NULL UNION ALL SELECT 'Événements sans bande',COUNT(*) FROM evenement e LEFT JOIN bande b ON b.id=e.bande_id WHERE e.bande_id IS NOT NULL AND b.id IS NULL UNION ALL SELECT 'Transferts vers une case absente',COUNT(*) FROM transfert t LEFT JOIN casesalle c ON c.id=t.case_dest_id WHERE t.case_dest_id IS NOT NULL AND c.id IS NULL UNION ALL SELECT 'Bandes actives sans date de mise-bas',COUNT(*) FROM bande WHERE active=1 AND (date_mb IS NULL OR trim(date_mb)='') UNION ALL SELECT 'Truies actives sans bande',COUNT(*) FROM truie WHERE reformee=0 AND (bande_code IS NULL OR trim(bande_code)='')",
+        "WITH effectif_case AS (SELECT c.id,c.nb_max_porcs,(SELECT date FROM inventairecase WHERE case_id=c.id ORDER BY date DESC,id DESC LIMIT 1) AS inv_date,COALESCE((SELECT nombre FROM inventairecase WHERE case_id=c.id ORDER BY date DESC,id DESC LIMIT 1),0) AS base FROM casesalle c),effectif_case2 AS (SELECT e.id,e.nb_max_porcs,e.base+COALESCE((SELECT SUM(CASE WHEN t.case_dest_id=e.id THEN COALESCE(t.nombre,0) ELSE -COALESCE(t.nombre,0) END) FROM transfert t WHERE t.espece='porc' AND (t.case_dest_id=e.id OR t.case_source_id=e.id) AND (e.inv_date IS NULL OR t.date>e.inv_date)),0)-COALESCE((SELECT SUM(d.nombre) FROM declarationmort d WHERE d.case_id=e.id AND (e.inv_date IS NULL OR d.date>e.inv_date)),0) AS effectif FROM effectif_case e) SELECT 'Doublons de numéros de truies actives' AS controle,COUNT(*) AS anomalies FROM (SELECT num_travail FROM truie WHERE reformee=0 GROUP BY lower(trim(num_travail)) HAVING COUNT(*)>1) UNION ALL SELECT 'Événements sans truie',COUNT(*) FROM evenement e LEFT JOIN truie t ON t.id=e.truie_id WHERE e.truie_id IS NOT NULL AND t.id IS NULL UNION ALL SELECT 'Événements sans bande',COUNT(*) FROM evenement e LEFT JOIN bande b ON b.id=e.bande_id WHERE e.bande_id IS NOT NULL AND b.id IS NULL UNION ALL SELECT 'Transferts vers une case absente',COUNT(*) FROM transfert t LEFT JOIN casesalle c ON c.id=t.case_dest_id WHERE t.case_dest_id IS NOT NULL AND c.id IS NULL UNION ALL SELECT 'Bandes actives sans date de mise-bas',COUNT(*) FROM bande WHERE active=1 AND (date_mb IS NULL OR trim(date_mb)='') UNION ALL SELECT 'Truies actives sans bande',COUNT(*) FROM truie WHERE reformee=0 AND (bande_code IS NULL OR trim(bande_code)='') UNION ALL SELECT 'Cases avec effectif calculé négatif',COUNT(*) FROM effectif_case2 WHERE effectif<0 UNION ALL SELECT 'Cases dépassant leur capacité déclarée',COUNT(*) FROM effectif_case2 WHERE nb_max_porcs IS NOT NULL AND nb_max_porcs>0 AND effectif>nb_max_porcs UNION ALL SELECT 'Déclarations de mortalité sans stade renseigné',COUNT(*) FROM declarationmort WHERE stade IS NULL OR trim(stade)='' UNION ALL SELECT 'Porcs charcutiers sans bande d''origine',COUNT(*) FROM porccharcutier WHERE bande_code IS NULL OR trim(bande_code)=''",
         &["controle", "anomalies"],
     )
     .await
@@ -3896,7 +4018,21 @@ async fn economique(
     let imports = generic_rows(&state.pool,"SELECT token,replace(type_import,'economique:','') AS type_import,nom_fichier,statut,cree_le,applique_le FROM importjournal WHERE type_import LIKE 'economique:%' ORDER BY cree_le DESC LIMIT 15").await?;
     let total_weight: f64 = sqlx::query_scalar("SELECT CAST(COALESCE(SUM(poids_total),0) AS REAL) FROM venteapport").fetch_one(&state.pool).await?;
     let total_pigs: i64 = sqlx::query_scalar("SELECT CAST(COALESCE(SUM(nb_porcs),0) AS INTEGER) FROM venteapport").fetch_one(&state.pool).await?;
+    // Cahiers des charges (§3) : intégrés à Économie plutôt que sur une page
+    // séparée (/cahiers, orpheline de toute navigation) — voir cahiers().
+    let cahiers = generic_rows(
+        &state.pool,
+        "SELECT id,nom,valeur_par_porc,actif,note FROM cahiercharges ORDER BY actif DESC,nom",
+    )
+    .await?;
+    let cahiers_reels = generic_rows(
+        &state.pool,
+        "SELECT libelle,ROUND(SUM(montant),2) AS montant,COUNT(DISTINCT num_apport) AS apports FROM valorisationapport WHERE COALESCE(categorie,'valorisation')<>'retenue' GROUP BY libelle ORDER BY montant DESC",
+    )
+    .await?;
     let mut ctx = context(&session);
+    ctx.insert("cahiers".into(), Value::Array(cahiers));
+    ctx.insert("cahiers_reels".into(), Value::Array(cahiers_reels));
     ctx.insert("totaux".into(),json!({"ventes":ventes_total,"aliment":aliment,"veto":veto,"semence":semence,"genetique":genetique,"marge":ventes_total-aliment-veto-semence-genetique,"porcs":total_pigs,"prix_net_kg":if total_weight>0.0{Some(ventes_total/total_weight)}else{None}}));
     ctx.insert("bandes".into(),Value::Array(bands));
     ctx.insert("resultats_bandes".into(),Value::Array(band_results));
@@ -4885,7 +5021,21 @@ async fn sanitaire(
 ) -> AppResult<Html<String>> {
     let protocols = generic_rows(&state.pool, "SELECT id,libelle,cible,reference,jour,produit,dose,unite,voie,duree_j,delai_attente,aiguille,preconisations,note FROM acteprotocole WHERE actif=1 ORDER BY cible,jour,id").await?;
     let bands = generic_rows(&state.pool, "SELECT id,code,date_mb FROM bande WHERE active=1 ORDER BY date_mb,code").await?;
-    let completed = generic_rows(&state.pool, "SELECT ar.id,ar.date_realise,b.code AS bande,a.libelle,a.produit,ar.note FROM acterealise ar JOIN bande b ON b.id=ar.bande_id JOIN acteprotocole a ON a.id=ar.acte_id ORDER BY ar.date_realise DESC,ar.id DESC LIMIT 250").await?;
+    let verrats = generic_rows(&state.pool, "SELECT id,code FROM verrat WHERE actif=1 ORDER BY code").await?;
+    // Réunit les deux tables d'historique (bande et verrat, voir
+    // acterealiseverrat dans les migrations) pour un seul tableau « Réalisés ».
+    let completed = generic_rows(
+        &state.pool,
+        // Alias explicites sur id/date_realise nécessaires : sans eux, SQLite
+        // refuse l'ORDER BY sur un SELECT composé (UNION ALL) avec l'erreur
+        // « ORDER BY term does not match any column in the result set »
+        // (trouvé en écrivant le test associé, tests/schema.rs).
+        "SELECT ar.id AS id,ar.date_realise AS date_realise,b.code AS cible_nom,a.libelle,a.produit,ar.note FROM acterealise ar JOIN bande b ON b.id=ar.bande_id JOIN acteprotocole a ON a.id=ar.acte_id \
+         UNION ALL \
+         SELECT arv.id AS id,arv.date_realise AS date_realise,v.code AS cible_nom,a.libelle,a.produit,arv.note FROM acterealiseverrat arv JOIN verrat v ON v.id=arv.verrat_id JOIN acteprotocole a ON a.id=arv.acte_id \
+         ORDER BY date_realise DESC,id DESC LIMIT 250",
+    )
+    .await?;
     let treated_pigs = generic_rows(&state.pool, "SELECT tc.id,tc.date,COALESCE(NULLIF(p.rfid,''),'Porc #'||p.id) AS animal,COALESCE(tc.bande_code,p.bande_code) AS bande,tc.produit,tc.dose,tc.motif,tc.delai_attente,tc.note FROM traitementcharcutier tc JOIN porccharcutier p ON p.id=tc.charcutier_id WHERE lower(COALESCE(tc.motif,'')) NOT LIKE '%vaccin%' AND lower(COALESCE(tc.produit,'')) NOT LIKE '%vaccin%' ORDER BY tc.date DESC,tc.id DESC LIMIT 500").await?;
     let today = Local::now().date_naive();
     // Rappels sanitaires (§8) : un protocole marqué rappel=1 dont l'échéance
@@ -4917,6 +5067,7 @@ async fn sanitaire(
     let mut ctx = context(&session);
     ctx.insert("protocoles".into(), Value::Array(protocols));
     ctx.insert("bandes".into(), Value::Array(bands));
+    ctx.insert("verrats".into(), Value::Array(verrats));
     ctx.insert("realises".into(), Value::Array(completed));
     ctx.insert("porcs_traites".into(), Value::Array(treated_pigs));
     ctx.insert("rappels".into(), Value::Array(reminders));
@@ -4981,6 +5132,23 @@ async fn sanitaire_fait(
     let date=form_date_or_today(&form,"date_realise")?;
     sqlx::query("INSERT INTO acterealise(acte_id,bande_id,date_realise,note) SELECT ?,?,?,? WHERE EXISTS(SELECT 1 FROM acteprotocole WHERE id=? AND actif=1) AND EXISTS(SELECT 1 FROM bande WHERE id=?)")
         .bind(act).bind(band).bind(date).bind(form_text(&form,"note")).bind(act).bind(band).execute(&state.pool).await?;
+    Ok(Redirect::to("/sanitaire").into_response())
+}
+
+/// Équivalent de `sanitaire_fait` pour un verrat : un verrat n'appartenant à
+/// aucune bande, `acterealise` (bande_id NOT NULL) ne peut pas l'accueillir
+/// — voir `acterealiseverrat` dans les migrations. Sans cette route, un
+/// protocole ciblant un verrat n'était réalisable qu'en le rattachant à une
+/// bande sans rapport, ce qui aurait corrompu l'historique sanitaire.
+async fn sanitaire_fait_verrat(
+    State(state): State<AppState>, Extension(session): Extension<SessionData>, Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    verify_csrf(&session,&form)?;
+    let act=form_i64(&form,"acte_id").ok_or_else(||AppError::Invalid("Acte manquant".into()))?;
+    let verrat=form_i64(&form,"verrat_id").ok_or_else(||AppError::Invalid("Verrat manquant".into()))?;
+    let date=form_date_or_today(&form,"date_realise")?;
+    sqlx::query("INSERT INTO acterealiseverrat(acte_id,verrat_id,date_realise,note) SELECT ?,?,?,? WHERE EXISTS(SELECT 1 FROM acteprotocole WHERE id=? AND actif=1) AND EXISTS(SELECT 1 FROM verrat WHERE id=?)")
+        .bind(act).bind(verrat).bind(date).bind(form_text(&form,"note")).bind(act).bind(verrat).execute(&state.pool).await?;
     Ok(Redirect::to("/sanitaire").into_response())
 }
 
@@ -5137,6 +5305,17 @@ async fn engraissement(
             .to_string()
     };
     let bands = generic_rows(&state.pool, &band_sql).await?;
+    // Effectif réel par bande (au lieu d'un total générique d'engraissement
+    // toutes bandes confondues) : même calcul que la fiche bande
+    // (`total_band_pigs`), pour que le prestataire/engraisseur sache combien
+    // de porcs sont réellement présents pour chaque bande qui lui est
+    // confiée.
+    let mut effectifs_bandes = Vec::new();
+    for band in &bands {
+        let (Some(id), Some(code)) = (band.get("id").and_then(Value::as_i64), band.get("code").and_then(Value::as_str)) else { continue };
+        let effectif = total_band_pigs(&state.pool, id, code).await?;
+        effectifs_bandes.push(json!({"code": code, "effectif": effectif}));
+    }
     let cases = generic_rows(
         &state.pool,
         "SELECT c.id,COALESCE(si.nom,si.code)||' · '||s.nom||' · '||c.nom AS nom FROM casesalle c JOIN salle s ON s.id=c.salle_id JOIN site si ON si.id=s.site_id ORDER BY si.nom,s.ordre,c.nom",
@@ -5145,6 +5324,7 @@ async fn engraissement(
     let mut ctx = context(&session);
     ctx.insert("declarations".into(), Value::Array(declarations));
     ctx.insert("bandes".into(), Value::Array(bands));
+    ctx.insert("effectifs_bandes".into(), Value::Array(effectifs_bandes));
     ctx.insert("cases".into(), Value::Array(cases));
     ctx.insert(
         "today".into(),
@@ -5179,6 +5359,7 @@ async fn declaration_ajouter(
         .filter(|value| *value > 0 && *value <= 10_000)
         .ok_or_else(|| AppError::Invalid("Nombre invalide".into()))?;
     let case_id = form_i64(&form, "case_id");
+    let mut stade = form_text(&form, "stade");
     if let Some(case_id) = case_id {
         let present = case_pig_count(&state.pool, case_id).await?;
         if number > present {
@@ -5186,11 +5367,16 @@ async fn declaration_ajouter(
                 "Effectif insuffisant dans la case : {present} porc(s) présent(s)"
             )));
         }
+        // La case choisie fait foi : évite un stade saisi manuellement en
+        // décalage avec la salle réellement sélectionnée.
+        if let Some(deduced) = stade_from_case(&state.pool, case_id).await? {
+            stade = Some(deduced);
+        }
     }
     sqlx::query("INSERT INTO declarationmort(bande_code,date,stade,case_id,cause,poids,nombre,declare_par,note) VALUES(?,?,?,?,?,?,?,?,?)")
         .bind(&band)
         .bind(form_date_or_today(&form, "date")?)
-        .bind(form_text(&form, "stade"))
+        .bind(stade)
         .bind(case_id)
         .bind(form_text(&form, "cause"))
         .bind(form_f64(&form, "poids"))
@@ -5407,6 +5593,7 @@ async fn aliment_previsions(
     State(state): State<AppState>,
     Extension(session): Extension<SessionData>,
 ) -> AppResult<Html<String>> {
+    let aliment_delai_commande_jours = reglage_i64(&state.pool, "aliment_delai_commande_jours", 5).await?;
     let silos = generic_rows(
         &state.pool,
         "SELECT id,nom,capacite_tonnes FROM silo_aliment WHERE actif=1 ORDER BY nom",
@@ -5427,10 +5614,12 @@ async fn aliment_previsions(
             "SELECT id,date,niveau_tonnes,note FROM releve_silo WHERE silo_id=? ORDER BY date DESC,id DESC LIMIT 20",
         )
         .await?;
+        let capacite = silo.get("capacite_tonnes").and_then(Value::as_f64);
         let mut entry = json!({
             "id": id, "nom": nom, "capacite_tonnes": silo.get("capacite_tonnes"),
             "historique": history, "niveau_actuel": Value::Null,
             "consommation_quotidienne": Value::Null, "jours_avant_rupture": Value::Null,
+            "quantite_a_commander": Value::Null, "commande_urgente": false,
         });
         if let [(date_actuel, niveau_actuel), (date_precedent, niveau_precedent)] = readings.as_slice() {
             if let (Some(actuel), Some(precedent)) = (parse_stored_date(date_actuel), parse_stored_date(date_precedent)) {
@@ -5449,18 +5638,36 @@ async fn aliment_previsions(
                     object.insert("niveau_actuel".into(), json!(niveau_actuel));
                     object.insert("consommation_quotidienne".into(), json!(conso.map(|v| (v * 100.0).round() / 100.0)));
                     object.insert("jours_avant_rupture".into(), json!(rupture.map(|v| v.round())));
+                    object.insert("quantite_a_commander".into(), json!(quantite_a_commander(*niveau_actuel, capacite)));
+                    object.insert("commande_urgente".into(), json!(commande_urgente(rupture, aliment_delai_commande_jours)));
                 }
             }
         } else if let [(_, niveau_actuel)] = readings.as_slice() {
             if let Some(object) = entry.as_object_mut() {
                 object.insert("niveau_actuel".into(), json!(niveau_actuel));
+                object.insert("quantite_a_commander".into(), json!(quantite_a_commander(*niveau_actuel, capacite)));
             }
         }
         previsions.push(entry);
     }
+    // Consommation d'aliment par bande (§3 « prévision de consommation… par
+    // bande ») : total livré aux 90 derniers jours, pour les bandes encore
+    // actives — donne une visibilité par bande complémentaire à la vue par
+    // silo ci-dessus, sans inventer une projection qu'aucune donnée ne
+    // permet de dater avec confiance (poids cible/effectif restant varient
+    // trop pour un chiffre fiable sans intervention de l'éleveur).
+    let consommation_bandes = generic_rows(
+        &state.pool,
+        "SELECT b.id,b.code,CAST(COALESCE(SUM(l.tonnage),0) AS REAL) AS tonnage_90j FROM bande b JOIN livraisonaliment l ON l.bande_id=b.id WHERE b.active=1 AND l.date>=date('now','-90 days') GROUP BY b.id,b.code ORDER BY tonnage_90j DESC",
+    )
+    .await?;
     let sites = generic_rows(&state.pool, "SELECT id,code,nom FROM site ORDER BY code").await?;
     let mut ctx = context(&session);
     ctx.insert("previsions".into(), Value::Array(previsions));
+    ctx.insert(
+        "consommation_bandes".into(),
+        Value::Array(consommation_bandes),
+    );
     ctx.insert("sites".into(), Value::Array(sites));
     ctx.insert("today".into(), json!(today_iso()));
     render(&state, "aliment_previsions.html", Value::Object(ctx))
@@ -5698,33 +5905,11 @@ async fn abattoir_saisie_supprimer(
     Ok(Redirect::to("/abattoir#saisies").into_response())
 }
 
-async fn cahiers(
-    State(state): State<AppState>,
-    Extension(session): Extension<SessionData>,
-) -> AppResult<Html<String>> {
-    if session.role == "salarie" {
-        return Err(AppError::Forbidden);
-    }
-    let cahiers = generic_rows(
-        &state.pool,
-        "SELECT id,nom,valeur_par_porc,actif,note FROM cahiercharges ORDER BY actif DESC,nom",
-    )
-    .await?;
-    let reels = generic_rows(
-        &state.pool,
-        "SELECT libelle,ROUND(SUM(montant),2) AS montant,COUNT(DISTINCT num_apport) AS apports FROM valorisationapport WHERE COALESCE(categorie,'valorisation')<>'retenue' GROUP BY libelle ORDER BY montant DESC",
-    )
-    .await?;
-    let total_porcs: i64 = sqlx::query_scalar(
-        "SELECT CAST(COALESCE(SUM(nb_porcs),0) AS INTEGER) FROM venteapport",
-    )
-    .fetch_one(&state.pool)
-    .await?;
-    let mut ctx = context(&session);
-    ctx.insert("cahiers".into(), Value::Array(cahiers));
-    ctx.insert("reels".into(), Value::Array(reels));
-    ctx.insert("total_porcs".into(), json!(total_porcs));
-    render(&state, "cahiers.html", Value::Object(ctx))
+/// Page « Cahiers des charges » retirée (§3) : son tableau est désormais
+/// intégré à `/economique` (voir `economique()`). Redirection conservée
+/// pour tout lien ou favori existant vers l'ancienne URL.
+async fn cahiers() -> Response {
+    Redirect::to("/economique#cahiers").into_response()
 }
 
 async fn cahier_ajouter(
@@ -5742,7 +5927,7 @@ async fn cahier_ajouter(
         .bind(form_text(&form, "note"))
         .execute(&state.pool)
         .await?;
-    Ok(Redirect::to("/cahiers").into_response())
+    Ok(Redirect::to("/economique#cahiers").into_response())
 }
 
 async fn cahier_maj(
@@ -5760,7 +5945,7 @@ async fn cahier_maj(
         .bind(id)
         .execute(&state.pool)
         .await?;
-    Ok(Redirect::to("/cahiers").into_response())
+    Ok(Redirect::to("/economique#cahiers").into_response())
 }
 
 async fn cahier_supprimer(
@@ -5775,7 +5960,7 @@ async fn cahier_supprimer(
         .bind(id)
         .execute(&state.pool)
         .await?;
-    Ok(Redirect::to("/cahiers").into_response())
+    Ok(Redirect::to("/economique#cahiers").into_response())
 }
 
 async fn quotidien(
