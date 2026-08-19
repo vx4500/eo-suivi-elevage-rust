@@ -113,6 +113,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/cases", get(api_cases))
         .route("/api/cases-capacity", get(api_cases_capacity))
         .route("/energie", get(energie))
+        .route("/aliment-previsions", get(aliment_previsions))
+        .route("/aliment-previsions/silo", post(silo_ajouter))
+        .route("/aliment-previsions/silo/{id}/releve", post(silo_releve_ajouter))
+        .route("/aliment-previsions/silo/{id}/supprimer", post(silo_supprimer))
         .route("/energie/compteur", post(energie_compteur))
         .route("/energie/releve", post(energie_releve))
         .route("/energie/compteur/{id}/rappel", post(energie_rappel))
@@ -600,6 +604,48 @@ mod capacite_tests {
         assert_eq!(places_disponibles(31, 20), 11);
         assert_eq!(places_disponibles(31, 31), 0);
         assert_eq!(places_disponibles(31, 45), 0);
+    }
+}
+
+#[cfg(test)]
+mod sanitaire_tests {
+    use super::*;
+
+    #[test]
+    fn rappel_en_retard_inclut_le_jour_de_lecheance() {
+        let today = NaiveDate::from_ymd_opt(2026, 8, 19).unwrap();
+        assert!(rappel_en_retard(NaiveDate::from_ymd_opt(2026, 8, 19).unwrap(), today));
+        assert!(rappel_en_retard(NaiveDate::from_ymd_opt(2026, 8, 10).unwrap(), today));
+        assert!(!rappel_en_retard(NaiveDate::from_ymd_opt(2026, 8, 20).unwrap(), today));
+    }
+}
+
+#[cfg(test)]
+mod aliment_tests {
+    use super::*;
+
+    #[test]
+    fn consommation_quotidienne_fait_le_bilan_de_matiere() {
+        // 20 t restantes, 10 t livrées entre les deux relevés, 18 t restantes
+        // 7 jours plus tard : 20+10-18 = 12 t consommées sur 7 jours.
+        assert_eq!(
+            consommation_quotidienne_tonnes(20.0, 10.0, 18.0, 7),
+            Some(12.0 / 7.0)
+        );
+        assert_eq!(consommation_quotidienne_tonnes(20.0, 0.0, 18.0, 0), None);
+    }
+
+    #[test]
+    fn consommation_quotidienne_ne_descend_jamais_sous_zero() {
+        // Erreur de saisie plausible (niveau remonté sans livraison notée) :
+        // on affiche 0 plutôt qu'une consommation négative absurde.
+        assert_eq!(consommation_quotidienne_tonnes(10.0, 0.0, 15.0, 5), Some(0.0));
+    }
+
+    #[test]
+    fn jours_avant_rupture_ignore_consommation_nulle() {
+        assert_eq!(jours_avant_rupture(21.0, 3.0), Some(7.0));
+        assert_eq!(jours_avant_rupture(21.0, 0.0), None);
     }
 }
 
@@ -2847,6 +2893,32 @@ fn places_disponibles(capacite: i64, occupation: i64) -> i64 {
     (capacite - occupation).max(0)
 }
 
+/// Un rappel sanitaire (§8) est en retard dès que son échéance est atteinte
+/// ou dépassée, échéance incluse.
+fn rappel_en_retard(echeance: NaiveDate, today: NaiveDate) -> bool {
+    echeance <= today
+}
+
+/// Consommation quotidienne moyenne (tonnes/jour) entre deux relevés de
+/// silo, par bilan de matière : ce qu'il y avait + ce qui a été livré - ce
+/// qu'il reste, réparti sur le nombre de jours écoulés. `None` si l'écart
+/// entre les deux relevés n'est pas positif (relevés non ordonnés).
+fn consommation_quotidienne_tonnes(
+    niveau_precedent: f64,
+    livraisons_recues: f64,
+    niveau_actuel: f64,
+    jours_ecoules: i64,
+) -> Option<f64> {
+    (jours_ecoules > 0)
+        .then(|| ((niveau_precedent + livraisons_recues - niveau_actuel) / jours_ecoules as f64).max(0.0))
+}
+
+/// Nombre de jours avant rupture de stock au rythme de consommation actuel.
+/// `None` si la consommation quotidienne est nulle (pas de rupture prévisible).
+fn jours_avant_rupture(niveau_actuel_tonnes: f64, consommation_quotidienne_tonnes: f64) -> Option<f64> {
+    (consommation_quotidienne_tonnes > 0.0).then(|| niveau_actuel_tonnes / consommation_quotidienne_tonnes)
+}
+
 async fn reglage_i64(pool: &SqlitePool, cle: &str, default: i64) -> AppResult<i64> {
     Ok(sqlx::query_scalar("SELECT valeur FROM reglage WHERE cle=?")
         .bind(cle)
@@ -4765,12 +4837,40 @@ async fn sanitaire(
     let bands = generic_rows(&state.pool, "SELECT id,code,date_mb FROM bande WHERE active=1 ORDER BY date_mb,code").await?;
     let completed = generic_rows(&state.pool, "SELECT ar.id,ar.date_realise,b.code AS bande,a.libelle,a.produit,ar.note FROM acterealise ar JOIN bande b ON b.id=ar.bande_id JOIN acteprotocole a ON a.id=ar.acte_id ORDER BY ar.date_realise DESC,ar.id DESC LIMIT 250").await?;
     let treated_pigs = generic_rows(&state.pool, "SELECT tc.id,tc.date,COALESCE(NULLIF(p.rfid,''),'Porc #'||p.id) AS animal,COALESCE(tc.bande_code,p.bande_code) AS bande,tc.produit,tc.dose,tc.motif,tc.delai_attente,tc.note FROM traitementcharcutier tc JOIN porccharcutier p ON p.id=tc.charcutier_id WHERE lower(COALESCE(tc.motif,'')) NOT LIKE '%vaccin%' AND lower(COALESCE(tc.produit,'')) NOT LIKE '%vaccin%' ORDER BY tc.date DESC,tc.id DESC LIMIT 500").await?;
+    let today = Local::now().date_naive();
+    // Rappels sanitaires (§8) : un protocole marqué rappel=1 dont l'échéance
+    // (reference + jour) est atteinte pour une bande active, et qui n'a pas
+    // encore de réalisation enregistrée. Calculés par catégorie (cible) —
+    // uniquement pour les protocoles rattachés à mise_bas, seule référence de
+    // date disponible au niveau bande à ce stade (les autres références
+    // laissent le protocole visible sans échéance calculée plutôt que de
+    // planter ou d'inventer une date).
+    let mut reminders = generic_rows(
+        &state.pool,
+        "SELECT ap.id AS protocole_id,ap.libelle,ap.cible,ap.produit,b.id AS bande_id,b.code AS bande_code,date(b.date_mb,printf('%+d day',ap.jour)) AS echeance \
+         FROM acteprotocole ap JOIN bande b ON b.active=1 \
+         WHERE ap.actif=1 AND ap.rappel=1 AND ap.reference='mise_bas' AND b.date_mb IS NOT NULL \
+         AND NOT EXISTS(SELECT 1 FROM acterealise ar WHERE ar.acte_id=ap.id AND ar.bande_id=b.id) \
+         ORDER BY ap.cible,echeance",
+    )
+    .await?;
+    for reminder in &mut reminders {
+        let en_retard = reminder
+            .get("echeance")
+            .and_then(Value::as_str)
+            .and_then(parse_stored_date)
+            .is_some_and(|echeance| rappel_en_retard(echeance, today));
+        if let Some(object) = reminder.as_object_mut() {
+            object.insert("en_retard".into(), json!(en_retard));
+        }
+    }
     let mut ctx = context(&session);
     ctx.insert("protocoles".into(), Value::Array(protocols));
     ctx.insert("bandes".into(), Value::Array(bands));
     ctx.insert("realises".into(), Value::Array(completed));
     ctx.insert("porcs_traites".into(), Value::Array(treated_pigs));
-    ctx.insert("today".into(), json!(Local::now().date_naive().format("%Y-%m-%d").to_string()));
+    ctx.insert("rappels".into(), Value::Array(reminders));
+    ctx.insert("today".into(), json!(today.format("%Y-%m-%d").to_string()));
     render(&state, "sanitaire.html", Value::Object(ctx))
 }
 
@@ -4785,11 +4885,13 @@ async fn sanitaire_acte_ajouter(
     let target = form_text(&form, "cible").ok_or_else(|| AppError::Invalid("Cible obligatoire".into()))?;
     let reference = form_text(&form, "reference").unwrap_or_else(|| "mise_bas".into());
     let day = form_i64(&form, "jour").unwrap_or(0);
-    sqlx::query("INSERT INTO acteprotocole(libelle,cible,reference,jour,produit,dose,unite,voie,duree_j,delai_attente,aiguille,preconisations,note,actif) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,1)")
+    let rappel = form.contains_key("rappel");
+    sqlx::query("INSERT INTO acteprotocole(libelle,cible,reference,jour,produit,dose,unite,voie,duree_j,delai_attente,aiguille,preconisations,note,actif,rappel) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,1,?)")
         .bind(label).bind(target).bind(reference).bind(day)
         .bind(form_text(&form,"produit")).bind(form_text(&form,"dose")).bind(form_text(&form,"unite"))
         .bind(form_text(&form,"voie")).bind(form_i64(&form,"duree_j")).bind(form_i64(&form,"delai_attente"))
         .bind(form_text(&form,"aiguille")).bind(form_text(&form,"preconisations")).bind(form_text(&form,"note"))
+        .bind(rappel)
         .execute(&state.pool).await?;
     Ok(Redirect::to("/sanitaire").into_response())
 }
@@ -5249,6 +5351,123 @@ async fn genetique_supprimer(
         .execute(&state.pool)
         .await?;
     Ok(Redirect::to("/genetique").into_response())
+}
+
+async fn aliment_previsions(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+) -> AppResult<Html<String>> {
+    let silos = generic_rows(
+        &state.pool,
+        "SELECT id,nom,capacite_tonnes FROM silo_aliment WHERE actif=1 ORDER BY nom",
+    )
+    .await?;
+    let mut previsions = Vec::new();
+    for silo in &silos {
+        let Some(id) = silo.get("id").and_then(Value::as_i64) else { continue };
+        let nom = silo.get("nom").and_then(Value::as_str).unwrap_or("").to_string();
+        let readings: Vec<(String, f64)> = sqlx::query_as(
+            "SELECT date,niveau_tonnes FROM releve_silo WHERE silo_id=? ORDER BY date DESC,id DESC LIMIT 2",
+        )
+        .bind(id)
+        .fetch_all(&state.pool)
+        .await?;
+        let history = generic_rows(
+            &state.pool,
+            "SELECT id,date,niveau_tonnes,note FROM releve_silo WHERE silo_id=? ORDER BY date DESC,id DESC LIMIT 20",
+        )
+        .await?;
+        let mut entry = json!({
+            "id": id, "nom": nom, "capacite_tonnes": silo.get("capacite_tonnes"),
+            "historique": history, "niveau_actuel": Value::Null,
+            "consommation_quotidienne": Value::Null, "jours_avant_rupture": Value::Null,
+        });
+        if let [(date_actuel, niveau_actuel), (date_precedent, niveau_precedent)] = readings.as_slice() {
+            if let (Some(actuel), Some(precedent)) = (parse_stored_date(date_actuel), parse_stored_date(date_precedent)) {
+                let jours = (actuel - precedent).num_days();
+                let livraisons: f64 = sqlx::query_scalar(
+                    "SELECT CAST(COALESCE(SUM(tonnage),0) AS REAL) FROM livraisonaliment WHERE lower(trim(COALESCE(silo,'')))=lower(trim(?)) AND date>? AND date<=?",
+                )
+                .bind(&nom)
+                .bind(date_precedent)
+                .bind(date_actuel)
+                .fetch_one(&state.pool)
+                .await?;
+                let conso = consommation_quotidienne_tonnes(*niveau_precedent, livraisons, *niveau_actuel, jours);
+                let rupture = conso.and_then(|c| jours_avant_rupture(*niveau_actuel, c));
+                if let Some(object) = entry.as_object_mut() {
+                    object.insert("niveau_actuel".into(), json!(niveau_actuel));
+                    object.insert("consommation_quotidienne".into(), json!(conso.map(|v| (v * 100.0).round() / 100.0)));
+                    object.insert("jours_avant_rupture".into(), json!(rupture.map(|v| v.round())));
+                }
+            }
+        } else if let [(_, niveau_actuel)] = readings.as_slice() {
+            if let Some(object) = entry.as_object_mut() {
+                object.insert("niveau_actuel".into(), json!(niveau_actuel));
+            }
+        }
+        previsions.push(entry);
+    }
+    let sites = generic_rows(&state.pool, "SELECT id,code,nom FROM site ORDER BY code").await?;
+    let mut ctx = context(&session);
+    ctx.insert("previsions".into(), Value::Array(previsions));
+    ctx.insert("sites".into(), Value::Array(sites));
+    ctx.insert("today".into(), json!(today_iso()));
+    render(&state, "aliment_previsions.html", Value::Object(ctx))
+}
+
+async fn silo_ajouter(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    verify_csrf(&session, &form)?;
+    let nom = form_text(&form, "nom").ok_or_else(|| AppError::Invalid("Nom du silo obligatoire".into()))?;
+    sqlx::query("INSERT INTO silo_aliment(nom,site_id,capacite_tonnes,actif) VALUES(?,?,?,1)")
+        .bind(&nom)
+        .bind(form_i64(&form, "site_id"))
+        .bind(form_f64(&form, "capacite_tonnes"))
+        .execute(&state.pool)
+        .await?;
+    Ok(Redirect::to("/aliment-previsions").into_response())
+}
+
+async fn silo_releve_ajouter(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Path(id): Path<i64>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    verify_csrf(&session, &form)?;
+    let niveau = form_f64(&form, "niveau_tonnes")
+        .filter(|value| *value >= 0.0)
+        .ok_or_else(|| AppError::Invalid("Niveau invalide".into()))?;
+    sqlx::query("INSERT INTO releve_silo(silo_id,date,niveau_tonnes,note) SELECT ?,?,?,? WHERE EXISTS(SELECT 1 FROM silo_aliment WHERE id=?)")
+        .bind(id)
+        .bind(form_date_or_today(&form, "date")?)
+        .bind(niveau)
+        .bind(form_text(&form, "note"))
+        .bind(id)
+        .execute(&state.pool)
+        .await?;
+    Ok(Redirect::to("/aliment-previsions").into_response())
+}
+
+async fn silo_supprimer(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Path(id): Path<i64>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    verify_csrf(&session, &form)?;
+    sqlx::query("UPDATE silo_aliment SET actif=0 WHERE id=?")
+        .bind(id)
+        .execute(&state.pool)
+        .await?;
+    Ok(Redirect::to("/aliment-previsions").into_response())
 }
 
 async fn reception_supprimer(

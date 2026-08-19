@@ -739,6 +739,29 @@ CREATE TABLE IF NOT EXISTS receptionachat (
 CREATE INDEX IF NOT EXISTS ix_receptionachat_date ON receptionachat(date);
 CREATE INDEX IF NOT EXISTS ix_receptionachat_bande ON receptionachat(bande_code);
 
+-- Prévision de consommation d'aliment avant rechargement (§5). Même principe
+-- que compteur_energie/releve_compteur : relevés manuels périodiques, la
+-- consommation moyenne se déduit de deux relevés et des livraisons reçues
+-- entre les deux (bilan de matière), jamais une valeur figée.
+CREATE TABLE IF NOT EXISTS silo_aliment (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nom TEXT NOT NULL,
+    site_id INTEGER REFERENCES site(id),
+    capacite_tonnes REAL,
+    actif INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS releve_silo (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    silo_id INTEGER NOT NULL REFERENCES silo_aliment(id) ON DELETE CASCADE,
+    date TEXT NOT NULL,
+    niveau_tonnes REAL NOT NULL,
+    note TEXT
+);
+
+CREATE INDEX IF NOT EXISTS ix_releve_silo_silo ON releve_silo(silo_id);
+CREATE INDEX IF NOT EXISTS ix_releve_silo_date ON releve_silo(date);
+
 -- Catalogue de lignées génétiques (module optionnel « Génétique avancée »,
 -- §2 de la spécification). Un petit élevage garde le champ texte libre
 -- truie.race ; ce catalogue n'est utile qu'aux élevages en sélection ou

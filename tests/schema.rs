@@ -33,8 +33,9 @@ async fn schema_complet_et_ecritures_compatibles() -> anyhow::Result<()> {
     )
     .fetch_one(&pool)
     .await?;
-    // 57 depuis l'ajout de receptionachat (§1bis) et lignee_genetique (§2).
-    assert_eq!(tables, 57);
+    // 59 depuis l'ajout de receptionachat (§1bis), lignee_genetique (§2), et
+    // silo_aliment/releve_silo (prévisions aliment, §5).
+    assert_eq!(tables, 59);
     let objectives: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM objectif")
         .fetch_one(&pool)
         .await?;

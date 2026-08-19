@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Prévisions aliment · EO-Suivi{% endblock %}
+{% block content %}
+<h1>Prévisions de consommation d'aliment</h1><p>Un relevé de niveau par silo suffit pour estimer la consommation quotidienne (bilan avec les livraisons reçues entre deux relevés) et anticiper le rechargement.</p>
+{% if session.peut_modifier %}<form class="card rust-actions" method="post" action="/aliment-previsions/silo"><input type="hidden" name="csrf_token" value="{{ session.csrf }}"><label>Nom du silo<input name="nom" required></label><label>Site<select name="site_id"><option value="">—</option>{% for s in sites %}<option value="{{ s.id }}">{{ s.nom or s.code }}</option>{% endfor %}</select></label><label>Capacité (tonnes)<input name="capacite_tonnes" inputmode="decimal"></label><button>Ajouter un silo</button></form>{% endif %}
+{% for p in previsions %}<section class="card">
+<h2>{{ p.nom }}{% if p.capacite_tonnes %} · capacité {{ p.capacite_tonnes }} t{% endif %}</h2>
+<p>Niveau actuel : <b>{{ p.niveau_actuel if p.niveau_actuel is not none else '—' }} t</b>{% if p.consommation_quotidienne is not none %} · consommation estimée {{ p.consommation_quotidienne }} t/j{% endif %}{% if p.jours_avant_rupture is not none %} · <b>rupture estimée dans {{ p.jours_avant_rupture }} j</b>{% endif %}</p>
+{% if session.peut_modifier %}<form class="rust-actions" method="post" action="/aliment-previsions/silo/{{ p.id }}/releve"><input type="hidden" name="csrf_token" value="{{ session.csrf }}"><label>Date<input type="date" name="date" value="{{ today }}" required></label><label>Niveau (tonnes)<input name="niveau_tonnes" inputmode="decimal" required></label><label>Note<input name="note"></label><button>Enregistrer le relevé</button></form>
+<form method="post" action="/aliment-previsions/silo/{{ p.id }}/supprimer"><input type="hidden" name="csrf_token" value="{{ session.csrf }}"><button class="ghost danger">Retirer ce silo</button></form>{% endif %}
+<div class="rust-scroll"><table><thead><tr><th>Date</th><th>Niveau (t)</th><th>Note</th></tr></thead><tbody>{% for h in p.historique %}<tr><td>{{ h.date|date_fr }}</td><td>{{ h.niveau_tonnes }}</td><td>{{ h.note or '—' }}</td></tr>{% else %}<tr><td colspan="3" class="rust-empty">Aucun relevé</td></tr>{% endfor %}</tbody></table></div>
+</section>{% else %}<p class="rust-empty">Aucun silo suivi.</p>{% endfor %}
+{% endblock %}

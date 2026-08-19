@@ -289,9 +289,24 @@ gros commit unique sur une application en production.
       active » existant) — non repris ici faute de gain identifié au-delà de
       l'existant ; à documenter comme mode nommé si un besoin utilisateur
       concret apparaît.*
-- [ ] **Phase 6 — Prévision d'aliment et rappels sanitaires par catégorie**
-      (déjà identifiés au §3 ci-dessus, regroupés ici dans le même effort
-      d'audit).
+- [x] **Phase 6 — Prévision d'aliment et rappels sanitaires par catégorie.**
+      *Aliment* : écran `/aliment-previsions`, silos + relevés de niveau
+      manuels (même principe que `compteur_energie`/`releve_compteur`
+      existant) ; la consommation quotidienne se déduit par bilan de matière
+      entre deux relevés et les livraisons reçues entre-temps, avec
+      estimation du nombre de jours avant rupture. *Sanitaire* : les colonnes
+      `cible`/`reference`/`jour`/`rappel` d'`acteprotocole` existaient déjà en
+      base mais n'étaient exploitées par aucun calcul ; une section
+      « Rappels » sur `/sanitaire` liste maintenant, par catégorie, les actes
+      marqués « rappel » dont l'échéance (mise-bas + décalage en jours) est
+      atteinte pour une bande active et pas encore réalisée, avec repère
+      visuel « en retard ». Un bug réel a été trouvé et corrigé en testant en
+      conditions réelles : `printf('+%d day', jour)` produisait un modificateur
+      SQLite invalide (`+-14 day`) pour un décalage négatif (ex. vaccin avant
+      mise-bas) ; corrigé en `printf('%+d day', jour)`. *Limite connue :* les
+      rappels verrats ne sont pas couverts (`acterealise.bande_id` est
+      obligatoire, un verrat n'appartient pas à une bande) — resterait à
+      traiter dans un incrément dédié si le besoin se confirme.
 - [ ] **Phase 7 — Fiche de mise-bas au format A4 définitif** (actuellement
       export CSV uniquement, §9 de la spécification).
 
