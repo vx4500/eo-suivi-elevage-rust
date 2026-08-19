@@ -60,8 +60,19 @@ août 2026 ; la priorité actuelle porte sur la fiabilité des effectifs
 ## 3. Reste à faire — priorités
 
 ### Fiabilité des données
-- [ ] Fiabiliser les effectifs réels (anciens inventaires incohérents,
-      mortalités avec un stade erroné).
+- [x] Fiabiliser les effectifs réels (anciens inventaires incohérents,
+      mortalités avec un stade erroné) — première étape : détection, sans
+      correction automatique (l'éleveur reste seul juge de la correction).
+      Quatre contrôles ajoutés à l'écran existant `/etat-donnees` (même
+      principe que ses contrôles actuels : une valeur à zéro signifie que le
+      contrôle est conforme), plutôt qu'un nouvel écran séparé :
+      « Cases avec effectif calculé négatif » (mortalités/sorties
+      supérieures aux entrées connues depuis le dernier inventaire),
+      « Cases dépassant leur capacité déclarée », « Déclarations de
+      mortalité sans stade renseigné » et « Porcs charcutiers sans bande
+      d'origine ». Vérifié par un test dédié (`etat_donnees_detecte_les_incoherences_deffectif`
+      dans `tests/schema.rs`) qui fabrique les quatre situations dans une
+      base SQLite en mémoire et vérifie que chaque contrôle les détecte.
 - [ ] Corriger l'affectation du stade lors des déclarations de mortalité et
       détecter les effectifs incohérents.
 - [ ] Rattacher les porcs charcutiers à leur bande d'origine (au lieu d'un
