@@ -51,6 +51,7 @@ pub fn router(state: AppState) -> Router {
         .route("/mon-compte/mdp", get(password_page).post(password_post))
         .route("/bandes", get(bandes))
         .route("/bandes/ajouter", post(bande_ajouter))
+        .route("/bandes/{id}/modifier-rapide", post(bande_modifier_rapide))
         .route("/bande/{id}", get(bande_detail))
         .route("/bande/{id}/marquage", post(bande_marquage))
         .route("/bande/{id}/imprimer", get(bande_imprimer))
@@ -653,6 +654,40 @@ mod sanitaire_tests {
 }
 
 #[cfg(test)]
+mod energie_tests {
+    use super::*;
+
+    #[test]
+    fn cout_consommation_exige_les_deux_valeurs_et_une_conso_positive() {
+        assert_eq!(cout_consommation(Some(120.0), Some(1.5)), Some(180.0));
+        assert_eq!(cout_consommation(None, Some(1.5)), None);
+        assert_eq!(cout_consommation(Some(120.0), None), None);
+        assert_eq!(cout_consommation(Some(0.0), Some(1.5)), None);
+        assert_eq!(cout_consommation(Some(-5.0), Some(1.5)), None);
+    }
+
+    #[test]
+    fn repartir_cout_par_bande_divise_a_parts_egales() {
+        let bandes = vec!["B1.26".to_string(), "B2.26".to_string(), "B3.26".to_string()];
+        let parts = repartir_cout_par_bande(100.0, &bandes);
+        assert_eq!(
+            parts,
+            vec![
+                ("B1.26".to_string(), 33.33),
+                ("B2.26".to_string(), 33.33),
+                ("B3.26".to_string(), 33.33),
+            ]
+        );
+    }
+
+    #[test]
+    fn repartir_cout_par_bande_reste_vide_sans_bande_ou_sans_cout() {
+        assert!(repartir_cout_par_bande(100.0, &[]).is_empty());
+        assert!(repartir_cout_par_bande(0.0, &["B1.26".to_string()]).is_empty());
+    }
+}
+
+#[cfg(test)]
 mod aliment_tests {
     use super::*;
 
@@ -920,6 +955,7 @@ async fn password_post(
 struct BandView {
     id: i64,
     code: String,
+    num_officiel: Option<String>,
     date_mb: Option<String>,
     site: Option<String>,
     age: Option<i64>,
@@ -1037,6 +1073,7 @@ fn band_view(band: &Bande, sow_count: i64, schedule: BandSchedule) -> BandView {
     BandView {
         id: band.id,
         code: band.code.clone(),
+        num_officiel: band.num_officiel.clone(),
         date_mb: band.date_mb.clone(),
         site: band.site.clone(),
         age,
@@ -1187,6 +1224,32 @@ async fn bande_ajouter(
         .execute(&state.pool)
         .await?;
     db::journal(&state.pool, &session.nom, "créer", "bande", &code, "/bandes/ajouter").await;
+    Ok(Redirect::to("/bandes").into_response())
+}
+
+/// Édition « à la volée » depuis la liste `/bandes` (§2 des demandes en
+/// attente) : chaque ligne du tableau est son propre petit formulaire (voir
+/// `form="b{{ id }}"` dans `bandes.html`), pour changer mise-bas/site/n°
+/// marquage sans ouvrir la fiche bande complète. Les champs calculés
+/// (stade, effectif) ne sont pas éditables ici : ce sont des valeurs
+/// dérivées (truies actives, planning), pas des colonnes de `bande` — les
+/// modifier directement casserait la cohérence avec la fiche bande, qui les
+/// recalcule toujours à partir des mêmes données.
+async fn bande_modifier_rapide(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Path(id): Path<i64>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    verify_csrf(&session, &form)?;
+    sqlx::query("UPDATE bande SET num_officiel=?,date_mb=?,site=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND active=1")
+        .bind(form_text(&form, "num_officiel"))
+        .bind(form_date(&form, "date_mb")?)
+        .bind(form_text(&form, "site"))
+        .bind(id)
+        .execute(&state.pool)
+        .await?;
     Ok(Redirect::to("/bandes").into_response())
 }
 
@@ -3753,17 +3816,30 @@ async fn energie(
         .fetch_all(&state.pool).await?;
     let sites = generic_rows(&state.pool,"SELECT id,code,nom FROM site ORDER BY COALESCE(nom,code)").await?;
     let mut data = Vec::new();
+    // Coût redistribué aux bandes selon leur présence (§ « aliment et
+    // stock » des demandes en attente) : clé (bande, type de compteur) →
+    // total. Une seule table cumulée pour eau et électricité, distinguées
+    // par colonne à l'affichage.
+    let mut cout_bandes: HashMap<(String, String), f64> = HashMap::new();
     for meter in &meters {
-        let mut readings = sqlx::query_as::<_,ReleveCompteur>("SELECT id,compteur_id,date_releve,valeur_index,bandes,note,remplacement_compteur FROM releve_compteur WHERE compteur_id=? ORDER BY date_releve,id")
+        let mut readings = sqlx::query_as::<_,ReleveCompteur>("SELECT id,compteur_id,date_releve,valeur_index,bandes,note,remplacement_compteur,prix_unitaire FROM releve_compteur WHERE compteur_id=? ORDER BY date_releve,id")
             .bind(meter.id).fetch_all(&state.pool).await?;
         let mut previous: Option<f64> = None;
         let mut enriched = Vec::new();
         for reading in &readings {
             let consumption = if reading.remplacement_compteur { None } else { previous.map(|value| reading.valeur_index-value) };
             previous = Some(reading.valeur_index);
+            let cost = cout_consommation(consumption, reading.prix_unitaire);
+            if let Some(cost) = cost {
+                let bandes: Vec<String> = reading.bandes.as_deref().unwrap_or("").split(',').map(str::trim).filter(|value| !value.is_empty()).map(str::to_string).collect();
+                for (bande, part) in repartir_cout_par_bande(cost, &bandes) {
+                    *cout_bandes.entry((bande, meter.r#type.clone())).or_insert(0.0) += part;
+                }
+            }
             let mut value = serde_json::to_value(reading).unwrap_or_default();
-            json_object_mut(&mut value,"les relevés d’énergie")?
-                .insert("conso".into(),json!(consumption));
+            let object = json_object_mut(&mut value,"les relevés d’énergie")?;
+            object.insert("conso".into(),json!(consumption));
+            object.insert("cout".into(),json!(cost.map(|value| (value*100.0).round()/100.0)));
             enriched.push(value);
         }
         enriched.reverse(); readings.reverse();
@@ -3774,7 +3850,15 @@ async fn energie(
         let alert = due.is_some_and(|date| date <= Local::now().date_naive());
         data.push(json!({"compteur":meter,"releves":enriched,"site":site,"alerte":alert,"jours_retard":overdue}));
     }
-    let mut ctx=context(&session); ctx.insert("compteurs".into(),serde_json::to_value(meters).unwrap_or_default()); ctx.insert("sites".into(),Value::Array(sites)); ctx.insert("data".into(),Value::Array(data)); ctx.insert("today".into(),json!(Local::now().date_naive().format("%Y-%m-%d").to_string()));
+    let mut cout_bandes_vec: Vec<Value> = cout_bandes
+        .into_iter()
+        .map(|((bande, type_compteur), montant)| json!({"bande": bande, "type": type_compteur, "montant": (montant*100.0).round()/100.0}))
+        .collect();
+    cout_bandes_vec.sort_by(|a, b| {
+        a.get("bande").and_then(Value::as_str).cmp(&b.get("bande").and_then(Value::as_str))
+            .then(a.get("type").and_then(Value::as_str).cmp(&b.get("type").and_then(Value::as_str)))
+    });
+    let mut ctx=context(&session); ctx.insert("compteurs".into(),serde_json::to_value(meters).unwrap_or_default()); ctx.insert("sites".into(),Value::Array(sites)); ctx.insert("data".into(),Value::Array(data)); ctx.insert("cout_bandes".into(),Value::Array(cout_bandes_vec)); ctx.insert("today".into(),json!(Local::now().date_naive().format("%Y-%m-%d").to_string()));
     render(&state,"energie.html",Value::Object(ctx))
 }
 
@@ -3784,9 +3868,9 @@ async fn energie_compteur(State(state):State<AppState>,Extension(session):Extens
 }
 
 async fn energie_releve(State(state):State<AppState>,Extension(session):Extension<SessionData>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{
-    require_writer(&session)?;verify_csrf(&session,&form)?;let meter_id=form_i64(&form,"compteur_id").ok_or_else(||AppError::Invalid("Compteur obligatoire".into()))?;let date=form_date_or_today(&form,"date_releve")?;let index=form_f64(&form,"index").ok_or_else(||AppError::Invalid("Index invalide".into()))?;let replacement=form.contains_key("remplacement_compteur");
+    require_writer(&session)?;verify_csrf(&session,&form)?;let meter_id=form_i64(&form,"compteur_id").ok_or_else(||AppError::Invalid("Compteur obligatoire".into()))?;let date=form_date_or_today(&form,"date_releve")?;let index=form_f64(&form,"index").ok_or_else(||AppError::Invalid("Index invalide".into()))?;let replacement=form.contains_key("remplacement_compteur");let prix_unitaire=form_f64(&form,"prix_unitaire").filter(|value|*value>=0.0);
     let site:Option<String>=sqlx::query_scalar("SELECT COALESCE(s.code,s.nom) FROM compteur_energie c LEFT JOIN site s ON s.id=c.site_id WHERE c.id=?").bind(meter_id).fetch_optional(&state.pool).await?.flatten();
-    let bands=present_bands(&state.pool,site.as_deref(),&date).await?;sqlx::query("INSERT INTO releve_compteur(compteur_id,date_releve,valeur_index,bandes,note,remplacement_compteur) VALUES(?,?,?,?,?,?)").bind(meter_id).bind(&date).bind(index).bind(if bands.is_empty(){None}else{Some(bands.join(","))}).bind(form_text(&form,"note").or_else(||replacement.then(||"Compteur remplacé – nouvel index de départ".into()))).bind(replacement).execute(&state.pool).await?;Ok(Redirect::to(&format!("/energie#compteur-{meter_id}")).into_response())
+    let bands=present_bands(&state.pool,site.as_deref(),&date).await?;sqlx::query("INSERT INTO releve_compteur(compteur_id,date_releve,valeur_index,bandes,note,remplacement_compteur,prix_unitaire) VALUES(?,?,?,?,?,?,?)").bind(meter_id).bind(&date).bind(index).bind(if bands.is_empty(){None}else{Some(bands.join(","))}).bind(form_text(&form,"note").or_else(||replacement.then(||"Compteur remplacé – nouvel index de départ".into()))).bind(replacement).bind(prix_unitaire).execute(&state.pool).await?;Ok(Redirect::to(&format!("/energie#compteur-{meter_id}")).into_response())
 }
 
 async fn present_bands(
@@ -3833,10 +3917,36 @@ async fn present_bands(
     Ok(out)
 }
 
+/// Coût d'un relevé (§ « redistribuer aux bandes selon leur présence » des
+/// demandes en attente) : la conso ne peut se calculer qu'entre deux
+/// relevés (voir `energie()`), le tarif est saisi sur le relevé le plus
+/// récent des deux (celui qui ferme la période) — c'est lui qui reflète le
+/// prix payé pour cette consommation.
+fn cout_consommation(consommation: Option<f64>, prix_unitaire: Option<f64>) -> Option<f64> {
+    match (consommation, prix_unitaire) {
+        (Some(conso), Some(prix)) if conso > 0.0 => Some(conso * prix),
+        _ => None,
+    }
+}
+
+/// Répartit un coût à parts égales entre les bandes présentes sur la
+/// période du relevé (`present_bands`). Choix assumé : à parts égales, pas
+/// au prorata d'un effectif — l'eau/l'électricité d'un site se consomme
+/// pour l'essentiel indépendamment du nombre de têtes par bande (lavage,
+/// ventilation, chauffage communs), contrairement à l'aliment qui, lui, se
+/// répartit déjà naturellement par les livraisons rattachées à une bande.
+fn repartir_cout_par_bande(cout: f64, bandes: &[String]) -> Vec<(String, f64)> {
+    if bandes.is_empty() || cout == 0.0 {
+        return Vec::new();
+    }
+    let part = (cout / bandes.len() as f64 * 100.0).round() / 100.0;
+    bandes.iter().map(|bande| (bande.clone(), part)).collect()
+}
+
 async fn energie_rappel(State(state):State<AppState>,Extension(session):Extension<SessionData>,Path(id):Path<i64>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;sqlx::query("UPDATE compteur_energie SET rappel_jours=? WHERE id=? AND type='eau'").bind(form_i64(&form,"rappel_jours")).bind(id).execute(&state.pool).await?;Ok(Redirect::to(&format!("/energie#compteur-{id}")).into_response())}
 async fn energie_releve_supprimer(State(state):State<AppState>,Extension(session):Extension<SessionData>,Path(id):Path<i64>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;let meter:Option<i64>=sqlx::query_scalar("SELECT compteur_id FROM releve_compteur WHERE id=?").bind(id).fetch_optional(&state.pool).await?;sqlx::query("DELETE FROM releve_compteur WHERE id=?").bind(id).execute(&state.pool).await?;Ok(Redirect::to(&meter.map(|x|format!("/energie#compteur-{x}")).unwrap_or_else(||"/energie".into())).into_response())}
 
-async fn energie_modele_csv()->Response{let body="\u{feff}type_compteur;nom_compteur;site;date_releve;index;unite;rappel_jours;remplacement_compteur;note\r\neau;Compteur général;Site principal;2026-08-16;12345,6;m³;7;;Relevé hebdomadaire\r\n";let mut headers=HeaderMap::new();headers.insert(header::CONTENT_TYPE,HeaderValue::from_static("text/csv; charset=utf-8"));headers.insert(header::CONTENT_DISPOSITION,HeaderValue::from_static("attachment; filename=modele_import_eau_electricite.csv"));(headers,body).into_response()}
+async fn energie_modele_csv()->Response{let body="\u{feff}type_compteur;nom_compteur;site;date_releve;index;unite;rappel_jours;remplacement_compteur;prix_unitaire;note\r\neau;Compteur général;Site principal;2026-08-16;12345,6;m³;7;;1,45;Relevé hebdomadaire\r\n";let mut headers=HeaderMap::new();headers.insert(header::CONTENT_TYPE,HeaderValue::from_static("text/csv; charset=utf-8"));headers.insert(header::CONTENT_DISPOSITION,HeaderValue::from_static("attachment; filename=modele_import_eau_electricite.csv"));(headers,body).into_response()}
 
 async fn energie_import(
     State(state): State<AppState>,
@@ -3983,12 +4093,24 @@ async fn energie_import(
         .fetch_one(&mut *transaction)
         .await?;
         if duplicate == 0 {
-            sqlx::query("INSERT INTO releve_compteur(compteur_id,date_releve,valeur_index,note,remplacement_compteur) VALUES(?,?,?,?,?)")
+            // Même auto-tagging des bandes présentes que la saisie manuelle
+            // (`energie_releve`) — sinon un relevé importé en masse ne
+            // contribuerait jamais à la répartition du coût par bande.
+            let site_code: Option<String> = if let Some(id) = site_id {
+                sqlx::query_scalar("SELECT COALESCE(code,nom) FROM site WHERE id=?").bind(id).fetch_optional(&mut *transaction).await?
+            } else {
+                None
+            };
+            let bands = present_bands(&state.pool, site_code.as_deref(), &date).await?;
+            let prix_unitaire = row.get("prix_unitaire").and_then(|value| value.replace(',', ".").parse::<f64>().ok()).filter(|value| value.is_finite() && *value >= 0.0);
+            sqlx::query("INSERT INTO releve_compteur(compteur_id,date_releve,valeur_index,bandes,note,remplacement_compteur,prix_unitaire) VALUES(?,?,?,?,?,?,?)")
                 .bind(meter_id)
                 .bind(&date)
                 .bind(index)
+                .bind(if bands.is_empty() { None } else { Some(bands.join(",")) })
                 .bind(row.get("note"))
                 .bind(matches!(row.get("remplacement_compteur").map(|value| value.to_lowercase()).as_deref(), Some("oui" | "1" | "true" | "x")))
+                .bind(prix_unitaire)
                 .execute(&mut *transaction)
                 .await?;
             added += 1;

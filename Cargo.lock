@@ -648,7 +648,7 @@ dependencies = [
 
 [[package]]
 name = "eo-suivi-elevage"
-version = "2.2.10"
+version = "2.2.11"
 dependencies = [
  "anyhow",
  "axum",
