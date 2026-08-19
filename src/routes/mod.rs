@@ -3896,7 +3896,21 @@ async fn economique(
     let imports = generic_rows(&state.pool,"SELECT token,replace(type_import,'economique:','') AS type_import,nom_fichier,statut,cree_le,applique_le FROM importjournal WHERE type_import LIKE 'economique:%' ORDER BY cree_le DESC LIMIT 15").await?;
     let total_weight: f64 = sqlx::query_scalar("SELECT CAST(COALESCE(SUM(poids_total),0) AS REAL) FROM venteapport").fetch_one(&state.pool).await?;
     let total_pigs: i64 = sqlx::query_scalar("SELECT CAST(COALESCE(SUM(nb_porcs),0) AS INTEGER) FROM venteapport").fetch_one(&state.pool).await?;
+    // Cahiers des charges (§3) : intégrés à Économie plutôt que sur une page
+    // séparée (/cahiers, orpheline de toute navigation) — voir cahiers().
+    let cahiers = generic_rows(
+        &state.pool,
+        "SELECT id,nom,valeur_par_porc,actif,note FROM cahiercharges ORDER BY actif DESC,nom",
+    )
+    .await?;
+    let cahiers_reels = generic_rows(
+        &state.pool,
+        "SELECT libelle,ROUND(SUM(montant),2) AS montant,COUNT(DISTINCT num_apport) AS apports FROM valorisationapport WHERE COALESCE(categorie,'valorisation')<>'retenue' GROUP BY libelle ORDER BY montant DESC",
+    )
+    .await?;
     let mut ctx = context(&session);
+    ctx.insert("cahiers".into(), Value::Array(cahiers));
+    ctx.insert("cahiers_reels".into(), Value::Array(cahiers_reels));
     ctx.insert("totaux".into(),json!({"ventes":ventes_total,"aliment":aliment,"veto":veto,"semence":semence,"genetique":genetique,"marge":ventes_total-aliment-veto-semence-genetique,"porcs":total_pigs,"prix_net_kg":if total_weight>0.0{Some(ventes_total/total_weight)}else{None}}));
     ctx.insert("bandes".into(),Value::Array(bands));
     ctx.insert("resultats_bandes".into(),Value::Array(band_results));
@@ -5698,33 +5712,11 @@ async fn abattoir_saisie_supprimer(
     Ok(Redirect::to("/abattoir#saisies").into_response())
 }
 
-async fn cahiers(
-    State(state): State<AppState>,
-    Extension(session): Extension<SessionData>,
-) -> AppResult<Html<String>> {
-    if session.role == "salarie" {
-        return Err(AppError::Forbidden);
-    }
-    let cahiers = generic_rows(
-        &state.pool,
-        "SELECT id,nom,valeur_par_porc,actif,note FROM cahiercharges ORDER BY actif DESC,nom",
-    )
-    .await?;
-    let reels = generic_rows(
-        &state.pool,
-        "SELECT libelle,ROUND(SUM(montant),2) AS montant,COUNT(DISTINCT num_apport) AS apports FROM valorisationapport WHERE COALESCE(categorie,'valorisation')<>'retenue' GROUP BY libelle ORDER BY montant DESC",
-    )
-    .await?;
-    let total_porcs: i64 = sqlx::query_scalar(
-        "SELECT CAST(COALESCE(SUM(nb_porcs),0) AS INTEGER) FROM venteapport",
-    )
-    .fetch_one(&state.pool)
-    .await?;
-    let mut ctx = context(&session);
-    ctx.insert("cahiers".into(), Value::Array(cahiers));
-    ctx.insert("reels".into(), Value::Array(reels));
-    ctx.insert("total_porcs".into(), json!(total_porcs));
-    render(&state, "cahiers.html", Value::Object(ctx))
+/// Page « Cahiers des charges » retirée (§3) : son tableau est désormais
+/// intégré à `/economique` (voir `economique()`). Redirection conservée
+/// pour tout lien ou favori existant vers l'ancienne URL.
+async fn cahiers() -> Response {
+    Redirect::to("/economique#cahiers").into_response()
 }
 
 async fn cahier_ajouter(
@@ -5742,7 +5734,7 @@ async fn cahier_ajouter(
         .bind(form_text(&form, "note"))
         .execute(&state.pool)
         .await?;
-    Ok(Redirect::to("/cahiers").into_response())
+    Ok(Redirect::to("/economique#cahiers").into_response())
 }
 
 async fn cahier_maj(
@@ -5760,7 +5752,7 @@ async fn cahier_maj(
         .bind(id)
         .execute(&state.pool)
         .await?;
-    Ok(Redirect::to("/cahiers").into_response())
+    Ok(Redirect::to("/economique#cahiers").into_response())
 }
 
 async fn cahier_supprimer(
@@ -5775,7 +5767,7 @@ async fn cahier_supprimer(
         .bind(id)
         .execute(&state.pool)
         .await?;
-    Ok(Redirect::to("/cahiers").into_response())
+    Ok(Redirect::to("/economique#cahiers").into_response())
 }
 
 async fn quotidien(

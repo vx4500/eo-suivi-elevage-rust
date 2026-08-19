@@ -36,7 +36,6 @@ pub fn build() -> anyhow::Result<Environment<'static>> {
     env.add_template("liste.html", include_str!("../templates/liste.html"))?;
     env.add_template("entretien.html", include_str!("../templates/entretien.html"))?;
     env.add_template("abattoir.html", include_str!("../templates/abattoir.html"))?;
-    env.add_template("cahiers.html", include_str!("../templates/cahiers.html"))?;
     env.add_template("quotidien.html", include_str!("../templates/quotidien.html"))?;
     env.add_template("inseminations.html", include_str!("../templates/inseminations.html"))?;
     env.add_template("gttt.html", include_str!("../templates/gttt.html"))?;
