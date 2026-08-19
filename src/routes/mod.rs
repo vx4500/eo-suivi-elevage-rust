@@ -1200,6 +1200,26 @@ async fn bande_detail(
         &state.pool,
         &format!("SELECT t.date,si.code AS batiment,s.nom AS salle,c.nom AS unite,t.nombre FROM transfert t JOIN casesalle c ON c.id=t.case_dest_id JOIN salle s ON s.id=c.salle_id JOIN site si ON si.id=s.site_id WHERE t.espece='porc' AND t.bande_id={} ORDER BY t.date DESC,t.id DESC LIMIT 10", band.id),
     ).await?;
+    // Emplacement actuel (stade + effectif réel), déduit des cases où la
+    // bande a été affectée : contrairement au journal ci-dessus (historique
+    // brut des mouvements), chaque case n'apparaît qu'une fois, avec son
+    // stade actuel et son effectif réellement présent aujourd'hui. Limite
+    // connue : l'effectif compte tous les porcs de la case, pas seulement
+    // ceux de cette bande, si plusieurs bandes y ont été mêlées.
+    let emplacement_cases = generic_rows(
+        &state.pool,
+        &format!("SELECT c.id,COALESCE(si.nom,si.code) AS site,s.nom AS salle,c.nom AS unite,MAX(t.date) AS derniere_arrivee FROM transfert t JOIN casesalle c ON c.id=t.case_dest_id JOIN salle s ON s.id=c.salle_id JOIN site si ON si.id=s.site_id WHERE t.espece='porc' AND t.bande_id={} GROUP BY c.id ORDER BY derniere_arrivee DESC", band.id),
+    ).await?;
+    let mut emplacement_actuel = Vec::new();
+    for case in &emplacement_cases {
+        let Some(case_id) = case.get("id").and_then(Value::as_i64) else { continue };
+        let effectif = case_pig_count(&state.pool, case_id).await?;
+        let stade = stade_from_case(&state.pool, case_id).await?;
+        emplacement_actuel.push(json!({
+            "site": case.get("site"), "salle": case.get("salle"), "unite": case.get("unite"),
+            "stade": stade, "effectif": effectif,
+        }));
+    }
     let vente_reelle: Option<String> = sqlx::query_scalar(
         "SELECT MAX(date) FROM venteapport v WHERE v.bande_id=? OR (json_type(CASE WHEN json_valid(v.lots_json) THEN v.lots_json ELSE 'null' END)='array' AND EXISTS(SELECT 1 FROM json_each(v.lots_json) j WHERE CAST(json_extract(j.value,'$.bande_id') AS INTEGER)=?))",
     ).bind(band.id).bind(band.id).fetch_one(&state.pool).await?;
@@ -1221,6 +1241,10 @@ async fn bande_detail(
     ctx.insert("evenements".into(), serde_json::to_value(&events).unwrap_or_default());
     ctx.insert("dates".into(), Value::Array(dates));
     ctx.insert("emplacements".into(), Value::Array(emplacements));
+    ctx.insert(
+        "emplacement_actuel".into(),
+        Value::Array(emplacement_actuel),
+    );
     ctx.insert("suivi_porcs".into(), json!({"presents":porcs_presents,"depart_prevu":depart_prevu.map(|d|d.format("%Y-%m-%d").to_string()),"vente_reelle":vente_reelle,"statut":statut_vente,"ecart_jours":ecart_vente}));
     ctx.insert(
         "resume".into(),

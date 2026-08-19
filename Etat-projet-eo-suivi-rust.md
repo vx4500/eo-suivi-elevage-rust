@@ -101,7 +101,18 @@ août 2026 ; la priorité actuelle porte sur la fiabilité des effectifs
 - [ ] Afficher les ELD dans les fiches truies **sans** garder la moyenne ELD
       par bande.
 - [ ] Afficher TMP et données techniques d'abattage par bande.
-- [ ] Afficher stade, emplacement actuel et effectif réel des porcs.
+- [x] Afficher stade, emplacement actuel et effectif réel des porcs.
+      L'effectif réel était déjà affiché (`suivi_porcs.presents`), mais la
+      fiche bande n'avait qu'un journal brut des mouvements (« Derniers
+      emplacements enregistrés »), sans vue consolidée. Nouvelle section
+      « Emplacement actuel » : une ligne par case où la bande a été
+      affectée, avec le stade déduit (même logique que
+      `stade_pour_type_salle`, §3 précédent) et l'effectif réellement
+      présent dans la case aujourd'hui (`case_pig_count`, temps réel).
+      Limite assumée et documentée dans le code : cet effectif compte tous
+      les porcs de la case, pas seulement ceux de cette bande, si plusieurs
+      bandes y ont été mêlées (le schéma ne trace pas la bande porc par
+      porc au-delà du premier mouvement).
 - [ ] Finaliser la fiche de mise-bas au format A4 définitif.
 - [ ] Permettre d'ordonner librement les salles dans l'implantation.
 
