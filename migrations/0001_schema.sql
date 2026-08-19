@@ -814,6 +814,9 @@ INSERT OR IGNORE INTO reglage(cle,valeur,libelle) VALUES
 ('aliment_1er_age_j',10,'Aliment porcelet 1er âge (j après mise-bas)'),
 ('retour_j',21,'Retour en chaleur à surveiller (j après IA)'),
 ('chaleur_post_sevrage_j',5,'Chaleur après sevrage (j)'),
-('capacite_verraterie',31,'Capacité de verraterie (places)');
+('capacite_verraterie',31,'Capacité de verraterie (places)'),
+('capacite_maternite',60,'Capacité de maternité (places)'),
+('capacite_postsevrage',300,'Capacité de post-sevrage (places)'),
+('capacite_engraissement',800,'Capacité d’engraissement (places)');
 
 INSERT OR IGNORE INTO reglageventedirecte(id) VALUES (1);

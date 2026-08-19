@@ -167,7 +167,7 @@ pub(super) async fn attente(State(state):State<AppState>,Extension(session):Exte
         ORDER BY CASE WHEN chaleur_prevue IS NULL THEN 1 ELSE 0 END,chaleur_prevue,t.num_travail
     "#).await?;
     let bands=sqlx::query_as::<_,Bande>(BAND_SELECT_ACTIVE).fetch_all(&state.pool).await?;
-    let places_disponibles=(capacite-occupation).max(0);
+    let places_disponibles=places_disponibles(capacite,occupation);
     let attente=rows.len() as i64;
     let mut ctx=context(&session);
     ctx.insert("truies".into(),Value::Array(rows));

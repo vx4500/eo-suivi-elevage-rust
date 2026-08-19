@@ -273,10 +273,22 @@ gros commit unique sur une application en production.
       soumission successive des deux formulaires. *Reste hors périmètre : le
       rattachement d'une truie à une lignée du catalogue (actuellement
       `truie.race` en texte libre uniquement) — prochain incrément naturel.*
-- [ ] **Phase 5 — Capacités par étape et conduite continue (§0, §3).**
-      Capacités maternité/post-sevrage/engraissement (comme
-      `capacite_verraterie` existant), et mode « conduite en continu / hors
-      bande » comme option de premier rang pour les très petites structures.
+- [x] **Phase 5 — Capacités par étape (§0, §3).** Trois nouveaux réglages
+      (`capacite_maternite`=60, `capacite_postsevrage`=300,
+      `capacite_engraissement`=800, éditables comme `capacite_verraterie`
+      existant dans Réglages de conduite) et une carte « Capacités par
+      étape » sur le tableau de bord : occupation recalculée à partir des
+      truies/porcs réellement présents dans les salles correspondantes
+      (`salle.type`), jamais une valeur figée. Limitée aux phases réellement
+      actives pour le type d'élevage (verraterie/maternité seulement si
+      `a_truies()`, engraissement seulement si `engraisse()`) — vérifié en
+      conditions réelles en plaçant une truie en maternité (occupation passe
+      à 1/60) puis en basculant vers un profil post-sevreur (seul le
+      post-sevrage reste affiché). *Conduite en continu / hors bande : déjà
+      fonctionnellement supportée (bande_code nullable, écran « Sans bande
+      active » existant) — non repris ici faute de gain identifié au-delà de
+      l'existant ; à documenter comme mode nommé si un besoin utilisateur
+      concret apparaît.*
 - [ ] **Phase 6 — Prévision d'aliment et rappels sanitaires par catégorie**
       (déjà identifiés au §3 ci-dessus, regroupés ici dans le même effort
       d'audit).

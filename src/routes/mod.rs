@@ -592,6 +592,18 @@ mod reception_tests {
 }
 
 #[cfg(test)]
+mod capacite_tests {
+    use super::*;
+
+    #[test]
+    fn places_disponibles_ne_descend_jamais_sous_zero() {
+        assert_eq!(places_disponibles(31, 20), 11);
+        assert_eq!(places_disponibles(31, 31), 0);
+        assert_eq!(places_disponibles(31, 45), 0);
+    }
+}
+
+#[cfg(test)]
 mod gte_tests {
     use super::*;
 
@@ -1017,6 +1029,7 @@ async fn dashboard(
         "SELECT t.num_travail,date(e.date,'+1 day') AS date_prevue FROM evenement e JOIN truie t ON t.id=e.truie_id WHERE e.type='chaleur' AND NOT EXISTS(SELECT 1 FROM evenement ia WHERE ia.truie_id=e.truie_id AND ia.type='ia' AND ia.date>=e.date) ORDER BY e.date DESC LIMIT 12",
     )
     .await?;
+    let capacites = capacites_par_etape(&state.pool, &session).await?;
     let mut ctx = context(&session);
     ctx.insert("bandes".into(), serde_json::to_value(views).unwrap_or_default());
     ctx.insert("taches".into(), Value::Array(taches));
@@ -1024,6 +1037,7 @@ async fn dashboard(
     ctx.insert("prix_tendance".into(), Value::Array(price_trend));
     ctx.insert("dernieres_ventes".into(), Value::Array(latest_sales));
     ctx.insert("annee".into(), json!(year));
+    ctx.insert("capacites".into(), Value::Array(capacites));
     ctx.insert(
         "stats".into(),
         json!({"band_active": bands.len(), "truies": truies, "sevres": sevres, "marge": vente-aliment-veto-semence-genetique,"porcs_vendus_annee":year_sales.0,"prix_net_kg":if year_sales.1>0.0{Some(year_sales.2/year_sales.1)}else{None},"prix_dernieres_ventes":if latest_average.1>0.0{Some(latest_average.0/latest_average.1)}else{None},"morts_annee":year_deaths}),
@@ -2824,6 +2838,89 @@ async fn type_elevage_actif(pool: &SqlitePool) -> AppResult<String> {
     Ok(value
         .filter(|value| auth::TYPES_ELEVAGE.iter().any(|(code, _)| *code == value))
         .unwrap_or_else(|| auth::TYPE_ELEVAGE_DEFAUT.to_string()))
+}
+
+/// Places encore disponibles pour une étape (verraterie, maternité,
+/// post-sevrage, engraissement, §0/§3 de la spécification) : jamais négatif,
+/// une capacité dépassée affiche 0 place plutôt qu'un nombre négatif trompeur.
+fn places_disponibles(capacite: i64, occupation: i64) -> i64 {
+    (capacite - occupation).max(0)
+}
+
+async fn reglage_i64(pool: &SqlitePool, cle: &str, default: i64) -> AppResult<i64> {
+    Ok(sqlx::query_scalar("SELECT valeur FROM reglage WHERE cle=?")
+        .bind(cle)
+        .fetch_optional(pool)
+        .await?
+        .unwrap_or(default))
+}
+
+/// Effectif de truies actives dans les salles dont le type correspond au
+/// motif LIKE donné (ex. "%verrater%", "%matern%").
+async fn occupation_truies(pool: &SqlitePool, type_like: &str) -> AppResult<i64> {
+    Ok(sqlx::query_scalar(
+        "SELECT COUNT(*) FROM truie t LEFT JOIN casesalle c ON c.id=t.case_id LEFT JOIN salle s ON s.id=COALESCE(t.salle_id,c.salle_id) WHERE t.reformee=0 AND lower(COALESCE(s.type,'')) LIKE ?",
+    )
+    .bind(type_like)
+    .fetch_one(pool)
+    .await?)
+}
+
+/// Effectif de porcs présents dans les cases dont la salle correspond à l'un
+/// des motifs LIKE donnés, recalculé à partir des mouvements réels (voir
+/// `case_pig_count`) plutôt qu'une valeur figée.
+async fn occupation_porcs(pool: &SqlitePool, types_like: &[&str]) -> AppResult<i64> {
+    let mut cases = std::collections::HashSet::new();
+    for type_like in types_like {
+        let matched: Vec<i64> = sqlx::query_scalar(
+            "SELECT c.id FROM casesalle c JOIN salle s ON s.id=c.salle_id WHERE lower(COALESCE(s.type,'')) LIKE ?",
+        )
+        .bind(type_like)
+        .fetch_all(pool)
+        .await?;
+        cases.extend(matched);
+    }
+    let mut total = 0;
+    for case_id in cases {
+        total += case_pig_count(pool, case_id).await?;
+    }
+    Ok(total)
+}
+
+/// Capacités par étape (§0/§3 de la spécification), limitées aux phases
+/// réellement présentes pour le type d'élevage actif.
+async fn capacites_par_etape(pool: &SqlitePool, session: &SessionData) -> AppResult<Vec<Value>> {
+    let mut etapes = Vec::new();
+    if session.a_truies() {
+        for (cle, libelle, type_like) in [
+            ("capacite_verraterie", "Verraterie", "%verrater%"),
+            ("capacite_maternite", "Maternité", "%matern%"),
+        ] {
+            let capacite = reglage_i64(pool, cle, 0).await?;
+            let occ = occupation_truies(pool, type_like).await?;
+            etapes.push(json!({
+                "libelle": libelle, "capacite": capacite, "occupation": occ,
+                "places_disponibles": places_disponibles(capacite, occ),
+            }));
+        }
+    }
+    etapes.push({
+        let capacite = reglage_i64(pool, "capacite_postsevrage", 0).await?;
+        let occ = occupation_porcs(pool, &["%sevr%"]).await?;
+        json!({
+            "libelle": "Post-sevrage", "capacite": capacite, "occupation": occ,
+            "places_disponibles": places_disponibles(capacite, occ),
+        })
+    });
+    if session.engraisse() {
+        let capacite = reglage_i64(pool, "capacite_engraissement", 0).await?;
+        let occ = occupation_porcs(pool, &["%engrais%", "%finition%"]).await?;
+        etapes.push(json!({
+            "libelle": "Engraissement", "capacite": capacite, "occupation": occ,
+            "places_disponibles": places_disponibles(capacite, occ),
+        }));
+    }
+    Ok(etapes)
 }
 
 /// Lit un module optionnel booléen (`parametre.cle` = "1"/"0"). `default` est
