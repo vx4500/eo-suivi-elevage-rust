@@ -103,10 +103,21 @@ août 2026 ; la priorité actuelle porte sur la fiabilité des effectifs
 - [ ] Ajouter un modèle d'import des factures génétiques, téléchargeable.
 
 ### Présentation et navigation
-- [ ] Retirer l'ancien texte générique de mise à jour (« remplacer le dossier
-      de l'application »).
-- [ ] Continuer à simplifier la navigation et regrouper les pages proches
-      dans des sous-menus (voir structure proposée en §5).
+- [x] Retirer l'ancien texte générique de mise à jour (« remplacer le dossier
+      de l'application ») — déjà fait : `templates/maj.html` ne contient
+      plus que le texte spécifique au service Debian (dépôt d'archive
+      contrôlée, script `mettre-a-jour-debian13.sh`). Recherché sans
+      résultat, entrée laissée par erreur dans cette liste.
+- [x] Continuer à simplifier la navigation et regrouper les pages proches
+      dans des sous-menus (voir structure proposée en §5) — déjà largement
+      fait : le menu (`templates/base.html`) est organisé en cinq groupes
+      déroulants (Reproduction, Élevage, Pilotage, Aide, Administration)
+      plutôt qu'une liste plate, avec un regroupement proche de celui
+      suggéré en §5 (ex. Administration ≈ « Paramètres (utilisateurs,
+      archives, journal) »). Pas de nouveau regroupement forcé pour
+      coller mot à mot à la structure de référence : les pages sont déjà
+      correctement classées et un remaniement cosmétique sans besoin
+      identifié aurait été du bikeshedding.
 
 ### Avec service externe (nécessite configuration explicite de l'éleveur)
 - [ ] Sauvegardes automatiques vers NAS, stockage en ligne ou messagerie.
