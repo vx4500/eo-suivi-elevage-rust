@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}GTE · EO-Suivi{% endblock %}
+{% block content %}
+<h1>GTE — Gestion Technico-Économique</h1>
+<p>Indicateurs par lot. Le périmètre calculé dépend des phases réellement présentes pour ce lot (aliment livré, ventes enregistrées, truies rattachées) — une case vide signifie une donnée manquante, pas un résultat nul.</p>
+{% if session.a_truies %}<section class="card"><h2>Renouvellement du cheptel</h2><p>Taux de renouvellement (12 mois glissants) : <b>{{ renouvellement }}{% if renouvellement is not none %} %{% endif %}{% if renouvellement is none %}—{% endif %}</b></p></section>{% endif %}
+<div class="rust-scroll"><table><thead><tr>
+<th>Lot</th><th>Site</th><th>Porcs vendus</th><th>Poids produit (kg)</th><th>Aliment (kg)</th><th>IC (kg/kg)</th><th>Coût aliment</th><th>Coût aliment/porc</th><th>MSA</th>{% if session.a_truies %}<th>Truies</th><th>Marge brute/truie</th>{% endif %}
+</tr></thead><tbody>
+{% for b in bandes %}<tr>
+<td><a href="/bande/{{ b.id }}"><b>{{ b.code }}</b></a></td>
+<td>{{ b.site or '—' }}</td>
+<td>{{ b.porcs }}</td>
+<td>{{ b.poids }}</td>
+<td>{{ b.aliment_kg }}</td>
+<td>{{ b.ic if b.ic is not none else '—' }}</td>
+<td>{{ b.cout_aliment|euro }}</td>
+<td>{{ (b.cout_par_porc|euro) if b.cout_par_porc is not none else '—' }}</td>
+<td>{{ b.msa|euro }}</td>
+{% if session.a_truies %}<td>{{ b.truies }}</td><td>{{ (b.marge_brute_truie|euro) if b.marge_brute_truie is not none else '—' }}</td>{% endif %}
+</tr>{% else %}<tr><td colspan="11" class="rust-empty">Aucun lot avec des données économiques ou d'effectif exploitables</td></tr>{% endfor %}
+</tbody></table></div>
+{% endblock %}

@@ -244,12 +244,20 @@ gros commit unique sur une application en production.
       proprement le mouvement et le transfert associés (pas d'effectif
       fantôme). Visible uniquement pour les profils qui reçoivent des achats
       (`session.recoit_achats()`).
-- [ ] **Phase 3 — GTE complète (§7), adaptée au type d'élevage.** Indice de
-      consommation (IC) par phase, coût alimentaire par porc produit, marge
-      sur coût alimentaire (MSA), marge brute par truie, taux de
-      renouvellement du cheptel. Le périmètre calculé dépend du profil actif
-      (ex. post-sevreur seul : IC/GMQ post-sevrage uniquement, coût d'achat du
-      porcelet en charge d'entrée).
+- [x] **Phase 3 — GTE complète (§7), adaptée au type d'élevage.** Nouvel
+      écran `/gte` : indice de consommation (IC, kg aliment/kg produit) par
+      lot, coût alimentaire par porc produit, marge sur coût alimentaire
+      (MSA), marge brute par truie et taux de renouvellement du cheptel (12
+      mois glissants). Les colonnes et la section « Renouvellement » propres
+      aux truies ne s'affichent que pour les profils qui en conduisent
+      (`session.a_truies()`, Phase 1) — vérifié en conditions réelles en
+      basculant un lot de naisseur-engraisseur à post-sevreur. 5 fonctions de
+      calcul pures et testées unitairement (indice_consommation,
+      cout_alimentaire_par_porc, marge_sur_cout_alimentaire,
+      marge_brute_par_truie, taux_renouvellement_pct). *Reste hors périmètre
+      de cette phase : l'imputation explicite du coût d'achat d'un animal
+      entrant comme charge d'entrée pour les profils achats (Phase 2), qui
+      affinera le MSA de ces profils dans un prochain incrément.*
 - [ ] **Phase 4 — Modules optionnels (§0, §2, §4).** Cases à cocher
       « Génétique avancée » et « Prestataires/équipe » dans Paramètres,
       catalogue de lignées (index prolificité/croissance/IC, contrat de

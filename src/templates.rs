@@ -52,6 +52,7 @@ pub fn build() -> anyhow::Result<Environment<'static>> {
         "reception.html",
         include_str!("../templates/reception.html"),
     )?;
+    env.add_template("gte.html", include_str!("../templates/gte.html"))?;
     env.add_template("structure.html", include_str!("../templates/structure.html"))?;
     env.add_template("sanitaire.html", include_str!("../templates/sanitaire.html"))?;
     env.add_template("pharmacie.html", include_str!("../templates/pharmacie.html"))?;

@@ -120,6 +120,7 @@ pub fn router(state: AppState) -> Router {
         .route("/energie/modele.csv", get(energie_modele_csv))
         .route("/energie/import", post(energie_import))
         .route("/economique", get(economique))
+        .route("/gte", get(gte))
         .route(
             "/economique/import-pdf",
             post(economique_import_pdf).layer(DefaultBodyLimit::max(42 * 1024 * 1024)),
@@ -583,6 +584,40 @@ mod reception_tests {
         let today = NaiveDate::from_ymd_opt(2026, 8, 19).unwrap();
         assert!(!quarantaine_active(None, today));
         assert!(!quarantaine_active(Some("pas une date"), today));
+    }
+}
+
+#[cfg(test)]
+mod gte_tests {
+    use super::*;
+
+    #[test]
+    fn indice_consommation_divise_aliment_par_poids_produit() {
+        assert_eq!(indice_consommation(2800.0, 1000.0), Some(2.8));
+        assert_eq!(indice_consommation(2800.0, 0.0), None);
+    }
+
+    #[test]
+    fn cout_alimentaire_par_porc_ignore_effectif_nul() {
+        assert_eq!(cout_alimentaire_par_porc(1000.0, 200), Some(5.0));
+        assert_eq!(cout_alimentaire_par_porc(1000.0, 0), None);
+    }
+
+    #[test]
+    fn msa_est_les_recettes_moins_le_seul_cout_aliment() {
+        assert_eq!(marge_sur_cout_alimentaire(12000.0, 4500.0), 7500.0);
+    }
+
+    #[test]
+    fn marge_brute_par_truie_ignore_lot_sans_truies() {
+        assert_eq!(marge_brute_par_truie(7500.0, 30), Some(250.0));
+        assert_eq!(marge_brute_par_truie(7500.0, 0), None);
+    }
+
+    #[test]
+    fn taux_renouvellement_ignore_cheptel_vide() {
+        assert_eq!(taux_renouvellement_pct(9, 60), Some(15.0));
+        assert_eq!(taux_renouvellement_pct(9, 0), None);
     }
 }
 
@@ -3634,6 +3669,107 @@ async fn economique(
     ctx.insert("imports_prets".into(),json!(query.get("imports_prets")));
     ctx.insert("today".into(),json!(Local::now().date_naive().format("%Y-%m-%d").to_string()));
     render(&state,"economique.html",Value::Object(ctx))
+}
+
+// --- GTE (Gestion Technico-Économique, §7 de la spécification) ---
+//
+// Fonctions pures, testées indépendamment de la base : le calcul dépend des
+// phases réellement présentes pour le type d'élevage actif (voir
+// SessionData::a_truies/engraisse), pas d'un unique parcours naisseur-
+// engraisseur.
+
+/// Indice de consommation : kg d'aliment consommés pour produire 1 kg de
+/// porc. `None` si aucun poids produit n'est connu (pas de division par 0).
+fn indice_consommation(aliment_kg: f64, poids_produit_kg: f64) -> Option<f64> {
+    (poids_produit_kg > 0.0).then(|| aliment_kg / poids_produit_kg)
+}
+
+/// Coût alimentaire par porc produit.
+fn cout_alimentaire_par_porc(cout_aliment: f64, effectif_produit: i64) -> Option<f64> {
+    (effectif_produit > 0).then(|| cout_aliment / effectif_produit as f64)
+}
+
+/// Marge sur coût alimentaire (MSA) : recettes moins le seul coût aliment
+/// (à distinguer de la marge nette, qui inclut aussi vétérinaire/génétique).
+fn marge_sur_cout_alimentaire(recettes: f64, cout_aliment: f64) -> f64 {
+    recettes - cout_aliment
+}
+
+/// Marge brute répartie par truie active du lot (non applicable si le lot n'a
+/// pas de truies, ex. profil post-sevreur/engraisseur seul).
+fn marge_brute_par_truie(marge_totale: f64, nb_truies: i64) -> Option<f64> {
+    (nb_truies > 0).then(|| marge_totale / nb_truies as f64)
+}
+
+/// Taux de renouvellement du cheptel (%) : réformes rapportées à l'effectif
+/// de truies actives sur la même période.
+fn taux_renouvellement_pct(reformees_periode: i64, effectif_actif: i64) -> Option<f64> {
+    (effectif_actif > 0).then(|| 100.0 * reformees_periode as f64 / effectif_actif as f64)
+}
+
+async fn gte(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+) -> AppResult<Html<String>> {
+    #[allow(clippy::type_complexity)]
+    let rows: Vec<(i64, String, Option<String>, i64, f64, f64, f64, f64, i64)> = sqlx::query_as(
+        "SELECT b.id,b.code,b.site,\
+         CAST(COALESCE(v.porcs,0) AS INTEGER),COALESCE(v.poids,0),COALESCE(v.recettes,0),\
+         COALESCE(a.tonnes,0),COALESCE(a.cout,0),\
+         CAST(COALESCE(t.truies,0) AS INTEGER) \
+         FROM bande b \
+         LEFT JOIN (SELECT bande_id,SUM(COALESCE(nb_porcs,0)) AS porcs,SUM(COALESCE(poids_total,0)) AS poids,SUM(COALESCE(montant_net,0)) AS recettes FROM venteapport GROUP BY bande_id) v ON v.bande_id=b.id \
+         LEFT JOIN (SELECT bande_id,SUM(COALESCE(tonnage,0)) AS tonnes,SUM(COALESCE(montant_ht,0)) AS cout FROM livraisonaliment GROUP BY bande_id) a ON a.bande_id=b.id \
+         LEFT JOIN (SELECT bande_code,COUNT(*) AS truies FROM truie WHERE reformee=0 GROUP BY bande_code) t ON t.bande_code=b.code \
+         WHERE b.active=1 AND (v.porcs IS NOT NULL OR a.cout IS NOT NULL OR t.truies IS NOT NULL) \
+         ORDER BY b.date_mb IS NULL,b.date_mb,b.id",
+    )
+    .fetch_all(&state.pool)
+    .await?;
+
+    let bandes: Vec<Value> = rows
+        .into_iter()
+        .map(|(id, code, site, porcs, poids, recettes, tonnes, cout_aliment, truies)| {
+            let aliment_kg = tonnes * 1000.0;
+            let ic = indice_consommation(aliment_kg, poids);
+            let cout_par_porc = cout_alimentaire_par_porc(cout_aliment, porcs);
+            let msa = marge_sur_cout_alimentaire(recettes, cout_aliment);
+            let marge_brute_truie = marge_brute_par_truie(msa, truies);
+            json!({
+                "id": id, "code": code, "site": site,
+                "porcs": porcs, "poids": (poids * 10.0).round() / 10.0,
+                "aliment_kg": (aliment_kg * 10.0).round() / 10.0,
+                "cout_aliment": (cout_aliment * 100.0).round() / 100.0,
+                "ic": ic.map(|v| (v * 100.0).round() / 100.0),
+                "cout_par_porc": cout_par_porc.map(|v| (v * 100.0).round() / 100.0),
+                "msa": (msa * 100.0).round() / 100.0,
+                "truies": truies,
+                "marge_brute_truie": marge_brute_truie.map(|v| (v * 100.0).round() / 100.0),
+            })
+        })
+        .collect();
+
+    // Taux de renouvellement du cheptel sur 12 mois glissants (§7) : n'a de
+    // sens que pour les profils qui conduisent des truies.
+    let renouvellement = if session.a_truies() {
+        let reformees_12m: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM truie WHERE reformee=1 AND date_reforme>=date('now','-12 months')",
+        )
+        .fetch_one(&state.pool)
+        .await?;
+        let effectif_actif: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM truie WHERE reformee=0")
+            .fetch_one(&state.pool)
+            .await?;
+        taux_renouvellement_pct(reformees_12m, effectif_actif)
+            .map(|v| (v * 10.0).round() / 10.0)
+    } else {
+        None
+    };
+
+    let mut ctx = context(&session);
+    ctx.insert("bandes".into(), Value::Array(bandes));
+    ctx.insert("renouvellement".into(), json!(renouvellement));
+    render(&state, "gte.html", Value::Object(ctx))
 }
 
 fn require_economic_import(session: &SessionData) -> AppResult<()> {
