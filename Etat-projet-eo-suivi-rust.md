@@ -81,9 +81,25 @@ août 2026 ; la priorité actuelle porte sur la fiabilité des effectifs
       porcelets et verrats (avec historique).
 
 ### Aliment et stock
-- [ ] Prévision de consommation et de commande d'aliment par bande avant
-      rechargement.
-- [ ] Importer les consommations des machines à soupe.
+- [x] Prévision de consommation et de commande d'aliment par bande avant
+      rechargement. `/aliment-previsions` calculait déjà « jours avant
+      rupture » par silo (§8/Phase 6) mais ne suggérait aucune quantité à
+      commander, et n'avait aucune vue par bande. Ajout de deux fonctions
+      pures testées (`quantite_a_commander` : tonnage pour ramener le silo à
+      sa capacité déclarée ; `commande_urgente` : compare les jours avant
+      rupture à un délai de livraison réglable,
+      `aliment_delai_commande_jours`, 5 jours par défaut) affichées en badge
+      sur chaque silo, et d'une section « Consommation aliment par bande
+      (90 derniers jours) » à partir des livraisons déjà rattachées à une
+      bande. *Limite assumée :* pas de projection prédictive par bande
+      (poids cible/effectif restant varient trop pour un chiffre fiable
+      sans intervention de l'éleveur) — visibilité historique par bande,
+      volontairement pas une estimation inventée.
+- [ ] Importer les consommations des machines à soupe. *Non traité :*
+      nécessite le format d'export réel d'une machine à soupe (marque/
+      modèle utilisé par l'éleveur) pour écrire un import fiable — deviner
+      un format aurait produit un import qui semble fonctionner sans
+      jamais avoir été validé contre un vrai fichier.
 
 ### Économie et imports (demandes en attente)
 - [ ] Permettre deux lots sur une même facture d'apport Cooperl.
