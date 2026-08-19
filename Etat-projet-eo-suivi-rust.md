@@ -113,8 +113,14 @@ août 2026 ; la priorité actuelle porte sur la fiabilité des effectifs
       les porcs de la case, pas seulement ceux de cette bande, si plusieurs
       bandes y ont été mêlées (le schéma ne trace pas la bande porc par
       porc au-delà du premier mouvement).
-- [ ] Finaliser la fiche de mise-bas au format A4 définitif.
-- [ ] Permettre d'ordonner librement les salles dans l'implantation.
+- [x] Finaliser la fiche de mise-bas au format A4 définitif — déjà livré par
+      le chantier §8/Phase 7 (`/bande/{id}/fiche-mise-bas`). Entrée laissée
+      par erreur dans cette liste, corrigée ici.
+- [x] Permettre d'ordonner librement les salles dans l'implantation — déjà
+      livré : boutons Monter/Descendre sur `/structure`
+      (`structure_salle_ordre`, échange transactionnel de l'ordre avec la
+      salle voisine du même site). Entrée laissée par erreur dans cette
+      liste, corrigée ici.
 
 ### Sanitaire
 - [ ] Rappels sanitaires calculés séparément pour truies, cochettes,
