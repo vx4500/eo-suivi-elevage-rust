@@ -60,12 +60,41 @@ août 2026 ; la priorité actuelle porte sur la fiabilité des effectifs
 ## 3. Reste à faire — priorités
 
 ### Fiabilité des données
-- [ ] Fiabiliser les effectifs réels (anciens inventaires incohérents,
-      mortalités avec un stade erroné).
-- [ ] Corriger l'affectation du stade lors des déclarations de mortalité et
-      détecter les effectifs incohérents.
-- [ ] Rattacher les porcs charcutiers à leur bande d'origine (au lieu d'un
-      total générique d'engraissement).
+- [x] Fiabiliser les effectifs réels (anciens inventaires incohérents,
+      mortalités avec un stade erroné) — première étape : détection, sans
+      correction automatique (l'éleveur reste seul juge de la correction).
+      Quatre contrôles ajoutés à l'écran existant `/etat-donnees` (même
+      principe que ses contrôles actuels : une valeur à zéro signifie que le
+      contrôle est conforme), plutôt qu'un nouvel écran séparé :
+      « Cases avec effectif calculé négatif » (mortalités/sorties
+      supérieures aux entrées connues depuis le dernier inventaire),
+      « Cases dépassant leur capacité déclarée », « Déclarations de
+      mortalité sans stade renseigné » et « Porcs charcutiers sans bande
+      d'origine ». Vérifié par un test dédié (`etat_donnees_detecte_les_incoherences_deffectif`
+      dans `tests/schema.rs`) qui fabrique les quatre situations dans une
+      base SQLite en mémoire et vérifie que chaque contrôle les détecte.
+- [x] Corriger l'affectation du stade lors des déclarations de mortalité et
+      détecter les effectifs incohérents. Les deux points de saisie
+      (`/declaration` et la saisie rapide « perte ») laissaient l'utilisateur
+      choisir un stade dans une liste fixe indépendante de la case
+      sélectionnée, et seul `/declaration` vérifiait l'effectif présent dans
+      la case avant d'enregistrer une perte. Le stade est désormais déduit
+      automatiquement du type de la salle de la case choisie (mêmes motifs
+      que les capacités par étape du §8/Phase 5 — `stade_pour_type_salle`,
+      fonction pure testée unitairement), et la saisie rapide applique le
+      même contrôle d'effectif insuffisant que `/declaration`. La saisie
+      manuelle de « stade » reste utilisée telle quelle quand aucune case
+      n'est renseignée (perte sous la mère, cas « Autre »).
+- [x] Rattacher les porcs charcutiers à leur bande d'origine (au lieu d'un
+      total générique d'engraissement). La donnée existait déjà par bande
+      (`total_band_pigs`, utilisé sur la fiche bande), mais l'écran
+      Prestataire/Engraissement (`/engraissement`) n'affichait que le
+      formulaire de déclaration et le journal de mortalité, sans effectif par
+      bande : un prestataire suivant plusieurs bandes ne pouvait pas savoir
+      combien de porcs étaient réellement présents pour chacune. Ajout d'un
+      tableau « Porcs présents par bande » en tête de cet écran, avec le même
+      calcul que la fiche bande (limité aux bandes actives confiées à
+      l'engraisseur pour ce rôle, comme le reste de l'écran).
 
 ### Conduite d'élevage et productivité
 - [ ] Produire une GTE complète en complément de la GTTT.

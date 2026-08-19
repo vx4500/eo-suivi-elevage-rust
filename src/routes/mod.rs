@@ -606,6 +606,32 @@ mod capacite_tests {
         assert_eq!(places_disponibles(31, 31), 0);
         assert_eq!(places_disponibles(31, 45), 0);
     }
+
+    #[test]
+    fn stade_pour_type_salle_reconnait_les_memes_motifs_que_les_capacites() {
+        assert_eq!(
+            stade_pour_type_salle("Verraterie A"),
+            Some("Verraterie".to_string())
+        );
+        assert_eq!(
+            stade_pour_type_salle("Maternité 2"),
+            Some("Maternité".to_string())
+        );
+        assert_eq!(
+            stade_pour_type_salle("Post-sevrage"),
+            Some("Post-sevrage".to_string())
+        );
+        assert_eq!(
+            stade_pour_type_salle("Engraissement B"),
+            Some("Engraissement".to_string())
+        );
+        assert_eq!(
+            stade_pour_type_salle("Salle de finition"),
+            Some("Engraissement".to_string())
+        );
+        assert_eq!(stade_pour_type_salle("Local technique"), None);
+        assert_eq!(stade_pour_type_salle(""), None);
+    }
 }
 
 #[cfg(test)]
@@ -2988,6 +3014,41 @@ async fn occupation_truies(pool: &SqlitePool, type_like: &str) -> AppResult<i64>
     .await?)
 }
 
+/// Stade déduit du type de salle (mêmes motifs que `occupation_porcs`/
+/// `occupation_truies`), fonction pure testable indépendamment de la base.
+/// `None` si le type de salle n'est pas reconnu (ex. salle non renseignée).
+fn stade_pour_type_salle(type_salle: &str) -> Option<String> {
+    let t = type_salle.to_lowercase();
+    if t.contains("verrater") {
+        Some("Verraterie".to_string())
+    } else if t.contains("matern") {
+        Some("Maternité".to_string())
+    } else if t.contains("sevr") {
+        Some("Post-sevrage".to_string())
+    } else if t.contains("engrais") || t.contains("finition") {
+        Some("Engraissement".to_string())
+    } else {
+        None
+    }
+}
+
+/// Stade déduit du type de la salle contenant la case donnée, pour ne plus
+/// dépendre d'une sélection manuelle qui peut ne pas correspondre à la case
+/// réellement choisie lors d'une déclaration de mortalité. `None` si la case
+/// est inconnue ou si le type de sa salle n'est pas reconnu : dans ce cas
+/// l'appelant retombe sur la valeur du formulaire.
+async fn stade_from_case(pool: &SqlitePool, case_id: i64) -> AppResult<Option<String>> {
+    let salle_type: Option<Option<String>> = sqlx::query_scalar(
+        "SELECT s.type FROM casesalle c JOIN salle s ON s.id=c.salle_id WHERE c.id=?",
+    )
+    .bind(case_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(salle_type
+        .flatten()
+        .and_then(|t| stade_pour_type_salle(&t)))
+}
+
 /// Effectif de porcs présents dans les cases dont la salle correspond à l'un
 /// des motifs LIKE donnés, recalculé à partir des mouvements réels (voir
 /// `case_pig_count`) plutôt qu'une valeur figée.
@@ -3279,7 +3340,12 @@ async fn transferts(
     render(&state, "transferts.html", Value::Object(ctx))
 }
 
-async fn case_pig_count(pool: &SqlitePool, case_id: i64) -> AppResult<i64> {
+/// Effectif d'une case, sans plancher à zéro (`case_pig_count` applique ce
+/// plancher pour l'affichage normal). Une valeur négative signale un
+/// inventaire ou des mortalités incohérents ; voir aussi la même logique
+/// répliquée en SQL pur dans `etat_donnees` (« Cases avec effectif calculé
+/// négatif ») pour le rapport de contrôles structurels.
+async fn case_pig_count_raw(pool: &SqlitePool, case_id: i64) -> AppResult<i64> {
     let inventory: Option<(String, i64)> = sqlx::query_as(
         "SELECT date,nombre FROM inventairecase WHERE case_id=? ORDER BY date DESC,id DESC LIMIT 1",
     )
@@ -3307,7 +3373,11 @@ async fn case_pig_count(pool: &SqlitePool, case_id: i64) -> AppResult<i64> {
     .bind(&date)
     .fetch_one(pool)
     .await?;
-    Ok((base + movements - deaths).max(0))
+    Ok(base + movements - deaths)
+}
+
+async fn case_pig_count(pool: &SqlitePool, case_id: i64) -> AppResult<i64> {
+    Ok(case_pig_count_raw(pool, case_id).await?.max(0))
 }
 
 async fn remaining_band_pigs(pool: &SqlitePool, band_id: i64, code: &str) -> AppResult<i64> {
@@ -3614,7 +3684,7 @@ async fn etat_donnees(
         &session,
         "État des données",
         "Contrôles structurels en lecture seule. Une valeur à zéro signifie que le contrôle est conforme.",
-        "SELECT 'Doublons de numéros de truies actives' AS controle,COUNT(*) AS anomalies FROM (SELECT num_travail FROM truie WHERE reformee=0 GROUP BY lower(trim(num_travail)) HAVING COUNT(*)>1) UNION ALL SELECT 'Événements sans truie',COUNT(*) FROM evenement e LEFT JOIN truie t ON t.id=e.truie_id WHERE e.truie_id IS NOT NULL AND t.id IS NULL UNION ALL SELECT 'Événements sans bande',COUNT(*) FROM evenement e LEFT JOIN bande b ON b.id=e.bande_id WHERE e.bande_id IS NOT NULL AND b.id IS NULL UNION ALL SELECT 'Transferts vers une case absente',COUNT(*) FROM transfert t LEFT JOIN casesalle c ON c.id=t.case_dest_id WHERE t.case_dest_id IS NOT NULL AND c.id IS NULL UNION ALL SELECT 'Bandes actives sans date de mise-bas',COUNT(*) FROM bande WHERE active=1 AND (date_mb IS NULL OR trim(date_mb)='') UNION ALL SELECT 'Truies actives sans bande',COUNT(*) FROM truie WHERE reformee=0 AND (bande_code IS NULL OR trim(bande_code)='')",
+        "WITH effectif_case AS (SELECT c.id,c.nb_max_porcs,(SELECT date FROM inventairecase WHERE case_id=c.id ORDER BY date DESC,id DESC LIMIT 1) AS inv_date,COALESCE((SELECT nombre FROM inventairecase WHERE case_id=c.id ORDER BY date DESC,id DESC LIMIT 1),0) AS base FROM casesalle c),effectif_case2 AS (SELECT e.id,e.nb_max_porcs,e.base+COALESCE((SELECT SUM(CASE WHEN t.case_dest_id=e.id THEN COALESCE(t.nombre,0) ELSE -COALESCE(t.nombre,0) END) FROM transfert t WHERE t.espece='porc' AND (t.case_dest_id=e.id OR t.case_source_id=e.id) AND (e.inv_date IS NULL OR t.date>e.inv_date)),0)-COALESCE((SELECT SUM(d.nombre) FROM declarationmort d WHERE d.case_id=e.id AND (e.inv_date IS NULL OR d.date>e.inv_date)),0) AS effectif FROM effectif_case e) SELECT 'Doublons de numéros de truies actives' AS controle,COUNT(*) AS anomalies FROM (SELECT num_travail FROM truie WHERE reformee=0 GROUP BY lower(trim(num_travail)) HAVING COUNT(*)>1) UNION ALL SELECT 'Événements sans truie',COUNT(*) FROM evenement e LEFT JOIN truie t ON t.id=e.truie_id WHERE e.truie_id IS NOT NULL AND t.id IS NULL UNION ALL SELECT 'Événements sans bande',COUNT(*) FROM evenement e LEFT JOIN bande b ON b.id=e.bande_id WHERE e.bande_id IS NOT NULL AND b.id IS NULL UNION ALL SELECT 'Transferts vers une case absente',COUNT(*) FROM transfert t LEFT JOIN casesalle c ON c.id=t.case_dest_id WHERE t.case_dest_id IS NOT NULL AND c.id IS NULL UNION ALL SELECT 'Bandes actives sans date de mise-bas',COUNT(*) FROM bande WHERE active=1 AND (date_mb IS NULL OR trim(date_mb)='') UNION ALL SELECT 'Truies actives sans bande',COUNT(*) FROM truie WHERE reformee=0 AND (bande_code IS NULL OR trim(bande_code)='') UNION ALL SELECT 'Cases avec effectif calculé négatif',COUNT(*) FROM effectif_case2 WHERE effectif<0 UNION ALL SELECT 'Cases dépassant leur capacité déclarée',COUNT(*) FROM effectif_case2 WHERE nb_max_porcs IS NOT NULL AND nb_max_porcs>0 AND effectif>nb_max_porcs UNION ALL SELECT 'Déclarations de mortalité sans stade renseigné',COUNT(*) FROM declarationmort WHERE stade IS NULL OR trim(stade)='' UNION ALL SELECT 'Porcs charcutiers sans bande d''origine',COUNT(*) FROM porccharcutier WHERE bande_code IS NULL OR trim(bande_code)=''",
         &["controle", "anomalies"],
     )
     .await
@@ -5137,6 +5207,17 @@ async fn engraissement(
             .to_string()
     };
     let bands = generic_rows(&state.pool, &band_sql).await?;
+    // Effectif réel par bande (au lieu d'un total générique d'engraissement
+    // toutes bandes confondues) : même calcul que la fiche bande
+    // (`total_band_pigs`), pour que le prestataire/engraisseur sache combien
+    // de porcs sont réellement présents pour chaque bande qui lui est
+    // confiée.
+    let mut effectifs_bandes = Vec::new();
+    for band in &bands {
+        let (Some(id), Some(code)) = (band.get("id").and_then(Value::as_i64), band.get("code").and_then(Value::as_str)) else { continue };
+        let effectif = total_band_pigs(&state.pool, id, code).await?;
+        effectifs_bandes.push(json!({"code": code, "effectif": effectif}));
+    }
     let cases = generic_rows(
         &state.pool,
         "SELECT c.id,COALESCE(si.nom,si.code)||' · '||s.nom||' · '||c.nom AS nom FROM casesalle c JOIN salle s ON s.id=c.salle_id JOIN site si ON si.id=s.site_id ORDER BY si.nom,s.ordre,c.nom",
@@ -5145,6 +5226,7 @@ async fn engraissement(
     let mut ctx = context(&session);
     ctx.insert("declarations".into(), Value::Array(declarations));
     ctx.insert("bandes".into(), Value::Array(bands));
+    ctx.insert("effectifs_bandes".into(), Value::Array(effectifs_bandes));
     ctx.insert("cases".into(), Value::Array(cases));
     ctx.insert(
         "today".into(),
@@ -5179,6 +5261,7 @@ async fn declaration_ajouter(
         .filter(|value| *value > 0 && *value <= 10_000)
         .ok_or_else(|| AppError::Invalid("Nombre invalide".into()))?;
     let case_id = form_i64(&form, "case_id");
+    let mut stade = form_text(&form, "stade");
     if let Some(case_id) = case_id {
         let present = case_pig_count(&state.pool, case_id).await?;
         if number > present {
@@ -5186,11 +5269,16 @@ async fn declaration_ajouter(
                 "Effectif insuffisant dans la case : {present} porc(s) présent(s)"
             )));
         }
+        // La case choisie fait foi : évite un stade saisi manuellement en
+        // décalage avec la salle réellement sélectionnée.
+        if let Some(deduced) = stade_from_case(&state.pool, case_id).await? {
+            stade = Some(deduced);
+        }
     }
     sqlx::query("INSERT INTO declarationmort(bande_code,date,stade,case_id,cause,poids,nombre,declare_par,note) VALUES(?,?,?,?,?,?,?,?,?)")
         .bind(&band)
         .bind(form_date_or_today(&form, "date")?)
-        .bind(form_text(&form, "stade"))
+        .bind(stade)
         .bind(case_id)
         .bind(form_text(&form, "cause"))
         .bind(form_f64(&form, "poids"))

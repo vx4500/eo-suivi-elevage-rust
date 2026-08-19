@@ -199,3 +199,77 @@ async fn inventaire_est_un_point_de_depart_sans_double_comptage() -> anyhow::Res
     assert_eq!(corrected, (1, 98));
     Ok(())
 }
+
+/// Vérifie en conditions réelles (base SQLite en mémoire) les contrôles
+/// ajoutés à `/etat-donnees` pour le §3 « Fiabiliser les effectifs réels » :
+/// même requête (WITH `effectif_case`/`effectif_case2`) que celle utilisée
+/// par `etat_donnees` dans `src/routes/mod.rs`, pour attraper une régression
+/// SQL — cette requête n'est exécutée nulle part ailleurs dans les tests.
+#[tokio::test]
+async fn etat_donnees_detecte_les_incoherences_deffectif() -> anyhow::Result<()> {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await?;
+    sqlx::raw_sql(include_str!("../migrations/0001_schema.sql"))
+        .execute(&pool)
+        .await?;
+    let site = sqlx::query("INSERT INTO site(code,nom) VALUES('TEST','Site test')")
+        .execute(&pool)
+        .await?
+        .last_insert_rowid();
+    let room = sqlx::query("INSERT INTO salle(site_id,nom,nb_cases,ordre) VALUES(?,'Engraissement',2,1)")
+        .bind(site)
+        .execute(&pool)
+        .await?
+        .last_insert_rowid();
+    // Case avec un effectif calculé négatif : 5 déclarés présents, 8 morts
+    // déclarées ensuite -> 5-8=-3.
+    let pen_negative = sqlx::query("INSERT INTO casesalle(salle_id,nom,nb_max_porcs) VALUES(?,'Case négative',20)")
+        .bind(room)
+        .execute(&pool)
+        .await?
+        .last_insert_rowid();
+    sqlx::query("INSERT INTO inventairecase(case_id,date,nombre,note,cree_par) VALUES(?,'2026-08-01',5,'Stock initial','test')")
+        .bind(pen_negative)
+        .execute(&pool)
+        .await?;
+    sqlx::query("INSERT INTO declarationmort(bande_code,date,stade,case_id,nombre) VALUES('B-TEST','2026-08-10','Engraissement',?,8)")
+        .bind(pen_negative)
+        .execute(&pool)
+        .await?;
+    // Case en dépassement de capacité : 3 présents pour 2 places.
+    let pen_over = sqlx::query("INSERT INTO casesalle(salle_id,nom,nb_max_porcs) VALUES(?,'Case pleine',2)")
+        .bind(room)
+        .execute(&pool)
+        .await?
+        .last_insert_rowid();
+    sqlx::query("INSERT INTO inventairecase(case_id,date,nombre,note,cree_par) VALUES(?,'2026-08-01',3,'Stock initial','test')")
+        .bind(pen_over)
+        .execute(&pool)
+        .await?;
+    // Mortalité sans stade renseigné.
+    sqlx::query("INSERT INTO declarationmort(bande_code,date,nombre) VALUES('B-TEST','2026-08-11',1)")
+        .execute(&pool)
+        .await?;
+    // Porc charcutier sans bande d'origine (donnée legacy).
+    sqlx::query("INSERT INTO porccharcutier(rfid,date_naissance) VALUES('RFID-TEST','2026-05-01')")
+        .execute(&pool)
+        .await?;
+
+    let sql = "WITH effectif_case AS (SELECT c.id,c.nb_max_porcs,(SELECT date FROM inventairecase WHERE case_id=c.id ORDER BY date DESC,id DESC LIMIT 1) AS inv_date,COALESCE((SELECT nombre FROM inventairecase WHERE case_id=c.id ORDER BY date DESC,id DESC LIMIT 1),0) AS base FROM casesalle c),effectif_case2 AS (SELECT e.id,e.nb_max_porcs,e.base+COALESCE((SELECT SUM(CASE WHEN t.case_dest_id=e.id THEN COALESCE(t.nombre,0) ELSE -COALESCE(t.nombre,0) END) FROM transfert t WHERE t.espece='porc' AND (t.case_dest_id=e.id OR t.case_source_id=e.id) AND (e.inv_date IS NULL OR t.date>e.inv_date)),0)-COALESCE((SELECT SUM(d.nombre) FROM declarationmort d WHERE d.case_id=e.id AND (e.inv_date IS NULL OR d.date>e.inv_date)),0) AS effectif FROM effectif_case e) SELECT 'Cases avec effectif calculé négatif' AS controle,COUNT(*) AS anomalies FROM effectif_case2 WHERE effectif<0 UNION ALL SELECT 'Cases dépassant leur capacité déclarée',COUNT(*) FROM effectif_case2 WHERE nb_max_porcs IS NOT NULL AND nb_max_porcs>0 AND effectif>nb_max_porcs UNION ALL SELECT 'Déclarations de mortalité sans stade renseigné',COUNT(*) FROM declarationmort WHERE stade IS NULL OR trim(stade)='' UNION ALL SELECT 'Porcs charcutiers sans bande d''origine',COUNT(*) FROM porccharcutier WHERE bande_code IS NULL OR trim(bande_code)=''";
+    let rows: Vec<(String, i64)> = sqlx::query_as(sql).fetch_all(&pool).await?;
+    assert_eq!(
+        rows,
+        vec![
+            ("Cases avec effectif calculé négatif".to_string(), 1),
+            ("Cases dépassant leur capacité déclarée".to_string(), 1),
+            (
+                "Déclarations de mortalité sans stade renseigné".to_string(),
+                1
+            ),
+            ("Porcs charcutiers sans bande d'origine".to_string(), 1),
+        ]
+    );
+    Ok(())
+}
