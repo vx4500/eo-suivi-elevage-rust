@@ -4731,6 +4731,26 @@ async fn declaration_ajouter(
     let number = form_i64(&form, "nombre")
         .filter(|value| *value > 0 && *value <= 10_000)
         .ok_or_else(|| AppError::Invalid("Nombre invalide".into()))?;
+    let (band_id, date_mb): (i64, Option<String>) =
+        sqlx::query_as("SELECT id,date_mb FROM bande WHERE code=?")
+            .bind(&band)
+            .fetch_optional(&state.pool)
+            .await?
+            .ok_or_else(|| AppError::Invalid("Bande introuvable".into()))?;
+    let date = form_date_or_today(&form, "date")?;
+    // Le stade n'est plus une saisie libre du déclarant : il est recalculé
+    // côté serveur à partir de l'âge réel de la bande à la date déclarée,
+    // avec le même calendrier que celui affiché sur les fiches bande.
+    // Cela évite les incohérences entre le stade choisi dans le formulaire
+    // et le cycle effectif de la bande (ex. mortalité classée "Engraissement"
+    // alors que la bande est encore en post-sevrage).
+    let schedule = load_band_schedule(&state.pool).await?;
+    let stade = date_mb
+        .as_deref()
+        .and_then(parse_stored_date)
+        .zip(parse_stored_date(&date))
+        .map(|(mb, decl)| schedule.stage((decl - mb).num_days()).0)
+        .unwrap_or("À renseigner");
     let case_id = form_i64(&form, "case_id");
     if let Some(case_id) = case_id {
         let present = case_pig_count(&state.pool, case_id).await?;
@@ -4739,11 +4759,20 @@ async fn declaration_ajouter(
                 "Effectif insuffisant dans la case : {present} porc(s) présent(s)"
             )));
         }
+    } else {
+        // Sans case précise, on détecte quand même un effectif incohérent en
+        // comparant à l'effectif total encore suivi pour la bande.
+        let present = total_band_pigs(&state.pool, band_id, &band).await?;
+        if number > present {
+            return Err(AppError::Invalid(format!(
+                "Effectif incohérent : la bande {band} ne compte que {present} porc(s) suivi(s)"
+            )));
+        }
     }
     sqlx::query("INSERT INTO declarationmort(bande_code,date,stade,case_id,cause,poids,nombre,declare_par,note) VALUES(?,?,?,?,?,?,?,?,?)")
         .bind(&band)
-        .bind(form_date_or_today(&form, "date")?)
-        .bind(form_text(&form, "stade"))
+        .bind(&date)
+        .bind(stade)
         .bind(case_id)
         .bind(form_text(&form, "cause"))
         .bind(form_f64(&form, "poids"))

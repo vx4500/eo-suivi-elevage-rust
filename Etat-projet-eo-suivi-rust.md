@@ -59,8 +59,12 @@ sanitaires et la fiche de mise-bas A4.
 ### Fiabilité des données
 - [ ] Fiabiliser les effectifs réels (anciens inventaires incohérents,
       mortalités avec un stade erroné).
-- [ ] Corriger l'affectation du stade lors des déclarations de mortalité et
-      détecter les effectifs incohérents.
+- [x] Corriger l'affectation du stade lors des déclarations de mortalité et
+      détecter les effectifs incohérents. *(Le stade n'est plus saisi
+      librement : il est recalculé côté serveur à partir de l'âge réel de la
+      bande à la date déclarée, avec le même calendrier que les fiches bande.
+      L'effectif déclaré est désormais vérifié contre l'effectif total suivi
+      de la bande même sans case précisée.)*
 - [ ] Rattacher les porcs charcutiers à leur bande d'origine (au lieu d'un
       total générique d'engraissement).
 
