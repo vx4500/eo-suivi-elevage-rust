@@ -1,6 +1,6 @@
 # EO-Suivi Élevage Rust — État du projet
 
-Version actuelle : **2.2.10** — Dernière mise à jour de ce document : 19 août 2026.
+Version actuelle : **2.2.11** — Dernière mise à jour de ce document : 19 août 2026.
 
 Ce fichier remplace et fusionne : `AUDIT-PORTAGE-RUST-2.1.2.md`,
 `DEMANDES-MODIFICATIONS-EOELEVAGE.md`, `LISTING-APPLICATION-EO-SUIVI.md`,
@@ -337,6 +337,53 @@ août 2026 ; la priorité actuelle porte sur la fiabilité des effectifs
       coller mot à mot à la structure de référence : les pages sont déjà
       correctement classées et un remaniement cosmétique sans besoin
       identifié aurait été du bikeshedding.
+- [x] Corriger l'affichage de `/* Capacity badge styles */` en toutes
+      lettres sur chaque page (dont la page de connexion). Vrai bug trouvé
+      dans `templates/base.html` : ce commentaire CSS était placé entre
+      deux balises `<style>`, donc en dehors de tout bloc de style — le
+      navigateur l'affichait comme texte brut au lieu de l'interpréter
+      comme un commentaire. Déplacé à l'intérieur du bloc `<style>`
+      suivant, avec lequel il va (styles des badges de capacité). Vérifié
+      qu'aucune autre fuite du même genre n'existe dans les templates.
+- [x] Saisie rapide : renommer « Perte porcelet » en « Perte porc » sur le
+      bouton d'accès (`templates/base.html`) — changement de libellé
+      uniquement, aucun changement de comportement demandé.
+- [x] Page `/bandes` : édition « à la volée » de mise-bas, n° de marquage
+      et site directement dans le tableau, sans ouvrir la fiche bande
+      complète. Chaque ligne a son propre petit formulaire (associé via
+      l'attribut HTML `form=` plutôt que des `<form>` imbriqués, invalides
+      en HTML) et un bouton « Enregistrer » dédié. Stade et effectif
+      restent affichés mais non éditables ici : ce sont des valeurs
+      calculées (planning + truies actives), pas des colonnes de `bande` —
+      les rendre éditables casserait la cohérence avec la fiche bande, qui
+      les recalcule toujours à partir des mêmes données sous-jacentes.
+- [x] Eau/électricité : redistribuer la consommation aux bandes selon leur
+      présence, avec un tarif au relevé (daté). Le rattachement des bandes
+      présentes à un relevé existait déjà (`bandes` sur `releve_compteur`,
+      calculé par `present_bands` à la saisie) mais ne servait qu'à
+      l'affichage, jamais à répartir un coût. Ajout d'un champ
+      `prix_unitaire` par relevé (saisie manuelle et import CSV en masse) ;
+      le coût de chaque période (conso × prix du relevé qui la clôture) se
+      répartit à parts égales entre les bandes présentes sur cette
+      période — à parts égales et non au prorata d'un effectif, car l'eau/
+      l'électricité d'un site (lavage, ventilation, chauffage communs) ne
+      dépend pas linéairement du nombre de têtes par bande, contrairement à
+      l'aliment qui se répartit déjà naturellement par les livraisons
+      rattachées à une bande. Nouvelle section « Coût redistribué aux
+      bandes » sur `/energie`, cumulée par bande et par type de compteur.
+      Deux fonctions pures testées (`cout_consommation`,
+      `repartir_cout_par_bande`).
+- [ ] Mode démo : générateur rejouable produisant plus de 850 truies
+      actives, engraissement mixte sur place/extérieur et 5 ans
+      d'historique. *Non traité dans cet incrément :* le mécanisme de démo
+      actuel (`demo_toggle` dans `routes/parity.rs`) ne crée qu'une bande,
+      une truie et un événement — un geste symbolique, pas un jeu de
+      données exploitable pour se faire une idée de la durée d'utilisation.
+      Passer à l'échelle demandée (des dizaines de bandes sur 5 ans, des
+      centaines de truies, un historique GTTT cohérent, une répartition
+      sur/hors site) est un générateur à part entière, pas une extension
+      ponctuelle du toggle existant — laissé pour un incrément dédié plutôt
+      que bâclé dans la même session que les trois points ci-dessus.
 
 ### Avec service externe (nécessite configuration explicite de l'éleveur)
 - [ ] Sauvegardes automatiques vers NAS, stockage en ligne ou messagerie.
@@ -444,7 +491,7 @@ l'arrêt déclenche le retour arrière ; la sauvegarde de la base est conservée
 ```bash
 systemctl status eo-suivi-rust --no-pager -l
 journalctl -u eo-suivi-rust -n 80 --no-pager -l -o cat
-curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.10"
+curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.11"
 ```
 
 Puis ouvrir `https://rust-elevage.basse-chevrie.ovh`.

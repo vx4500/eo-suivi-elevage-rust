@@ -37,6 +37,7 @@ pub async fn init(pool: &SqlitePool) -> anyhow::Result<()> {
         ("declarationmort", "case_id", "INTEGER"),
         ("produitventedirecte", "quantite_disponible", "REAL"),
         ("releve_compteur", "remplacement_compteur", "INTEGER NOT NULL DEFAULT 0"),
+        ("releve_compteur", "prix_unitaire", "REAL"),
     ] {
         ensure_column(pool, table, column, definition).await?;
     }

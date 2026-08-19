@@ -683,7 +683,8 @@ CREATE TABLE IF NOT EXISTS releve_compteur (
     valeur_index REAL NOT NULL,
     bandes TEXT,
     note TEXT,
-    remplacement_compteur INTEGER NOT NULL DEFAULT 0
+    remplacement_compteur INTEGER NOT NULL DEFAULT 0,
+    prix_unitaire REAL
 );
 
 CREATE INDEX IF NOT EXISTS ix_releve_compteur_compteur ON releve_compteur(compteur_id);

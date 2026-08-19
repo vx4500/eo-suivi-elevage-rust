@@ -118,6 +118,7 @@ pub struct ReleveCompteur {
     pub bandes: Option<String>,
     pub note: Option<String>,
     pub remplacement_compteur: bool,
+    pub prix_unitaire: Option<f64>,
 }
 
 #[cfg(test)]
