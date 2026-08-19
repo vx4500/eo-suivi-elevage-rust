@@ -192,6 +192,20 @@ CREATE TABLE IF NOT EXISTS acterealise (
     note TEXT
 );
 
+-- Table séparée plutôt qu'un bande_id rendu nullable sur acterealise : un
+-- verrat n'appartient pas à une bande, mais acterealise.bande_id est
+-- NOT NULL et SQLite ne permet pas de retirer une contrainte NOT NULL sans
+-- recréer la table (risque écarté pour une base de production). Mêmes
+-- colonnes qu'acterealise, réunies avec elle par UNION ALL pour
+-- l'historique (§3 « Rappels sanitaires… avec historique »).
+CREATE TABLE IF NOT EXISTS acterealiseverrat (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    acte_id INTEGER NOT NULL REFERENCES acteprotocole(id),
+    verrat_id INTEGER NOT NULL REFERENCES verrat(id),
+    date_realise TEXT NOT NULL,
+    note TEXT
+);
+
 CREATE TABLE IF NOT EXISTS reglage (
     cle TEXT PRIMARY KEY,
     valeur INTEGER NOT NULL,
