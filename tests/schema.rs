@@ -317,6 +317,7 @@ async fn historique_sanitaire_reunit_bandes_et_verrats() -> anyhow::Result<()> {
         .await?;
 
     let sql = "SELECT ar.id AS id,ar.date_realise AS date_realise,b.code AS cible_nom,a.libelle,a.produit,ar.note FROM acterealise ar JOIN bande b ON b.id=ar.bande_id JOIN acteprotocole a ON a.id=ar.acte_id UNION ALL SELECT arv.id AS id,arv.date_realise AS date_realise,v.code AS cible_nom,a.libelle,a.produit,arv.note FROM acterealiseverrat arv JOIN verrat v ON v.id=arv.verrat_id JOIN acteprotocole a ON a.id=arv.acte_id ORDER BY date_realise DESC,id DESC LIMIT 250";
+    #[allow(clippy::type_complexity)]
     let rows: Vec<(i64, String, String, String, Option<String>, Option<String>)> =
         sqlx::query_as(sql).fetch_all(&pool).await?;
     let simplified: Vec<(i64, String, String, String)> = rows
