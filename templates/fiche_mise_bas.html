@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Fiche mise-bas {{ bande.code }} · EO-Suivi{% endblock %}
+{% block content %}
+<style>
+  @page { size: A4; margin: 15mm; }
+  .fiche-a4 { max-width: 190mm; margin: 0 auto; font-size: 13px; }
+  .fiche-entete { display:flex; justify-content:space-between; align-items:flex-start; border-bottom:2px solid #173f32; padding-bottom:10px; margin-bottom:14px; }
+  .fiche-entete h1 { margin:0; font-size:20px; }
+  .fiche-entete p { margin:2px 0; color:#444; }
+  .fiche-totaux { display:flex; gap:18px; flex-wrap:wrap; margin:14px 0; padding:10px 0; border-top:1px solid #ccc; border-bottom:1px solid #ccc; }
+  .fiche-totaux div { text-align:center; }
+  .fiche-totaux b { display:block; font-size:18px; }
+  .fiche-totaux small { color:#666; }
+  .fiche-table { width:100%; border-collapse:collapse; }
+  .fiche-table th, .fiche-table td { border:1px solid #ccc; padding:5px 7px; text-align:left; }
+  .fiche-table th { background:#eef7f0; }
+  .fiche-signature { display:flex; justify-content:space-between; margin-top:36px; }
+  .fiche-signature div { width:45%; border-top:1px solid #666; padding-top:4px; text-align:center; color:#666; }
+  @media print { .fiche-a4 { max-width:none; font-size:12px; } }
+</style>
+<div class="no-print rust-actions"><button onclick="window.print()">Imprimer</button> <a href="/export/mise-bas/{{ bande.id }}">Exporter en CSV</a> <a href="/bande/{{ bande.id }}">Retour à la bande</a></div>
+<div class="fiche-a4">
+  <div class="fiche-entete">
+    <div><h1>{{ nom_elevage or 'Registre de mise-bas' }}</h1><p>Registre d'élevage — fiche de mise-bas</p></div>
+    <div style="text-align:right"><p><b>Bande {{ bande.code }}</b></p><p>Mise-bas prévue : {{ bande.date_mb|date_fr }}</p><p>Site : {{ bande.site or '—' }}</p><p>Édité le {{ today|date_fr }}</p></div>
+  </div>
+  <div class="fiche-totaux">
+    <div><b>{{ totaux.truies }}</b><small>Truies</small></div>
+    <div><b>{{ totaux.nes_totaux }}</b><small>Nés totaux</small></div>
+    <div><b>{{ totaux.nes_vifs }}</b><small>Nés vifs</small></div>
+    <div><b>{{ totaux.mort_nes }}</b><small>Mort-nés</small></div>
+    <div><b>{{ totaux.momifies }}</b><small>Momifiés</small></div>
+    <div><b>{{ totaux.nb_sevres }}</b><small>Sevrés (à date)</small></div>
+  </div>
+  <table class="fiche-table"><thead><tr><th>N° travail</th><th>Rang</th><th>Race</th><th>NT</th><th>NV</th><th>Mort-nés</th><th>Momifiés</th><th>Sevrés</th></tr></thead><tbody>
+  {% for l in lignes %}<tr><td>{{ l.num_travail or '—' }}</td><td>{{ l.rang if l.rang is not none else '—' }}</td><td>{{ l.race or '—' }}</td><td>{{ l.nes_totaux if l.nes_totaux is not none else '—' }}</td><td>{{ l.nes_vifs if l.nes_vifs is not none else '—' }}</td><td>{{ l.mort_nes if l.mort_nes is not none else '—' }}</td><td>{{ l.momifies if l.momifies is not none else '—' }}</td><td>{{ l.nb_sevres if l.nb_sevres is not none else '—' }}</td></tr>
+  {% else %}<tr><td colspan="8" class="rust-empty">Aucune mise-bas enregistrée pour cette bande</td></tr>{% endfor %}
+  </tbody></table>
+  <div class="fiche-signature"><div>Signature éleveur</div><div>Signature vétérinaire / contrôle</div></div>
+</div>
+{% endblock %}

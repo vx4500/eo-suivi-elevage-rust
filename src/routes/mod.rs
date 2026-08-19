@@ -54,6 +54,7 @@ pub fn router(state: AppState) -> Router {
         .route("/bande/{id}/marquage", post(bande_marquage))
         .route("/bande/{id}/imprimer", get(bande_imprimer))
         .route("/export/mise-bas/{id}", get(export_mise_bas))
+        .route("/bande/{id}/fiche-mise-bas", get(fiche_mise_bas))
         .route("/bande/{id}/archiver", post(bande_archiver))
         .route("/bande/{id}/desarchiver", post(bande_desarchiver))
         .route("/bande/{id}/supprimer", post(bande_supprimer))
@@ -1697,6 +1698,55 @@ async fn export_mise_bas(
     writer.flush().map_err(|error|AppError::Internal(error.into()))?;
     let mut bytes=vec![0xEF,0xBB,0xBF];bytes.extend(writer.into_inner().map_err(|error|AppError::Internal(error.into_error().into()))?);
     let mut headers=HeaderMap::new();headers.insert(header::CONTENT_TYPE,HeaderValue::from_static("text/csv; charset=utf-8"));headers.insert(header::CONTENT_DISPOSITION,HeaderValue::from_str(&format!("attachment; filename=liste_mise_bas_{}.csv",band.0.replace(' ',"_"))).map_err(|error|AppError::Internal(error.into()))?);Ok((headers,bytes).into_response())
+}
+
+/// Fiche de mise-bas au format A4 définitif (§9 de la spécification) :
+/// export CSV pour l'usage tableur, cette page pour l'impression/archivage
+/// papier du registre d'élevage — même requête de détail que le CSV, mais
+/// mise en page dédiée avec en-tête d'élevage et totaux de bande.
+async fn fiche_mise_bas(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Path(id): Path<i64>,
+) -> AppResult<Html<String>> {
+    let band: (String, Option<String>, Option<String>) =
+        sqlx::query_as("SELECT code,date_mb,site FROM bande WHERE id=?")
+            .bind(id)
+            .fetch_optional(&state.pool)
+            .await?
+            .ok_or(AppError::NotFound)?;
+    let lignes = generic_rows(
+        &state.pool,
+        &format!(
+            "SELECT t.num_travail,t.rang,t.race,e.nes_totaux,e.nes_vifs,e.mort_nes,e.momifies,e.nb_sevres FROM evenement e LEFT JOIN truie t ON t.id=e.truie_id WHERE e.bande_id={id} AND e.type='mise_bas' ORDER BY t.num_travail,e.date"
+        ),
+    )
+    .await?;
+    let totaux = sqlx::query_as::<_, (i64, f64, f64, f64, f64, f64)>(&format!(
+        "SELECT COUNT(*),CAST(COALESCE(SUM(e.nes_totaux),0) AS REAL),CAST(COALESCE(SUM(e.nes_vifs),0) AS REAL),CAST(COALESCE(SUM(e.mort_nes),0) AS REAL),CAST(COALESCE(SUM(e.momifies),0) AS REAL),CAST(COALESCE(SUM(e.nb_sevres),0) AS REAL) FROM evenement e WHERE e.bande_id={id} AND e.type='mise_bas'"
+    ))
+    .fetch_one(&state.pool)
+    .await?;
+    let nom_elevage: Option<String> = sqlx::query_scalar("SELECT valeur FROM parametre WHERE cle='nom_elevage'")
+        .fetch_optional(&state.pool)
+        .await?
+        .flatten();
+    let mut ctx = context(&session);
+    ctx.insert("nom_elevage".into(), json!(nom_elevage));
+    ctx.insert(
+        "bande".into(),
+        json!({"id": id, "code": band.0, "date_mb": band.1, "site": band.2}),
+    );
+    ctx.insert("lignes".into(), Value::Array(lignes));
+    ctx.insert(
+        "totaux".into(),
+        json!({
+            "truies": totaux.0, "nes_totaux": totaux.1, "nes_vifs": totaux.2,
+            "mort_nes": totaux.3, "momifies": totaux.4, "nb_sevres": totaux.5,
+        }),
+    );
+    ctx.insert("today".into(), json!(today_iso()));
+    render(&state, "fiche_mise_bas.html", Value::Object(ctx))
 }
 
 async fn truies_modele_csv()->Response{let body="\u{feff}num_travail;num_national;rfid;race;date_entree;date_naissance;bande_code;note\r\nT001;FR000000001;250000000001;Large White;2026-01-01;2025-01-01;B1.26;Exemple à supprimer\r\n";let mut headers=HeaderMap::new();headers.insert(header::CONTENT_TYPE,HeaderValue::from_static("text/csv; charset=utf-8"));headers.insert(header::CONTENT_DISPOSITION,HeaderValue::from_static("attachment; filename=modele_import_truies.csv"));(headers,body).into_response()}

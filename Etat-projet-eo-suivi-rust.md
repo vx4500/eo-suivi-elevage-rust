@@ -20,9 +20,12 @@ reproduction, les transferts/effectifs, l'économie avec imports PDF, la
 productivité (GTTT centralisé), la vente directe, l'eau/électricité et la
 saisie rapide sont opérationnels. Les 68 routes historiques encore absentes
 après l'audit du 16/08/2026 ont été reliées en 2.2.0 et sont couvertes par un
-test de parité (`tests/route_parity.rs`). Les priorités actuelles portent sur
-la fiabilité des effectifs, la prévision d'aliment, la GTE, les rappels
-sanitaires et la fiche de mise-bas A4.
+test de parité (`tests/route_parity.rs`). Le chantier de mise en conformité
+avec la spécification complète (types d'élevage, réception d'achats, GTE,
+modules optionnels, capacités par étape, prévision d'aliment, rappels
+sanitaires, fiche de mise-bas A4 — voir §8) a couvert ses 7 phases fin
+août 2026 ; la priorité actuelle porte sur la fiabilité des effectifs
+(anciens inventaires incohérents) et les demandes en attente du §3.
 
 ---
 
@@ -307,7 +310,15 @@ gros commit unique sur une application en production.
       rappels verrats ne sont pas couverts (`acterealise.bande_id` est
       obligatoire, un verrat n'appartient pas à une bande) — resterait à
       traiter dans un incrément dédié si le besoin se confirme.
-- [ ] **Phase 7 — Fiche de mise-bas au format A4 définitif** (actuellement
-      export CSV uniquement, §9 de la spécification).
+- [x] **Phase 7 — Fiche de mise-bas au format A4 définitif (§9).** Nouvel
+      écran `/bande/{id}/fiche-mise-bas`, mise en page dédiée (`@page { size:
+      A4; margin: 15mm; }`) distincte du dump générique `impression.html` :
+      en-tête avec nom d'élevage (paramètre `nom_elevage`), code de bande,
+      date de mise-bas et site, ligne de totaux (truies, nés totaux/vifs,
+      mort-nés, momifiés, sevrés), tableau détaillé par truie (même requête
+      que l'export CSV existant, pour rester cohérent entre les deux formats)
+      et zone de signature éleveur/vétérinaire pour l'archivage papier du
+      registre d'élevage. Lien ajouté sur la fiche bande, à côté de l'export
+      CSV existant. Vérifié en conditions réelles avec et sans données.
 
 Chaque case cochée référence sa PR dans l'historique Git de ce dépôt.
