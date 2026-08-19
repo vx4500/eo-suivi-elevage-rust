@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Import machine à soupe · EO-Suivi{% endblock %}
+{% block content %}
+<h1>Aperçu de l'import machine à soupe</h1>
+<p><b>Fichier :</b> {{ nom_fichier }}</p>
+<div class="rust-grid">
+  <div class="card"><h3>Gâchées à importer</h3><strong>{{ nb_gachees }}</strong></div>
+  <div class="card"><h3>Déjà importées (ignorées)</h3><strong>{{ nb_ignorees }}</strong></div>
+</div>
+<form method="post" action="/aliment-previsions/machine-soupe/confirmer">
+<input type="hidden" name="csrf_token" value="{{ session.csrf }}"><input type="hidden" name="token" value="{{ token }}">
+<p>Relie chaque produit trouvé à un silo avant de valider — rien n'est deviné automatiquement.</p>
+<div class="rust-scroll"><table><thead><tr><th>Produit (nom machine)</th><th>Gâchées</th><th>Quantité reçue cumulée</th><th>Silo</th></tr></thead><tbody>
+{% for p in produits %}<tr>
+<td><b>{{ p.nom }}</b></td>
+<td>{{ p.nb_gachees }}</td>
+<td>{{ p.total_recue }}</td>
+<td><select name="silo_{{ loop.index0 }}" required>
+<option value="" disabled {% if not silos %}selected{% endif %}>— choisir —</option>
+{% for s in silos %}<option value="{{ s.id }}" {% if s.nom|lower == p.nom|lower %}selected{% endif %}>{{ s.nom }}</option>{% endfor %}
+<option value="nouveau:{{ p.nom }}" {% if silos %}{% else %}selected{% endif %}>Nouveau silo « {{ p.nom }} »</option>
+</select></td>
+</tr>{% endfor %}
+</tbody></table></div>
+<div class="rust-actions">
+<button {% if not produits %}disabled{% endif %}>Confirmer et enregistrer</button>
+</div>
+</form>
+<form method="post" action="/aliment-previsions/machine-soupe/annuler"><input type="hidden" name="csrf_token" value="{{ session.csrf }}"><input type="hidden" name="token" value="{{ token }}"><button class="ghost">Annuler cet import</button></form>
+{% endblock %}

@@ -1,4 +1,4 @@
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -32,6 +32,10 @@ pub fn extract_pdf_text(bytes: &[u8]) -> Result<String, String> {
         return Err("Le fichier ne possède pas une signature PDF valide".into());
     }
     let document = lopdf::Document::load_mem(bytes)
+        .or_else(|_| match repair_startxref_offset(bytes) {
+            Some(patched) => lopdf::Document::load_mem(&patched),
+            None => lopdf::Document::load_mem(bytes),
+        })
         .map_err(|_| "Le PDF est illisible, chiffré ou endommagé".to_string())?;
     let pages: Vec<u32> = document.get_pages().keys().copied().collect();
     if pages.is_empty() {
@@ -52,6 +56,54 @@ pub fn extract_pdf_text(bytes: &[u8]) -> Result<String, String> {
         );
     }
     Ok(text)
+}
+
+/// Certains logiciels d'export (constaté avec « LDPRX » sur un bordereau
+/// Cooperl) écrivent un octet `startxref` qui ne pointe pas exactement sur le
+/// mot-clé `xref` — probablement un bug de génération sur leur normalisation
+/// des fins de ligne. lopdf refuse alors le fichier entier
+/// (`ParseError::InvalidTrailer`) alors que le contenu est par ailleurs
+/// intact. Si la table `xref` classique existe bien dans le fichier, on
+/// corrige uniquement le nombre après `startxref` pour qu'il pointe dessus,
+/// et on retente le chargement. Ne traite pas les xref sous forme de flux
+/// (PDF avec compression d'objets), qui n'ont pas de mot-clé `xref` littéral.
+fn repair_startxref_offset(bytes: &[u8]) -> Option<Vec<u8>> {
+    let start_marker = b"startxref";
+    let start_pos = bytes.windows(start_marker.len()).rposition(|window| window == start_marker)?;
+    let digits_start = bytes[start_pos + start_marker.len()..]
+        .iter()
+        .position(|byte| byte.is_ascii_digit())
+        .map(|offset| start_pos + start_marker.len() + offset)?;
+    let digits_end = bytes[digits_start..]
+        .iter()
+        .position(|byte| !byte.is_ascii_digit())
+        .map(|offset| digits_start + offset)?;
+    let declared: usize = std::str::from_utf8(&bytes[digits_start..digits_end])
+        .ok()?
+        .parse()
+        .ok()?;
+
+    // Le mot-clé xref est toujours en tête de ligne ; on cherche la dernière
+    // occurrence avant `startxref`, pour ignorer le "xref" contenu dans
+    // "startxref" lui-même et dans le contenu des pages.
+    let search_area = &bytes[..start_pos];
+    let xref_pos = [b"\nxref\r\n".as_slice(), b"\nxref\n".as_slice()]
+        .into_iter()
+        .filter_map(|pattern| {
+            search_area
+                .windows(pattern.len())
+                .rposition(|window| window == pattern)
+                .map(|position| position + 1) // avance sur le '\n' de tête
+        })
+        .max()?;
+
+    if xref_pos == declared {
+        return None; // l'offset déclaré était déjà correct, rien à réparer
+    }
+
+    let mut patched = bytes.to_vec();
+    patched.splice(digits_start..digits_end, xref_pos.to_string().into_bytes());
+    Some(patched)
 }
 
 pub fn parse_document(text: &str) -> Result<ImportDocument, String> {
@@ -140,12 +192,20 @@ fn integer(raw: &str) -> Option<i64> {
 
 fn iso_date(raw: &str) -> Option<String> {
     let normalized = raw.trim().replace('.', "/");
-    for format in ["%d/%m/%Y", "%d/%m/%y"] {
-        if let Ok(date) = NaiveDate::parse_from_str(&normalized, format) {
-            return Some(date.format("%Y-%m-%d").to_string());
-        }
-    }
-    None
+    // `%Y` de chrono accepte aussi une année à 2 chiffres (il n'exige pas 4
+    // chiffres à la lecture), donc "27/07/26" est déjà accepté par ce
+    // premier format — silencieusement interprété comme l'an 26 et non
+    // 2026. Un vrai bug trouvé en analysant de vrais bordereaux Cooperl, qui
+    // écrivent systématiquement leurs dates sur deux chiffres : le seul test
+    // existant avant cette page utilisait une année à 4 chiffres et ne
+    // l'exerçait donc jamais. On applique le même correctif de siècle quel
+    // que soit le format ayant matché — toutes les dates de l'application
+    // appartiennent au 21e siècle.
+    let date = NaiveDate::parse_from_str(&normalized, "%d/%m/%Y")
+        .or_else(|_| NaiveDate::parse_from_str(&normalized, "%d/%m/%y"))
+        .ok()?;
+    let year = if date.year() < 100 { date.year() + 2000 } else { date.year() };
+    NaiveDate::from_ymd_opt(year, date.month(), date.day()).map(|date| date.format("%Y-%m-%d").to_string())
 }
 
 fn document_sign(text: &str) -> f64 {
@@ -383,12 +443,33 @@ fn parse_semence(text: &str) -> Result<ImportDocument, String> {
 
 fn parse_genetique(text: &str) -> Result<ImportDocument, String> {
     let compact: String = text.chars().filter(|character| !character.is_whitespace()).collect();
+    // Sur le modèle « duplicata » réellement produit par Cooperl (le même
+    // que pour les apports/factures d'aliment), les libellés « FACTURE N° »,
+    // « NET A PAYER » et « BASE H.T. » font partie du fond de page (image),
+    // pas du texte extrait : aucun ne s'y trouve jamais. Le seul repère
+    // fiable est le numéro de document lui-même (« 14.41649 »), qui suit
+    // « Semaine N° JJ.SS » sur la même ligne. Sans ce correctif, la
+    // référence restait toujours vide (confondant toutes les factures et
+    // tous les avoirs entre eux à l'import) et les montants n'étaient
+    // jamais trouvés (l'import génétique échouait purement et simplement
+    // sur un vrai document — vérifié sur onze bordereaux réels).
     let reference = capture(
-        &compact,
-        r"(?i)FACTUREN[°ºo]*([0-9.]+)",
+        text,
+        r"(?i)Semaine\s*N[°ºo]?\s*[0-9.]+\s+([0-9]{1,2}\.[0-9]{4,6})",
         1,
     )
+    .or_else(|| capture(text, r"\b([0-9]{1,2}\.[0-9]{4,6})\b", 1))
     .map(|value| value.replace('.', ""));
+    // Un avoir renvoie vers la facture qu'il annule ; on le garde dans le
+    // libellé (la table `achatgenetique` n'a pas de colonne dédiée, et
+    // ajouter une migration pour une seule information d'affichage aurait
+    // été disproportionné) pour que facture et avoir restent traçables l'un
+    // à l'autre même si l'éleveur ne les importe pas le même jour.
+    let avoir_facture = capture(
+        &compact,
+        r"(?i)AVOIRSURFACTURE\s*N[Oo°]?\s*([0-9]+)",
+        1,
+    );
     let date = capture(
         text,
         r"(?i)\bLE\s*([0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4})",
@@ -402,7 +483,13 @@ fn parse_genetique(text: &str) -> Result<ImportDocument, String> {
         )
     })
     .and_then(|value| iso_date(&value));
-    let animals = Regex::new(r"(?m)^([0-9]+)\s+COCHETTE\s+\w+\s+[0-9]+\s+([0-9.,]+)")
+    // `-?` après le nombre d'animaux et après le poids : sur un avoir, les
+    // quantités sont elles-mêmes écrites en négatif dans la colonne
+    // (« 27-   COCHETTE SERENIS ... 3255,000- »). Sans ce `-?`, la ligne ne
+    // commençait pas par des chiffres suivis d'un espace et n'était jamais
+    // reconnue : un avoir donnait 0 animal et 0 kg, quelle que soit sa
+    // taille réelle.
+    let animals = Regex::new(r"(?m)^\s*([0-9]+)-?\s+COCHETTE\s+\w+\s+[0-9]+\s+([0-9.,]+)-?")
         .map_err(|error| format!("analyse génétique indisponible: {error}"))?;
     let mut count = 0_i64;
     let mut weight = 0.0;
@@ -416,41 +503,53 @@ fn parse_genetique(text: &str) -> Result<ImportDocument, String> {
         1,
     )
     .and_then(|value| number(&value));
-    let net = capture(&compact, r"(?i)NETAPAYER([0-9.,]+-?)", 1)
-        .or_else(|| capture(&compact, r"(?i)TOTALT\.?T\.?C\.?([0-9.,]+-?)", 1))
-        .and_then(|value| number(&value));
-    let ht = capture(&compact, r"(?i)BASEH\.?T\.?([0-9.,]+-?)", 1)
-        .and_then(|value| number(&value));
-    let forced_credit = matches!(reference.as_deref(), Some("1443203" | "1441836"));
-    let signed_credit = net.is_some_and(|value| value < 0.0) || ht.is_some_and(|value| value < 0.0);
-    let sign = if forced_credit || signed_credit { -1.0 } else { document_sign(text) };
-    let amount = net.or(ht).map(|value| value.abs() * sign);
-    let label = format!(
-        "{}{}",
-        if sign < 0.0 { "AVOIR — " } else { "" },
-        if count > 0 {
-            format!("{count} cochettes")
-        } else {
-            "Cochettes / reproducteurs".into()
-        }
-    );
+    // La ligne de synthèse TVA (« 10400,65   2 5,5%   572,04   10972,69 »,
+    // ou sa variante négative sur un avoir) est la seule source fiable de
+    // BASE H.T. et TOTAL T.T.C. sur ce modèle sans libellés. Le signe des
+    // montants (tiret final sur chaque nombre côté avoir) donne directement
+    // le sens du document — plus besoin d'une liste de références codées en
+    // dur comme avant, qui ne fonctionnait de toute façon plus depuis que
+    // la référence n'était jamais extraite.
+    let recap = Regex::new(r"(?m)^\s*([0-9.,]+-?)\s+[0-9]\s+[0-9]+,[0-9]+%\s+([0-9.,]+-?)\s+([0-9.,]+-?)")
+        .ok()
+        .and_then(|regex| regex.captures(text));
+    let ht = recap.as_ref().and_then(|row| row.get(1)).and_then(|value| number(value.as_str()));
+    let ttc = recap.as_ref().and_then(|row| row.get(3)).and_then(|value| number(value.as_str()));
+    let is_avoir = ht.is_some_and(|value| value < 0.0)
+        || ttc.is_some_and(|value| value < 0.0)
+        || document_sign(text) < 0.0
+        || avoir_facture.is_some();
+    let sign = if is_avoir { -1.0 } else { 1.0 };
+    let amount = ttc.or(ht).map(|value| value.abs() * sign);
+    let base_label = if count > 0 {
+        format!("{count} cochettes")
+    } else {
+        "Cochettes / reproducteurs".into()
+    };
+    let label = match (sign < 0.0, avoir_facture.as_deref()) {
+        (true, Some(facture)) => format!("AVOIR — {base_label} (sur facture {facture})"),
+        (true, None) => format!("AVOIR — {base_label}"),
+        (false, _) => base_label,
+    };
     let line = ImportLine {
         kind: "genetique".into(),
         date: date.clone(),
         reference: reference.clone(),
         label: label.clone(),
-        quantity: (count > 0).then_some(count as f64),
+        quantity: (count > 0).then_some(count as f64 * sign),
         unit_price: average,
         amount,
         details: json!({
             "fournisseur": "Cooperl",
             "designation": label,
             "nb_animaux": (count > 0).then_some(count),
-            "poids_total": (weight > 0.0).then_some((weight * 10.0).round() / 10.0),
+            "poids_total": (weight != 0.0).then_some((weight.abs() * 10.0).round() / 10.0 * sign),
             "prix_moyen": average,
             "montant_ht": ht.map(|value| value.abs() * sign),
-            "montant_net": net.map(|value| value.abs() * sign),
+            "montant_net": ttc.map(|value| value.abs() * sign),
             "num_facture": reference,
+            "avoir": sign < 0.0,
+            "facture_liee": avoir_facture,
         }),
     };
     finish_document("génétique", vec![line], reference, date)
@@ -476,6 +575,14 @@ fn parse_apport(text: &str) -> Result<ImportDocument, String> {
         1,
     )
     .or_else(|| capture(text, r"(?i)D\s*U\s+([0-9]{2}/[0-9]{2}/[0-9]{2,4})", 1))
+    // Sur le modèle Cooperl réellement utilisé (« duplicata » comme
+    // « bordereau simplifié »), le libellé « ENLEVEMENT DU » fait partie du
+    // fond de page (image), pas du texte extrait : seule la date reste,
+    // seule sur sa ligne, juste avant le profil d'élevage
+    // (NAISSEUR/ENGRAISSEUR...). La date « LE JJ/MM/AA » du même bloc est
+    // la date de facturation, pas la date d'enlèvement — donc à ne prendre
+    // qu'en dernier recours.
+    .or_else(|| capture(text, r"(?im)^[ \t]*([0-9]{1,2}/[0-9]{2}/[0-9]{2,4})[ \t]*$", 1))
     .or_else(|| capture(text, r"(?i)\bLE\s*([0-9]{2}/[0-9]{2}/[0-9]{2,4})", 1))
     .and_then(|value| iso_date(&value));
     let week = capture(text, r"(?i)Semaine\s*N[°ºo]?\s*([0-9./]+)", 1);
@@ -923,6 +1030,94 @@ fn finish_document(
 mod tests {
     use super::*;
 
+    /// Construit un mini-PDF valide à la main (table xref classique), pour
+    /// reproduire précisément l'offset `startxref` sans dépendre de l'API
+    /// d'écriture de lopdf.
+    fn build_minimal_pdf(body_text: &str) -> Vec<u8> {
+        let mut buffer = Vec::new();
+        let mut offsets = Vec::new();
+        buffer.extend_from_slice(b"%PDF-1.4\n");
+        let objects = [
+            "1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n".to_string(),
+            "2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n".to_string(),
+            "3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>endobj\n".to_string(),
+            {
+                let content = format!("BT /F1 24 Tf 10 100 Td ({body_text}) Tj ET\n");
+                format!(
+                    "4 0 obj<</Length {}>>stream\n{content}endstream\nendobj\n",
+                    content.len()
+                )
+            },
+            "5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj\n".to_string(),
+        ];
+        for object in &objects {
+            offsets.push(buffer.len());
+            buffer.extend_from_slice(object.as_bytes());
+        }
+        let xref_pos = buffer.len();
+        buffer.extend_from_slice(b"xref\n0 6\n0000000000 65535 f \n");
+        for offset in &offsets {
+            buffer.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        buffer.extend_from_slice(b"trailer<</Size 6/Root 1 0 R>>\nstartxref\n");
+        buffer.extend_from_slice(format!("{xref_pos}\n%%EOF").as_bytes());
+        buffer
+    }
+
+    #[test]
+    fn repare_un_startxref_decale_comme_le_produit_ldprx() {
+        let good = build_minimal_pdf("Bon n 1");
+        assert!(lopdf::Document::load_mem(&good).is_ok(), "le PDF de référence doit être valide");
+
+        // Décale l'offset déclaré de +31 octets, exactement le décalage
+        // observé sur un vrai bordereau Cooperl généré par LDPRX 4.54.
+        let marker = b"startxref\n";
+        let start = good.windows(marker.len()).rposition(|w| w == marker).unwrap() + marker.len();
+        let end = good[start..].iter().position(|b| !b.is_ascii_digit()).unwrap() + start;
+        let real_offset: usize = std::str::from_utf8(&good[start..end]).unwrap().parse().unwrap();
+        let mut broken = good.clone();
+        broken.splice(start..end, (real_offset + 31).to_string().into_bytes());
+
+        assert!(
+            lopdf::Document::load_mem(&broken).is_err(),
+            "ce cas doit reproduire l'échec observé (offset startxref invalide)"
+        );
+
+        let patched = repair_startxref_offset(&broken).expect("la réparation doit trouver le vrai xref");
+        let repaired_document = lopdf::Document::load_mem(&patched).expect("le PDF réparé doit se charger");
+        let pages: Vec<u32> = repaired_document.get_pages().keys().copied().collect();
+        let text = repaired_document.extract_text_with_limit(&pages, MAX_DECOMPRESSED_PAGE).unwrap();
+        assert!(text.contains("Bon n 1"), "le texte du PDF réparé doit rester lisible, obtenu: {text:?}");
+    }
+
+    #[test]
+    fn ne_touche_pas_un_startxref_deja_correct() {
+        let good = build_minimal_pdf("Bon n 1");
+        assert!(repair_startxref_offset(&good).is_none());
+    }
+
+    #[test]
+    #[ignore]
+    fn dump_pdf_temporaire() {
+        let path = std::env::var("DUMP_PDF").expect("DUMP_PDF non défini");
+        let bytes = std::fs::read(&path).expect("lecture PDF");
+        let text = extract_pdf_text(&bytes).expect("extraction texte");
+        println!("=====8<===== {path}\n{text}\n=====>8=====");
+        match parse_document(&text) {
+            Ok(document) => println!("PARSED: {document:#?}"),
+            Err(error) => println!("PARSE ERROR: {error}"),
+        }
+    }
+
+    #[test]
+    fn date_a_deux_chiffres_prend_le_21e_siecle() {
+        // chrono seul renvoie l'an 26, pas 2026, pour "%d/%m/%y" — vérifié
+        // en écrivant ce test après l'avoir constaté sur de vrais bordereaux.
+        assert_eq!(iso_date("27/07/26"), Some("2026-07-27".to_string()));
+        assert_eq!(iso_date("3/07/26"), Some("2026-07-03".to_string()));
+        assert_eq!(iso_date("16/08/2026"), Some("2026-08-16".to_string()));
+    }
+
     #[test]
     fn nombres_francais_et_avoirs() {
         assert_eq!(number("1 234,56"), Some(1234.56));
@@ -965,6 +1160,52 @@ mod tests {
     }
 
     #[test]
+    fn apport_repartit_deux_bons_sur_la_meme_facture() {
+        // Chiffres réels d'un bordereau Cooperl à deux lots (APPORT N°
+        // 226081270686, ORY EMMANUEL, deux Bon n° 35776/35777 dans une même
+        // facture) — reproduit dans la mise en forme que produit
+        // extract_pdf_text sur ce type de document (labels d'en-tête absents
+        // du texte extrait, dates isolées sur leur ligne).
+        let text = "APPORT N°   226081270686\nAPPORT DE PORCS CHARCUTIERS\nSemaine N° 26.31\n16961             LE 4/08/26\nN° TVA:\n27/07/26\nV/ID :FR06510329899\nNAISSEUR/ENGRAISSEUR\nDestination : COOPERL ARC ATL MONTFORT   Bon n° 35776\n 1 SAISI 2 DA915 107,100\n 29 PORC (COEUR DE GAMME) 2 DA915 2542,700 1,625 4.133,12\n 2 PORC SAISIE PARTIELLE 2 DA915 169,300 1,408 238,42\n 1 LOURD P4 106,1 A 107 KG 2 DA915 103,800 1,566 162,55\n 9 LEGER P2 73 A 77,9 KG 2 DA915 666,900 1,449 966,21\n 16 LEGER P3 78 A 82,9 KG 2 DA915 1252,800 1,557 1.950,97\n 2 LEGER P3 78 A 82,9 KG CS 2 DA915 149,900 1,379 206,64\n 6 LEGER P1 45,0 A 72,9 KG 2 DA915 404,900 1,300 526,52\n 2 LEGER P1 45,0 A 72,9 KG CS 2 DA915 119,900 1,035 124,09\n Total Bon..... 5517,300 8.855,10\n % de muscle: de la gamme 62,7 du lot 62,8 + Value Technique: 10,07 cts\nDestination : COOPERL ARC ATL MONTFORT   Bon n° 35777\n 1 CREVE RESP. PARTAGEE 2 G6KL 43,900 1,585 69,58\n 45 PORC (COEUR DE GAMME) 2 G6KL 4036,800 1,572 6.345,90\n 2 PORC SAISIE PARTIELLE 2 G6KL 169,300 1,446 244,88\n 1 PORC 103,1 A 105 KG 2 G6KL 100,700 1,495 150,54\n 1 LOURD P4 106,1 A 107 KG 2 G6KL 103,800 1,525 158,29\n 1 LOURD P4 109,1 A 110 KG 2 G6KL 106,900 1,435 153,40\n 1 LOURD P4 111,1 A 112 KG 2 G6KL 108,800 1,395 151,77\n 1 LOURD P4 112,1 A 113 KG 2 G6KL 109,200 1,245 135,95\n 3 LEGER P2 73 A 77,9 KG 2 G6KL 219,900 1,379 303,32\n 9 LEGER P3 78 A 82,9 KG 2 G6KL 700,300 1,519 1.063,46\n 1 LEGER P1 45,0 A 72,9 KG CS 2 G6KL 60,400 1,035 62,51\n Total Bon..... 5760,000 9.607,76\n % de muscle: de la gamme 59,9 du lot 59,9 + Value Technique: 9,93 cts\n134 : NOMBRE D'ANIMAUX POIDS TOTAL : 11277,300\nNET A PAYER E 19.465,50 E";
+        let Ok(parsed) = parse_document(text) else {
+            panic!("le bordereau à deux lots doit être analysé");
+        };
+        let ventes: Vec<_> = parsed.lines.iter().filter(|line| line.kind == "vente").collect();
+        assert_eq!(ventes.len(), 2, "les deux Bon n° doivent produire deux lignes de vente distinctes, obtenu {ventes:?}");
+
+        // Date : "27/07/26", seule sur sa ligne (l'enlèvement), pas "4/08/26"
+        // qui suit "LE" (la facturation).
+        assert_eq!(ventes[0].date.as_deref(), Some("2026-07-27"));
+
+        assert_eq!(ventes[0].quantity, Some(68.0));
+        assert_eq!(ventes[1].quantity, Some(66.0));
+        assert_eq!(ventes[0].details.get("poids_total").and_then(Value::as_f64), Some(5517.3));
+        assert_eq!(ventes[1].details.get("poids_total").and_then(Value::as_f64), Some(5760.0));
+
+        // Le net à payer global (19 465,50) se répartit au prorata du
+        // montant brut de chaque lot (8 855,10 / 9 607,76).
+        assert_eq!(ventes[0].amount, Some(9335.98));
+        assert_eq!(ventes[1].amount, Some(10129.52));
+
+        assert_eq!(ventes[0].details.get("muscle_lot").and_then(Value::as_f64), Some(62.8));
+        assert_eq!(ventes[1].details.get("muscle_lot").and_then(Value::as_f64), Some(59.9));
+    }
+
+    #[test]
+    fn apport_prend_la_date_denlevement_pas_la_date_de_facturation() {
+        // Sur le modèle « duplicata » réellement utilisé, seule la date
+        // reste dans le texte extrait (le libellé ENLEVEMENT DU fait partie
+        // du fond de page) : "LE 11/07/26" est la date de facturation,
+        // "3/07/26" seule sur sa ligne est la vraie date d'enlèvement.
+        let text = "APPORT N° 226071267848\nAPPORT DE PORCS CHARCUTIERS\nSemaine N° 26.27\n16961             LE 11/07/26\nN° TVA :       V/ID : FR06510329899\n             3/07/26\n                     NAISSEUR/ENGRAISSEUR\n Destination =    COOPERL LAMBALLE          Bon n°  10831\n 1 PORC (COEUR DE GAMME) 60 % 2 DA915 94,500 1,580 149,31\n Total bon..... 6334,700 10.569,44\nNET A PAYER 11.145,80";
+        let Ok(parsed) = parse_document(text) else {
+            panic!("le document d'apport doit être analysé");
+        };
+        let vente = parsed.lines.iter().find(|line| line.kind == "vente").expect("une ligne de vente");
+        assert_eq!(vente.date.as_deref(), Some("2026-07-03"));
+    }
+
+    #[test]
     fn semence_avoir_force_des_montants_negatifs() {
         let text = "YXIA SEMENCE AVOIR FAC2026001\nDATE : 16/08/2026\n20 BLISTER LIFE\nTOTAL HT 1 392,50\nTOTAL TTC 1 671,00";
         let Ok(parsed) = parse_document(text) else {
@@ -975,13 +1216,43 @@ mod tests {
     }
 
     #[test]
-    fn genetique_reclasse_les_deux_avoirs_connus_et_le_signe_final() {
-        for (reference, amount) in [("1443203", "11.153,72"), ("1441836", "8.400,00-")] {
-            let text = format!("FACTURE N° {reference}\nANIMAUX REPRODUCTEURS\n1 COCHETTE LW 100 120,00\nNET A PAYER {amount}");
-            let parsed = parse_document(&text).expect("la facture génétique doit être reconnue");
-            assert!(parsed.lines[0].label.starts_with("AVOIR"));
-            assert!(parsed.lines[0].amount.is_some_and(|value| value < 0.0));
-        }
+    fn genetique_reconnait_une_vraie_facture() {
+        // Texte réel (extrait via extract_pdf_text) d'une facture Cooperl
+        // « ANIMAUX REPRODUCTEURS » — aucun libellé « FACTURE N° »,
+        // « NET A PAYER » ni « BASE H.T. » n'existe sur ce modèle (fond de
+        // page image) : seuls la ligne « Semaine N° » et le tableau de TVA
+        // sans en-tête portent l'information exploitable.
+        let text = "D  U  P  L  I  C  A  T  A\nSemaine N°  25.30                    14.41649\n                                                        EI  ORY EMMANUEL\n          ANIMAUX REPRODUCTEURS                         33 LA MELTIERE\n                                                        CHAPELLE-ERBREE (LA)\n           16961             LE 29/07/25\n V/ID : FR06510329899                                   35500  CHAPELLE-ERBREE (LA)\n             21/07/25                 897\n   Livré chez     ELFA ORY EMMANUEL         302 LA BASSE CHEVRIE\n      27    COCHETTE SERENIS                     2            3255,000      1,43     4.654,65\n      26    PRIME COCHETTE SERENIS               2                        197,00     5.122,00\n      26    SERVICE COCHETTE                     2                         24,00       624,00\n       1    COCHETTE SERENIS                     2             120,000\n  ***  Prix moyen reproducteurs hors transport        349,16\n      28                                                      3375,000\n      10400,65    2 5,5%        572,04    10972,69\n        16961            14.41649    MODE DE REGLEMENT =\n        29/07/25                     -------------------\n       10.400,65\n          572,04\n       10.972,69\n       10.972,69\n        11/08/25        10.972,69    VALEUR EN NOTRE TRAITE AU  11/08/25";
+        let parsed = parse_document(text).expect("la facture génétique réelle doit être reconnue");
+        let line = &parsed.lines[0];
+        assert_eq!(line.reference.as_deref(), Some("1441649"));
+        assert_eq!(line.date.as_deref(), Some("2025-07-29"));
+        assert_eq!(line.quantity, Some(28.0));
+        assert_eq!(line.amount, Some(10972.69));
+        assert_eq!(line.details.get("montant_ht").and_then(Value::as_f64), Some(10400.65));
+        assert_eq!(line.details.get("avoir").and_then(Value::as_bool), Some(false));
+        assert!(!line.label.starts_with("AVOIR"));
+    }
+
+    #[test]
+    fn genetique_reconnait_un_vrai_avoir_et_le_relie_a_sa_facture() {
+        // Texte réel d'un avoir Cooperl sur la même facture que le test
+        // précédent (14.41649 → 1441649). Les quantités et montants sont
+        // déjà négatifs dans le texte extrait (tiret final sur chaque
+        // nombre) ; la bannière « **** A V O I R ****» a ses lettres
+        // espacées par le générateur du PDF et ne matche donc jamais
+        // `\bAVOIR\b`, contrairement à « AVOIR SUR FACTURE » qui, lui, est
+        // en toutes lettres.
+        let text = "D  U  P  L  I  C  A  T  A\nSemaine N°  25.30                    14.41836\n                         **** A V O I R ****            EI  ORY EMMANUEL\n          ANIMAUX REPRODUCTEURS                         33 LA MELTIERE\n                                                        CHAPELLE-ERBREE (LA)\n           16961             LE 12/08/25\n V/ID : FR06510329899                                   35500  CHAPELLE-ERBREE (LA)\n             21/07/25               10750\n AVOIR SUR FACTURE NO 1441649\n ----------------------------\n      26-   PRODUIT COTISATION AUJESKY           2                          3,05        79,30-\n      27-   COCHETTE SERENIS                     2            3255,000-     1,43     4.654,65-\n       1-   COCHETTE SERENIS                     2             120,000-     1,43       171,60-\n      26-   SERVICE COCHETTE                     2                         24,00       624,00-\n      26-   PRIME COCHETTE SERENIS               2                        193,95     5.042,70-\n  ***  Prix moyen reproducteurs hors transport        352,46\n      28-                                                     3375,000-\n      10572,25-   2 5,5%        581,47-   11153,72-\n        16961            14.41836\n        12/08/25       --AVOIR--\n       10.572,25-\n          581,47-\n       11.153,72-\n       11.153,72-\n                        11.153,72-                          **** A V O I R ****";
+        let parsed = parse_document(text).expect("l'avoir génétique réel doit être reconnu");
+        let line = &parsed.lines[0];
+        assert_eq!(line.reference.as_deref(), Some("1441836"));
+        assert_eq!(line.quantity, Some(-28.0));
+        assert_eq!(line.amount, Some(-11153.72));
+        assert_eq!(line.details.get("montant_ht").and_then(Value::as_f64), Some(-10572.25));
+        assert_eq!(line.details.get("avoir").and_then(Value::as_bool), Some(true));
+        assert_eq!(line.details.get("facture_liee").and_then(Value::as_str), Some("1441649"));
+        assert_eq!(line.label, "AVOIR — 28 cochettes (sur facture 1441649)");
     }
 
     #[test]

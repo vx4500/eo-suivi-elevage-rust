@@ -3,6 +3,7 @@ mod config;
 mod db;
 mod economic_import;
 mod error;
+mod machine_soupe;
 mod models;
 mod routes;
 mod templates;
