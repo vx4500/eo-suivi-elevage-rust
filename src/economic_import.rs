@@ -231,9 +231,14 @@ fn document_sign(text: &str) -> f64 {
 }
 
 fn parse_aliment(text: &str) -> Result<ImportDocument, String> {
+    // Le numéro de facture est normalement précédé de « FACTURE N° », mais
+    // certains bordereaux (constaté sur une facture aliment réelle, 38.pdf)
+    // ne conservent que la forme abrégée « Fact.N° » à l'extraction lopdf —
+    // le mot complet « FACTURE » disparaît du texte, probablement rendu hors
+    // flux principal. « FACT(?:URE)? » couvre les deux cas.
     let reference = capture(
         text,
-        r"(?i)ACTURE\s*N[°ºo:]*\s*([0-9][0-9. ]{4,})",
+        r"(?i)FACT(?:URE)?\.?\s*N[°ºo:]*\s*([0-9][0-9. ]{4,})",
         1,
     )
     .map(|value| value.replace(['.', ' '], ""));
@@ -1154,14 +1159,18 @@ mod tests {
     fn aliment_reconnu_meme_sans_entete_de_tableau() {
         // Texte réel (extrait via extract_pdf_text) d'une facture aliment
         // Cooperl où lopdf ne restitue pas la ligne d'en-tête « Désignation
-        // produit / Silos » du tableau — probablement du texte positionné
-        // hors flux principal — alors que les lignes produit sont intactes.
+        // produit / Silos » du tableau, ni le mot complet « FACTURE » (seule
+        // la forme abrégée « Fact.N° » survit) — probablement du texte
+        // positionné hors flux principal — alors que les lignes produit
+        // sont intactes.
         let text = "ALIMENTS 33 LA MELTIERE\nGESTA PLUS               FE    04             3,050 *    287,50   290,50   2       886,02\nMULTI BE CROISSANCE C    FE    02             4,970 *    289,00   292,00   2     1.451,24\nFact.N°\n326070852454\nDATE : 24/07/26";
         let Ok(parsed) = parse_document(text) else {
             panic!("le document aliment sans en-tête doit tout de même être reconnu");
         };
+        assert!(parsed.warnings.is_empty(), "aucun avertissement attendu: {:?}", parsed.warnings);
         assert_eq!(parsed.lines.len(), 2);
         assert_eq!(parsed.lines[0].label, "GESTA PLUS FE");
+        assert_eq!(parsed.lines[0].reference.as_deref(), Some("326070852454"));
     }
 
     #[test]
