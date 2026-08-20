@@ -484,7 +484,7 @@ async fn api_bande_sevrage_estimate(Path(id): Path<i64>, State(state): State<App
 // Fournit la capacité et l'occupation actuelle par case (pour affichage côté client)
 async fn api_cases_capacity(State(state): State<AppState>) -> AppResult<axum::Json<Value>> {
     // retourne: id, nb_max_porcs, occupancy, remaining
-    let cases = generic_rows(&state.pool, "SELECT id,site,salle,nom,nb_max_porcs FROM casesalle ORDER BY site,salle,nom").await?;
+    let cases = generic_rows(&state.pool, "SELECT c.id,COALESCE(si.nom,si.code) AS site,s.nom AS salle,c.nom,c.nb_max_porcs FROM casesalle c JOIN salle s ON s.id=c.salle_id JOIN site si ON si.id=s.site_id ORDER BY site,salle,c.nom").await?;
     let mut out = Vec::new();
     for c in cases {
         if let Some(obj) = c.as_object() {
