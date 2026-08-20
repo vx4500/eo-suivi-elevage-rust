@@ -2,7 +2,7 @@
 {% block content %}
 <div style="max-width:430px;margin:8vh auto" class="card">
   <h1>EO-Suivi Élevage</h1><p class="muted">Version Rust {{ app_version }}</p>
-  {% if error %}<div class="alert" style="background:#fde8ea;color:#9b1c31">{{ error }}</div>{% endif %}
+  {% if error %}<div class="alert danger">{{ error }}</div>{% endif %}
   <form method="post" action="/login">
     <label>Identifiant<input name="identifiant" autocomplete="username" required autofocus></label>
     <label>Mot de passe<input name="mdp" type="password" autocomplete="current-password" required></label>

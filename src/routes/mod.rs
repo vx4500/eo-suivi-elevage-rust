@@ -157,6 +157,7 @@ pub fn router(state: AppState) -> Router {
         .route("/economique/semence/{id}/supprimer", post(economique_semence_supprimer))
         .route("/economique/genetique/{id}/supprimer", post(economique_genetique_supprimer))
         .route("/vente-directe", get(vente_directe))
+        .route("/vente-directe/commandes", get(vente_directe_commandes))
         .route("/vente-directe/produit-ajouter", post(produit_ajouter))
         .route("/vente-directe/produit/{id}", post(produit_modifier))
         .route("/vente-directe/produit/{id}/inventaire", post(produit_inventaire))
@@ -1320,6 +1321,45 @@ async fn bande_detail(
         (false, Some(_)) => "Date de départ dépassée, aucun porc présent".to_string(),
         _ => "Date de mise-bas à renseigner".to_string(),
     };
+    // Indicateurs de présence : 1er départ, durée moyenne de présence, dernier départ.
+    // — "réel" à partir des lots effectivement vendus (venteapport, y compris ceux
+    //   répartis entre plusieurs bandes via lots_json) ;
+    // — "prévision" pour les porcs encore présents, à partir de la date de mise-bas
+    //   et de l'échéance de départ du planning d'élevage.
+    let depart_rows = generic_rows(
+        &state.pool,
+        &format!(
+            "SELECT date,nb_porcs FROM venteapport WHERE bande_id={0} AND date IS NOT NULL AND nb_porcs IS NOT NULL \
+             UNION ALL \
+             SELECT v.date,CAST(json_extract(j.value,'$.nb_porcs') AS INTEGER) FROM venteapport v, json_each(v.lots_json) j \
+             WHERE v.bande_id IS NULL AND json_valid(v.lots_json) AND json_type(v.lots_json)='array' \
+             AND CAST(json_extract(j.value,'$.bande_id') AS INTEGER)={0} AND v.date IS NOT NULL",
+            band.id
+        ),
+    ).await?;
+    let date_mb = band.date_mb.as_deref().and_then(parse_stored_date);
+    let mut premier_depart_reel: Option<NaiveDate> = None;
+    let mut dernier_depart_reel: Option<NaiveDate> = None;
+    let mut total_partis: i64 = 0;
+    let mut jours_ponderes: i64 = 0;
+    for row in &depart_rows {
+        let Some(date) = row.get("date").and_then(Value::as_str).and_then(parse_stored_date) else { continue };
+        let nb = row.get("nb_porcs").and_then(Value::as_i64).unwrap_or(0);
+        if nb <= 0 { continue; }
+        premier_depart_reel = Some(premier_depart_reel.map_or(date, |d| d.min(date)));
+        dernier_depart_reel = Some(dernier_depart_reel.map_or(date, |d| d.max(date)));
+        total_partis += nb;
+        if let Some(mb) = date_mb {
+            jours_ponderes += (date - mb).num_days() * nb;
+        }
+    }
+    let moyenne_jours_presence_reel = (total_partis > 0 && date_mb.is_some())
+        .then(|| jours_ponderes as f64 / total_partis as f64);
+    let prevision_presence = (porcs_presents > 0 && depart_prevu.is_some()).then(|| json!({
+        "premier_depart": depart_prevu.map(|d| d.format("%Y-%m-%d").to_string()),
+        "dernier_depart": depart_prevu.map(|d| d.format("%Y-%m-%d").to_string()),
+        "moyenne_jours_presence": schedule.departure,
+    }));
     let mut ctx = context(&session);
     ctx.insert("bande".into(), serde_json::to_value(&band).unwrap_or_default());
     ctx.insert("truies".into(), serde_json::to_value(&sows).unwrap_or_default());
@@ -1330,7 +1370,17 @@ async fn bande_detail(
         "emplacement_actuel".into(),
         Value::Array(emplacement_actuel),
     );
-    ctx.insert("suivi_porcs".into(), json!({"presents":porcs_presents,"depart_prevu":depart_prevu.map(|d|d.format("%Y-%m-%d").to_string()),"vente_reelle":vente_reelle,"statut":statut_vente,"ecart_jours":ecart_vente}));
+    ctx.insert("suivi_porcs".into(), json!({
+        "presents":porcs_presents,
+        "depart_prevu":depart_prevu.map(|d|d.format("%Y-%m-%d").to_string()),
+        "vente_reelle":vente_reelle,
+        "statut":statut_vente,
+        "ecart_jours":ecart_vente,
+        "premier_depart_reel":premier_depart_reel.map(|d|d.format("%Y-%m-%d").to_string()),
+        "dernier_depart_reel":dernier_depart_reel.map(|d|d.format("%Y-%m-%d").to_string()),
+        "moyenne_jours_presence_reel":moyenne_jours_presence_reel,
+        "prevision":prevision_presence,
+    }));
     ctx.insert(
         "resume".into(),
         json!({
@@ -4623,15 +4673,24 @@ async fn economique_valorisation_supprimer(State(state):State<AppState>,Extensio
 async fn vente_directe(State(state):State<AppState>,Extension(session):Extension<SessionData>)->AppResult<Html<String>>{
     require_writer(&session)?;
     let products=generic_rows(&state.pool,"SELECT id,nom,prix,unite,actif,ordre,quantite_disponible FROM produitventedirecte ORDER BY ordre,nom").await?;
-    let orders=generic_rows(&state.pool,"SELECT c.id,c.cree_le,c.nom_client,c.telephone,c.email,c.notes,c.statut,c.total,c.session_vente_id,s.nom AS session_nom,(SELECT GROUP_CONCAT(l.nom_produit||' × '||l.quantite,', ') FROM lignecommandeventedirecte l WHERE l.commande_id=c.id) AS lignes FROM commandeventedirecte c LEFT JOIN sessionventedirecte s ON s.id=c.session_vente_id ORDER BY c.cree_le DESC,c.id DESC LIMIT 500").await?;
     let sessions=generic_rows(&state.pool,"SELECT id,nom,date_livraison,active FROM sessionventedirecte ORDER BY active DESC,id DESC").await?;
     let settings=generic_rows(&state.pool,"SELECT date_livraison,texte_livraison FROM reglageventedirecte WHERE id=1").await?.into_iter().next().unwrap_or_else(||json!({"date_livraison":null,"texte_livraison":null}));
+    let nb_commandes:i64=sqlx::query_scalar("SELECT COUNT(*) FROM commandeventedirecte").fetch_one(&state.pool).await?;
     let mut ctx=context(&session);
     ctx.insert("produits".into(),Value::Array(products));
-    ctx.insert("commandes".into(),Value::Array(orders));
     ctx.insert("sessions_vente".into(),Value::Array(sessions));
     ctx.insert("reglage".into(),settings);
+    ctx.insert("nb_commandes".into(),json!(nb_commandes));
     render(&state,"vente_directe.html",Value::Object(ctx))
+}
+async fn vente_directe_commandes(State(state):State<AppState>,Extension(session):Extension<SessionData>)->AppResult<Html<String>>{
+    require_writer(&session)?;
+    let orders=generic_rows(&state.pool,"SELECT c.id,c.cree_le,c.nom_client,c.telephone,c.email,c.notes,c.statut,c.total,c.session_vente_id,s.nom AS session_nom,(SELECT GROUP_CONCAT(l.nom_produit||' × '||l.quantite,', ') FROM lignecommandeventedirecte l WHERE l.commande_id=c.id) AS lignes FROM commandeventedirecte c LEFT JOIN sessionventedirecte s ON s.id=c.session_vente_id ORDER BY c.cree_le DESC,c.id DESC LIMIT 500").await?;
+    let sessions=generic_rows(&state.pool,"SELECT id,nom,date_livraison,active FROM sessionventedirecte ORDER BY active DESC,id DESC").await?;
+    let mut ctx=context(&session);
+    ctx.insert("commandes".into(),Value::Array(orders));
+    ctx.insert("sessions_vente".into(),Value::Array(sessions));
+    render(&state,"vente_directe_commandes.html",Value::Object(ctx))
 }
 async fn produit_ajouter(State(state):State<AppState>,Extension(session):Extension<SessionData>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;let name=form_text(&form,"nom").ok_or_else(||AppError::Invalid("Nom obligatoire".into()))?;let price=form_f64(&form,"prix").ok_or_else(||AppError::Invalid("Prix invalide".into()))?;let order:i64=sqlx::query_scalar("SELECT COALESCE(MAX(ordre),0)+1 FROM produitventedirecte").fetch_one(&state.pool).await?;sqlx::query("INSERT INTO produitventedirecte(nom,prix,unite,actif,ordre,quantite_disponible) VALUES(?,?,?,1,?,?)").bind(name).bind(price).bind(form_text(&form,"unite").unwrap_or_else(||"kg".into())).bind(order).bind(form_f64(&form,"quantite_disponible")).execute(&state.pool).await?;Ok(Redirect::to("/vente-directe").into_response())}
 async fn produit_modifier(State(state):State<AppState>,Extension(session):Extension<SessionData>,Path(id):Path<i64>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;let name=form_text(&form,"nom").ok_or_else(||AppError::Invalid("Nom obligatoire".into()))?;let price=form_f64(&form,"prix").filter(|value|*value>=0.0).ok_or_else(||AppError::Invalid("Prix invalide".into()))?;let unit=if form.get("unite").map(String::as_str)==Some("pièce"){"pièce"}else{"kg"};sqlx::query("UPDATE produitventedirecte SET nom=?,prix=?,unite=?,actif=? WHERE id=?").bind(name).bind(price).bind(unit).bind(form.contains_key("actif")).bind(id).execute(&state.pool).await?;Ok(Redirect::to("/vente-directe#produits").into_response())}
@@ -4685,9 +4744,9 @@ async fn produit_deplacer(State(state):State<AppState>,Extension(session):Extens
 
 async fn vente_reglage_livraison(State(state):State<AppState>,Extension(session):Extension<SessionData>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;sqlx::query("INSERT INTO reglageventedirecte(id,date_livraison,texte_livraison) VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET date_livraison=excluded.date_livraison,texte_livraison=excluded.texte_livraison").bind(form_date(&form,"date_livraison")?).bind(form_text(&form,"texte_livraison")).execute(&state.pool).await?;Ok(Redirect::to("/vente-directe").into_response())}
 
-async fn commande_statut(State(state):State<AppState>,Extension(session):Extension<SessionData>,Path(id):Path<i64>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;let new_status=form_text(&form,"statut").unwrap_or_else(||"nouvelle".into());if !matches!(new_status.as_str(),"nouvelle"|"validee"|"preparation"|"prete"|"livree"|"annulee"){return Err(AppError::Invalid("Statut invalide".into()))}let mut tx=state.pool.begin().await?;let old:Option<String>=sqlx::query_scalar("SELECT statut FROM commandeventedirecte WHERE id=?").bind(id).fetch_optional(&mut *tx).await?;let Some(old)=old else{return Err(AppError::NotFound)};let lines=sqlx::query_as::<_,(Option<i64>,f64)>("SELECT produit_id,quantite FROM lignecommandeventedirecte WHERE commande_id=?").bind(id).fetch_all(&mut *tx).await?;if new_status=="annulee"&&old!="annulee"{for(product_id,quantity)in &lines{if let Some(product_id)=product_id{sqlx::query("UPDATE produitventedirecte SET quantite_disponible=quantite_disponible+? WHERE id=? AND quantite_disponible IS NOT NULL").bind(quantity).bind(product_id).execute(&mut *tx).await?;}}}else if old=="annulee"&&new_status!="annulee"{for(product_id,quantity)in &lines{if let Some(product_id)=product_id{let stock:Option<f64>=sqlx::query_scalar("SELECT quantite_disponible FROM produitventedirecte WHERE id=?").bind(product_id).fetch_optional(&mut *tx).await?.flatten();if stock.is_some_and(|value|value<*quantity){return Err(AppError::Invalid("Stock insuffisant pour réactiver la commande".into()))}}}for(product_id,quantity)in &lines{if let Some(product_id)=product_id{sqlx::query("UPDATE produitventedirecte SET quantite_disponible=quantite_disponible-? WHERE id=? AND quantite_disponible IS NOT NULL").bind(quantity).bind(product_id).execute(&mut *tx).await?;}}}sqlx::query("UPDATE commandeventedirecte SET statut=? WHERE id=?").bind(new_status).bind(id).execute(&mut *tx).await?;tx.commit().await?;Ok(Redirect::to("/vente-directe").into_response())}
+async fn commande_statut(State(state):State<AppState>,Extension(session):Extension<SessionData>,Path(id):Path<i64>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;let new_status=form_text(&form,"statut").unwrap_or_else(||"nouvelle".into());if !matches!(new_status.as_str(),"nouvelle"|"validee"|"preparation"|"prete"|"livree"|"annulee"){return Err(AppError::Invalid("Statut invalide".into()))}let mut tx=state.pool.begin().await?;let old:Option<String>=sqlx::query_scalar("SELECT statut FROM commandeventedirecte WHERE id=?").bind(id).fetch_optional(&mut *tx).await?;let Some(old)=old else{return Err(AppError::NotFound)};let lines=sqlx::query_as::<_,(Option<i64>,f64)>("SELECT produit_id,quantite FROM lignecommandeventedirecte WHERE commande_id=?").bind(id).fetch_all(&mut *tx).await?;if new_status=="annulee"&&old!="annulee"{for(product_id,quantity)in &lines{if let Some(product_id)=product_id{sqlx::query("UPDATE produitventedirecte SET quantite_disponible=quantite_disponible+? WHERE id=? AND quantite_disponible IS NOT NULL").bind(quantity).bind(product_id).execute(&mut *tx).await?;}}}else if old=="annulee"&&new_status!="annulee"{for(product_id,quantity)in &lines{if let Some(product_id)=product_id{let stock:Option<f64>=sqlx::query_scalar("SELECT quantite_disponible FROM produitventedirecte WHERE id=?").bind(product_id).fetch_optional(&mut *tx).await?.flatten();if stock.is_some_and(|value|value<*quantity){return Err(AppError::Invalid("Stock insuffisant pour réactiver la commande".into()))}}}for(product_id,quantity)in &lines{if let Some(product_id)=product_id{sqlx::query("UPDATE produitventedirecte SET quantite_disponible=quantite_disponible-? WHERE id=? AND quantite_disponible IS NOT NULL").bind(quantity).bind(product_id).execute(&mut *tx).await?;}}}sqlx::query("UPDATE commandeventedirecte SET statut=? WHERE id=?").bind(new_status).bind(id).execute(&mut *tx).await?;tx.commit().await?;Ok(Redirect::to("/vente-directe/commandes").into_response())}
 
-async fn commande_supprimer(State(state):State<AppState>,Extension(session):Extension<SessionData>,Path(id):Path<i64>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;let mut tx=state.pool.begin().await?;let status:Option<String>=sqlx::query_scalar("SELECT statut FROM commandeventedirecte WHERE id=?").bind(id).fetch_optional(&mut *tx).await?;if status.as_deref().is_some_and(|value|value!="annulee"){let lines=sqlx::query_as::<_,(Option<i64>,f64)>("SELECT produit_id,quantite FROM lignecommandeventedirecte WHERE commande_id=?").bind(id).fetch_all(&mut *tx).await?;for(product_id,quantity)in lines{if let Some(product_id)=product_id{sqlx::query("UPDATE produitventedirecte SET quantite_disponible=quantite_disponible+? WHERE id=? AND quantite_disponible IS NOT NULL").bind(quantity).bind(product_id).execute(&mut *tx).await?;}}}sqlx::query("DELETE FROM commandeventedirecte WHERE id=?").bind(id).execute(&mut *tx).await?;tx.commit().await?;Ok(Redirect::to("/vente-directe").into_response())}
+async fn commande_supprimer(State(state):State<AppState>,Extension(session):Extension<SessionData>,Path(id):Path<i64>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;let mut tx=state.pool.begin().await?;let status:Option<String>=sqlx::query_scalar("SELECT statut FROM commandeventedirecte WHERE id=?").bind(id).fetch_optional(&mut *tx).await?;if status.as_deref().is_some_and(|value|value!="annulee"){let lines=sqlx::query_as::<_,(Option<i64>,f64)>("SELECT produit_id,quantite FROM lignecommandeventedirecte WHERE commande_id=?").bind(id).fetch_all(&mut *tx).await?;for(product_id,quantity)in lines{if let Some(product_id)=product_id{sqlx::query("UPDATE produitventedirecte SET quantite_disponible=quantite_disponible+? WHERE id=? AND quantite_disponible IS NOT NULL").bind(quantity).bind(product_id).execute(&mut *tx).await?;}}}sqlx::query("DELETE FROM commandeventedirecte WHERE id=?").bind(id).execute(&mut *tx).await?;tx.commit().await?;Ok(Redirect::to("/vente-directe/commandes").into_response())}
 
 async fn vente_commande_modifier_page(
     State(state): State<AppState>,
@@ -4835,7 +4894,7 @@ async fn vente_commande_modifier(
     }
     tx.commit().await?;
     db::journal(&state.pool,&session.nom,"modifier","commande_vente_directe",&format!("commande {id}"),&format!("/vente-directe/commande/{id}")).await;
-    Ok(Redirect::to("/vente-directe").into_response())
+    Ok(Redirect::to("/vente-directe/commandes").into_response())
 }
 
 async fn vente_commande_imprimer(
@@ -6431,7 +6490,7 @@ async fn vente_session_charge_ajouter(State(state):State<AppState>,Extension(ses
 
 async fn vente_session_charge_supprimer(State(state):State<AppState>,Extension(session):Extension<SessionData>,Path((id,charge_id)):Path<(i64,i64)>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;sqlx::query("DELETE FROM chargeventedirecte WHERE id=? AND session_vente_id=?").bind(charge_id).bind(id).execute(&state.pool).await?;Ok(Redirect::to("/vente-directe/sessions").into_response())}
 
-async fn vente_commande_session(State(state):State<AppState>,Extension(session):Extension<SessionData>,Path(id):Path<i64>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;let session_id=form_i64(&form,"session_vente_id");if let Some(session_id)=session_id{let exists:i64=sqlx::query_scalar("SELECT COUNT(*) FROM sessionventedirecte WHERE id=?").bind(session_id).fetch_one(&state.pool).await?;if exists==0{return Err(AppError::Invalid("Session introuvable".into()))}}sqlx::query("UPDATE commandeventedirecte SET session_vente_id=? WHERE id=?").bind(session_id).bind(id).execute(&state.pool).await?;Ok(Redirect::to("/vente-directe").into_response())}
+async fn vente_commande_session(State(state):State<AppState>,Extension(session):Extension<SessionData>,Path(id):Path<i64>,Form(form):Form<HashMap<String,String>>)->AppResult<Response>{require_writer(&session)?;verify_csrf(&session,&form)?;let session_id=form_i64(&form,"session_vente_id");if let Some(session_id)=session_id{let exists:i64=sqlx::query_scalar("SELECT COUNT(*) FROM sessionventedirecte WHERE id=?").bind(session_id).fetch_one(&state.pool).await?;if exists==0{return Err(AppError::Invalid("Session introuvable".into()))}}sqlx::query("UPDATE commandeventedirecte SET session_vente_id=? WHERE id=?").bind(session_id).bind(id).execute(&state.pool).await?;Ok(Redirect::to("/vente-directe/commandes").into_response())}
 
 async fn reglages(
     State(state): State<AppState>,
