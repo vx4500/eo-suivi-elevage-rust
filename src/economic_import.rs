@@ -7,6 +7,15 @@ use std::collections::HashMap;
 const MAX_PDF_PAGES: usize = 30;
 const MAX_DECOMPRESSED_PAGE: usize = 2 * 1024 * 1024;
 
+/// Motif d'une ligne produit aliment Cooperl (silo, tonnage, PU, montant).
+/// Partagé entre la détection du type de document et son analyse : certains
+/// bordereaux (constaté sur des factures récentes) n'exposent plus l'en-tête
+/// de tableau « Désignation produit / Silos » dans le texte extrait par
+/// lopdf — probablement du texte positionné hors flux principal — alors que
+/// les lignes produit elles-mêmes restent extraites normalement.
+const ALIMENT_ROW_PATTERN: &str =
+    r"(?m)^(.+?)\s+(MI|FE|GR)\s+([0-9]+)\s+([0-9.,]+)(-?)\s*\*?\s+[0-9.,]+\s+([0-9.,]+)\s+[0-9]+\s+([0-9.,]+)(-?)\s*$";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImportLine {
     pub kind: String,
@@ -137,7 +146,9 @@ pub fn parse_document(text: &str) -> Result<ImportDocument, String> {
     if upper.contains("ALIMENTS")
         && (upper.contains("SILOS")
             || upper.contains("DÉSIGNATION PRODUIT")
-            || upper.contains("DESIGNATION PRODUIT"))
+            || upper.contains("DESIGNATION PRODUIT")
+            || Regex::new(ALIMENT_ROW_PATTERN)
+                .is_ok_and(|regex| regex.is_match(&normalized)))
     {
         return parse_aliment(&normalized);
     }
@@ -239,10 +250,8 @@ fn parse_aliment(text: &str) -> Result<ImportDocument, String> {
         )
     })
     .and_then(|value| iso_date(&value));
-    let regex = Regex::new(
-        r"(?m)^(.+?)\s+(MI|FE|GR)\s+([0-9]+)\s+([0-9.,]+)(-?)\s*\*?\s+[0-9.,]+\s+([0-9.,]+)\s+[0-9]+\s+([0-9.,]+)(-?)\s*$",
-    )
-    .map_err(|error| format!("analyse aliment indisponible: {error}"))?;
+    let regex = Regex::new(ALIMENT_ROW_PATTERN)
+        .map_err(|error| format!("analyse aliment indisponible: {error}"))?;
     let credit = document_sign(text);
     let mut lines = Vec::new();
     for row in regex.captures_iter(text) {
@@ -1139,6 +1148,20 @@ mod tests {
         assert_eq!(parsed.lines[0].label, "PORC CROISSANCE GR");
         assert_eq!(parsed.lines[1].label, "PORC CROISSANCE FE");
         assert_eq!(parsed.lines[0].reference.as_deref(), Some("123456"));
+    }
+
+    #[test]
+    fn aliment_reconnu_meme_sans_entete_de_tableau() {
+        // Texte réel (extrait via extract_pdf_text) d'une facture aliment
+        // Cooperl où lopdf ne restitue pas la ligne d'en-tête « Désignation
+        // produit / Silos » du tableau — probablement du texte positionné
+        // hors flux principal — alors que les lignes produit sont intactes.
+        let text = "ALIMENTS 33 LA MELTIERE\nGESTA PLUS               FE    04             3,050 *    287,50   290,50   2       886,02\nMULTI BE CROISSANCE C    FE    02             4,970 *    289,00   292,00   2     1.451,24\nFact.N°\n326070852454\nDATE : 24/07/26";
+        let Ok(parsed) = parse_document(text) else {
+            panic!("le document aliment sans en-tête doit tout de même être reconnu");
+        };
+        assert_eq!(parsed.lines.len(), 2);
+        assert_eq!(parsed.lines[0].label, "GESTA PLUS FE");
     }
 
     #[test]
