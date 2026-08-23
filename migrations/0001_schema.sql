@@ -483,7 +483,9 @@ CREATE TABLE IF NOT EXISTS produitventedirecte (
 CREATE TABLE IF NOT EXISTS reglageventedirecte (
     id INTEGER PRIMARY KEY,
     date_livraison TEXT,
-    texte_livraison TEXT
+    texte_livraison TEXT,
+    commandes_ouvertes INTEGER NOT NULL DEFAULT 1,
+    message_fermeture TEXT
 );
 
 CREATE TABLE IF NOT EXISTS sessionventedirecte (

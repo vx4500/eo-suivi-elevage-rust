@@ -1,4 +1,4 @@
-# EO-Suivi Élevage — portage Rust 2.2.14
+# EO-Suivi Élevage — portage Rust 2.2.15
 
 Cette archive reprend la base EO-Suivi 1.65 sous forme d'un serveur Rust. Elle
 n'utilise plus FastAPI, SQLModel, Uvicorn ni Python pour les fonctions déjà
@@ -8,7 +8,7 @@ compatibilité avec les sauvegardes 1.55 à 1.65.
 ## Ce qui est déjà natif Rust
 
 - serveur HTTP Axum et accès SQLite asynchrone SQLx ;
-- création et migration additive des 51 tables historiques, plus les tables
+- création et migration additive des tables historiques, plus les tables
   eau/électricité ;
 - connexion, rôles, limitation des tentatives, CSRF sur les formulaires et
   lecture des mots de passe PBKDF2 créés par la version Python ;
@@ -30,9 +30,11 @@ compatibilité avec les sauvegardes 1.55 à 1.65.
 - reclassement automatique des avoirs génétiques et des montants à signe
   moins final ;
 - résultats abattoir par bande et saisies sanitaires par morceau ;
-- produits, inventaires, commandes modifiables et imprimables, feuilles de
-  préparation, sessions et charges de vente directe ;
-- utilisateurs, journal, structure, tâches et sauvegarde de la base ;
+- produits, inventaires, commandes modifiables et imprimables, classement des
+  ventes par quantité/kg, prix ou chiffre d'affaires, fermeture de la page
+  client, feuilles de préparation, sessions et charges de vente directe ;
+- utilisateurs, journal, structure, tâches, téléchargement et restauration
+  contrôlée de la base ;
 - vues de consultation sanitaire, pharmacie, planning et stocks ;
 - GTTT centralisé et filtrable par période/bande, productivité annuelle
   réelle, objectifs pondérés modifiables, productivité par bande/cheptel/rang,
