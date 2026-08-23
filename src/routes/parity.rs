@@ -1216,10 +1216,12 @@ pub(super) async fn saisie_rapide(
                     .bind(form_text(&form,"heure_debut")).bind(form_text(&form,"heure_fin")).bind(form_text(&form,"note"))
                     .execute(&mut *tx).await?;
                 if parse_stored_date(&date).is_some_and(|day| day <= Local::now().date_naive()) {
-                    sqlx::query("UPDATE truie SET rang=rang+1,updated_at=CURRENT_TIMESTAMP WHERE id=?")
-                        .bind(sow_id)
-                        .execute(&mut *tx)
-                        .await?;
+                    sqlx::query(
+                        "UPDATE truie SET rang=rang+1,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                    )
+                    .bind(sow_id)
+                    .execute(&mut *tx)
+                    .await?;
                 }
             }
             if let Some(band_id) = band_id {
