@@ -1,4 +1,4 @@
-# EO-Suivi Élevage — portage Rust 2.2.15
+# EO-Suivi Élevage — portage Rust 2.2.16
 
 Cette archive reprend la base EO-Suivi 1.65 sous forme d'un serveur Rust. Elle
 n'utilise plus FastAPI, SQLModel, Uvicorn ni Python pour les fonctions déjà
@@ -12,7 +12,8 @@ compatibilité avec les sauvegardes 1.55 à 1.65.
   eau/électricité ;
 - connexion, rôles, limitation des tentatives, CSRF sur les formulaires et
   lecture des mots de passe PBKDF2 créés par la version Python ;
-- tableau de bord annuel, bandes, dates clés, truies et événements ;
+- tableau de bord annuel avec parcours visuel des huit étapes de chaque bande,
+  dates clés, truies et événements ;
 - chaleurs, inséminations groupées, échographies, mises-bas, sevrages,
   mesures ELD/poids/NEC et pertes de porcelets ;
 - file IA/cochettes après sevrage : cochettes, sorties de maternité et
@@ -24,6 +25,7 @@ compatibilité avec les sauvegardes 1.55 à 1.65.
   remplaçables par date et effectifs recalculés après le dernier comptage ;
 - mouvement des porcs par bande ou unité depuis le bouton « + », suivi des
   emplacements, effectif et numéro de marquage ;
+- saisie rapide des mises-bas et des pertes de porcs ou porcelets ;
 - saisies économiques et résultats par bande (coût/porc, marge, prix net/kg) ;
 - import PDF économique Cooperl/Uniporc : aperçu, doublons, sélection
   simultanée de 1 à 5 documents, transaction globale et historique ;

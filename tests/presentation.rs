@@ -60,6 +60,24 @@ fn saisie_rapide_prepare_le_sevrage_avant_lenvoi() {
 }
 
 #[test]
+fn accueil_visualise_le_cycle_et_saisie_rapide_propose_la_mise_bas() {
+    let dashboard = include_str!("../templates/dashboard.html");
+    let base = include_str!("../templates/base.html");
+    let styles = include_str!("../static/style.css");
+    let routes = include_str!("../src/routes/parity.rs");
+
+    assert!(dashboard.contains("Avancement des bandes"));
+    assert!(dashboard.contains("class=\"band-progress\""));
+    assert!(dashboard.contains("{% for e in l.etapes %}"));
+    assert!(base.contains("data-type=\"mise_bas\""));
+    assert!(base.contains("data-for=\"mise_bas\""));
+    assert!(base.contains("Perte porc et porcelet"));
+    assert!(routes.contains("\"mise_bas\" =>"));
+    assert!(routes.contains("perf_nt=?"));
+    assert!(styles.contains("v2.2.16 — interface plus chaleureuse"));
+}
+
+#[test]
 fn vente_directe_classe_les_produits_et_peut_fermer_les_commandes() {
     let routes = include_str!("../src/routes/mod.rs");
     let management = include_str!("../templates/vente_directe.html");
