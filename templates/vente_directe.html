@@ -1,10 +1,28 @@
 {% extends "base.html" %}{% block content %}
 <h1>Vente directe</h1>
 <p class="rust-actions"><a class="button" href="/commande" target="_blank">Ouvrir la page client</a><a href="/vente-directe/sessions">Sessions et coûts</a><a href="/vente-directe/commandes">Commandes clients ({{ nb_commandes }})</a>{% for s in sessions_vente %}{% if s.active %}<a href="/vente-directe/preparation/imprimer?session_id={{ s.id }}" target="_blank">Imprimer la préparation</a>{% endif %}{% endfor %}</p>
+<section id="commandes-client" class="card">
+  <h2>Commandes sur la page client</h2>
+  {% if reglage.commandes_ouvertes %}<p><span class="rust-badge">● Ouvertes</span> Les clients peuvent actuellement envoyer une commande.</p>{% else %}<p><span class="rust-badge danger">⏹ Fermées</span> Le formulaire client est masqué et un bandeau de fin de vente est affiché.</p>{% endif %}
+  <form method="post" action="/vente-directe/commandes-ouverture"><input type="hidden" name="csrf_token" value="{{ session.csrf }}"><label>Message affiché lorsque la vente est terminée<textarea name="message_fermeture" maxlength="500">{{ reglage.message_fermeture or 'Cette vente est terminée. Les commandes sont fermées.' }}</textarea></label>{% if reglage.commandes_ouvertes %}<input type="hidden" name="ouvert" value="0"><button class="danger" title="Fermer la prise de commandes" onclick="return confirm('Fermer les commandes sur la page client ?')">⏹ Fermer les commandes</button>{% else %}<input type="hidden" name="ouvert" value="1"><button title="Rouvrir la prise de commandes">▶ Rouvrir les commandes</button>{% endif %}</form>
+</section>
 <div class="rust-grid">
   <form class="card" method="post" action="/vente-directe/reglage-livraison"><input type="hidden" name="csrf_token" value="{{ session.csrf }}"><h2>Informations client</h2><label>Date de livraison<input type="date" name="date_livraison" value="{{ reglage.date_livraison or '' }}"></label><label>Message de livraison<textarea name="texte_livraison">{{ reglage.texte_livraison or '' }}</textarea></label><button>Enregistrer</button></form>
   <section class="card"><h2>Session active</h2>{% for s in sessions_vente %}{% if s.active %}<p><b>{{ s.nom }}</b></p><p>Livraison : {{ s.date_livraison|date_fr }}</p><a href="/vente-directe/preparation/imprimer?session_id={{ s.id }}" target="_blank">Feuille de préparation</a>{% endif %}{% else %}<p>Aucune session.</p>{% endfor %}<p><a href="/vente-directe/sessions">Créer ou activer une session</a></p></section>
 </div>
+
+<section id="classement-ventes">
+  <h2>Classement des produits vendus</h2>
+  <form class="card rust-actions" method="get" action="/vente-directe">
+    <label>Du<input type="date" name="debut" value="{{ filtres_ventes.debut or '' }}"></label>
+    <label>Au<input type="date" name="fin" value="{{ filtres_ventes.fin or '' }}"></label>
+    <label>Session<select name="session_id"><option value="">Toutes les sessions</option>{% for s in sessions_vente %}<option value="{{ s.id }}" {% if filtres_ventes.session_id == s.id %}selected{% endif %}>{{ s.nom }}</option>{% endfor %}</select></label>
+    <label>Classer par<select name="tri"><option value="quantite_vendue" {% if filtres_ventes.tri == 'quantite_vendue' %}selected{% endif %}>Quantité vendue</option><option value="kg" {% if filtres_ventes.tri == 'kg_vendus' %}selected{% endif %}>Kilogrammes vendus</option><option value="chiffre_affaires" {% if filtres_ventes.tri == 'chiffre_affaires' %}selected{% endif %}>Chiffre d’affaires</option><option value="prix_moyen" {% if filtres_ventes.tri == 'prix_moyen' %}selected{% endif %}>Prix moyen</option><option value="commandes" {% if filtres_ventes.tri == 'commandes' %}selected{% endif %}>Nombre de commandes</option></select></label>
+    <button>Afficher le classement</button><a href="/vente-directe#classement-ventes">Effacer les filtres</a>
+  </form>
+  <div class="rust-grid"><div class="card kpi"><div class="v">{{ totaux_ventes.kg }}</div><div class="l">kg vendus</div></div><div class="card kpi"><div class="v">{{ totaux_ventes.pieces }}</div><div class="l">pièces / autres unités</div></div><div class="card kpi"><div class="v">{{ totaux_ventes.chiffre_affaires|euro }}</div><div class="l">chiffre d’affaires</div></div><div class="card kpi"><div class="v">{{ totaux_ventes.commandes }}</div><div class="l">commandes</div></div></div>
+  <div class="rust-scroll"><table class="rust-sortable"><thead><tr><th>Rang</th><th>Produit</th><th>Quantité vendue</th><th>Kg vendus</th><th>Chiffre d’affaires</th><th>Prix moyen</th><th>Commandes</th></tr></thead><tbody>{% for p in produits_vendus %}<tr><td><b>{{ loop.index }}</b></td><td>{{ p.produit }}</td><td>{{ p.quantite_vendue }} {{ p.unite }}</td><td>{{ p.kg_vendus }}</td><td>{{ p.chiffre_affaires|euro }}</td><td>{{ p.prix_moyen|euro }}/{{ p.unite }}</td><td>{{ p.commandes }}</td></tr>{% else %}<tr><td colspan="7" class="rust-empty">Aucune vente pour ces filtres</td></tr>{% endfor %}</tbody></table></div>
+</section>
 
 <section id="produits"><h2>Produits et inventaire</h2>
 {% if session.peut_modifier %}<form class="card rust-actions" method="post" action="/vente-directe/produit-ajouter"><input type="hidden" name="csrf_token" value="{{ session.csrf }}"><label>Produit<input name="nom" required></label><label>Prix<input name="prix" inputmode="decimal" required></label><label>Unité<select name="unite"><option>kg</option><option>pièce</option></select></label><label>Stock initial<input name="quantite_disponible" inputmode="decimal" placeholder="vide = illimité"></label><button>Ajouter</button></form>{% endif %}

@@ -1,6 +1,6 @@
 # EO-Suivi Élevage Rust — État du projet
 
-Version actuelle : **2.2.14** — Dernière mise à jour de ce document : 23 août 2026.
+Version actuelle : **2.2.15** — Dernière mise à jour de ce document : 23 août 2026.
 
 Ce fichier fusionne les anciens audits, listings et listes de modifications.
 Les informations devenues obsolètes (anciens comptages de routes, tâches déjà
@@ -49,6 +49,9 @@ août 2026 ; la priorité actuelle porte sur la fiabilité des effectifs
   eau/électricité, calendrier ICS.
 - Sauvegarde SQLite vérifiée, restauration contrôlée, mise à jour Debian
   réversible avec rollback automatique.
+- Vente directe : classement filtrable des produits vendus par quantité, kg,
+  chiffre d'affaires, prix moyen ou nombre de commandes ; fermeture immédiate
+  du formulaire public avec bandeau de fin de vente.
 - Tri croissant/décroissant sur les tableaux (classe `.rust-sortable`).
 
 *(Détail des versions : voir la page `/correctifs` de l'application.)*
@@ -509,7 +512,7 @@ l'arrêt déclenche le retour arrière ; la sauvegarde de la base est conservée
 ```bash
 systemctl status eo-suivi-rust --no-pager -l
 journalctl -u eo-suivi-rust -n 80 --no-pager -l -o cat
-curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.14"
+curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.15"
 ```
 
 Puis ouvrir `https://rust-elevage.basse-chevrie.ovh`.

@@ -41,6 +41,10 @@ pub fn build() -> anyhow::Result<Environment<'static>> {
     )?;
     env.add_template("commande.html", include_str!("../templates/commande.html"))?;
     env.add_template(
+        "sauvegarde.html",
+        include_str!("../templates/sauvegarde.html"),
+    )?;
+    env.add_template(
         "utilisateurs.html",
         include_str!("../templates/utilisateurs.html"),
     )?;

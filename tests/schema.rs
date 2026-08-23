@@ -45,6 +45,12 @@ async fn schema_complet_et_ecritures_compatibles() -> anyhow::Result<()> {
         .await?;
     assert_eq!(objectives, 15);
     assert_eq!(references, 10);
+    let sales_settings: (i64, Option<String>) = sqlx::query_as(
+        "SELECT commandes_ouvertes,message_fermeture FROM reglageventedirecte WHERE id=1",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(sales_settings, (1, None));
 
     let mut tx = pool.begin().await?;
     sqlx::query("INSERT INTO truie(num_travail,statut,reformee,rang,mere_cochette) VALUES('TEST-RUST','active',0,0,0)")

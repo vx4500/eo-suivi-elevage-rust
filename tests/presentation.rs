@@ -58,3 +58,36 @@ fn saisie_rapide_prepare_le_sevrage_avant_lenvoi() {
     assert!(template.contains("selected=sevrageWholeSelection.slice()"));
     assert!(!template.contains("inp.previousSibling.checked"));
 }
+
+#[test]
+fn vente_directe_classe_les_produits_et_peut_fermer_les_commandes() {
+    let routes = include_str!("../src/routes/mod.rs");
+    let management = include_str!("../templates/vente_directe.html");
+    let customer = include_str!("../templates/commande.html");
+    let migration = include_str!("../migrations/0001_schema.sql");
+
+    assert!(routes.contains("/vente-directe/commandes-ouverture"));
+    assert!(routes.contains("AS kg_vendus"));
+    assert!(routes.contains("AS chiffre_affaires"));
+    assert!(management.contains("Classement des produits vendus"));
+    assert!(management.contains("⏹ Fermer les commandes"));
+    assert!(customer.contains("⏹ Fin de la vente"));
+    assert!(customer.contains("{% if not reglage.commandes_ouvertes %}"));
+    assert!(migration.contains("commandes_ouvertes INTEGER NOT NULL DEFAULT 1"));
+}
+
+#[test]
+fn sauvegarde_propose_telechargement_et_restauration_confirmee() {
+    let router = include_str!("../src/routes/mod.rs");
+    let restoration = include_str!("../src/routes/parity.rs");
+    let templates = include_str!("../src/templates.rs");
+    let page = include_str!("../templates/sauvegarde.html");
+
+    assert!(router.contains("/sauvegarde/telecharger"));
+    assert!(router.contains("/sauvegarde/restaurer"));
+    assert!(templates.contains("sauvegarde.html"));
+    assert!(page.contains("Tapez RESTAURER"));
+    assert!(page.contains("enctype=\"multipart/form-data\""));
+    assert!(restoration.contains("Some(\"RESTAURER\")"));
+    assert!(restoration.contains("PRAGMA foreign_key_check"));
+}

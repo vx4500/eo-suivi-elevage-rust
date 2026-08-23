@@ -49,6 +49,12 @@ pub async fn init(pool: &SqlitePool) -> anyhow::Result<()> {
         ("declarationmort", "case_id", "INTEGER"),
         ("produitventedirecte", "quantite_disponible", "REAL"),
         (
+            "reglageventedirecte",
+            "commandes_ouvertes",
+            "INTEGER NOT NULL DEFAULT 1",
+        ),
+        ("reglageventedirecte", "message_fermeture", "TEXT"),
+        (
             "releve_compteur",
             "remplacement_compteur",
             "INTEGER NOT NULL DEFAULT 0",

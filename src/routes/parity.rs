@@ -1371,6 +1371,11 @@ pub(super) async fn sauvegarde_restaurer(
     require_admin(&session)?;
     let (form, file, _) = multipart_fields(multipart, "fichier").await?;
     verify_csrf(&session, &form)?;
+    if form.get("confirmation").map(String::as_str) != Some("RESTAURER") {
+        return Err(AppError::Invalid(
+            "Tapez RESTAURER pour confirmer le remplacement de la base".into(),
+        ));
+    }
     let bytes = file.ok_or_else(|| AppError::Invalid("Sauvegarde SQLite obligatoire".into()))?;
     if !bytes.starts_with(b"SQLite format 3\0") {
         return Err(AppError::Invalid(
@@ -1378,7 +1383,8 @@ pub(super) async fn sauvegarde_restaurer(
         ));
     }
     let parent = data_parent(&state);
-    let candidate = parent.join("restauration-validee.db");
+    let timestamp = Local::now().format("%Y%m%d-%H%M%S").to_string();
+    let candidate = parent.join(format!("restauration-validee-{timestamp}.db"));
     tokio::fs::write(&candidate, &bytes)
         .await
         .map_err(anyhow::Error::from)?;
@@ -1393,16 +1399,19 @@ pub(super) async fn sauvegarde_restaurer(
         .fetch_one(&check_pool)
         .await?;
     let tables:i64=sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN('truie','bande','utilisateur')").fetch_one(&check_pool).await?;
+    let foreign_key_errors = sqlx::query("PRAGMA foreign_key_check")
+        .fetch_all(&check_pool)
+        .await?;
     check_pool.close().await;
-    if check != "ok" || tables != 3 {
+    if check != "ok" || tables != 3 || !foreign_key_errors.is_empty() {
+        let _ = tokio::fs::remove_file(&candidate).await;
         return Err(AppError::Invalid(
-            "Sauvegarde incomplète ou corrompue".into(),
+            "Sauvegarde incomplète, corrompue ou contenant des références invalides".into(),
         ));
     }
     sqlx::query("PRAGMA wal_checkpoint(FULL)")
         .execute(&state.pool)
         .await?;
-    let timestamp = Local::now().format("%Y%m%d-%H%M%S").to_string();
     let backup = parent.join(format!("avant-restauration-{timestamp}.db"));
     tokio::fs::copy(&state.config.db_path, &backup)
         .await

@@ -220,6 +220,10 @@ pub fn router(state: AppState) -> Router {
             "/vente-directe/reglage-livraison",
             post(vente_reglage_livraison),
         )
+        .route(
+            "/vente-directe/commandes-ouverture",
+            post(vente_commandes_ouverture),
+        )
         .route("/vente-directe/session/creer", post(vente_session_creer))
         .route(
             "/vente-directe/session/{id}/activer",
@@ -273,6 +277,7 @@ pub fn router(state: AppState) -> Router {
         .route("/utilisateurs/{id}/sections", post(utilisateur_sections))
         .route("/utilisateurs/{id}/mdp", post(utilisateur_mdp))
         .route("/sauvegarde", get(sauvegarde))
+        .route("/sauvegarde/telecharger", get(sauvegarde_telecharger))
         .route("/structure", get(structure))
         .route("/structure/site", post(structure_site))
         .route("/structure/salle", post(structure_salle))
@@ -6085,6 +6090,7 @@ async fn economique_valorisation_supprimer(
 async fn vente_directe(
     State(state): State<AppState>,
     Extension(session): Extension<SessionData>,
+    Query(query): Query<HashMap<String, String>>,
 ) -> AppResult<Html<String>> {
     require_writer(&session)?;
     let products=generic_rows(&state.pool,"SELECT id,nom,prix,unite,actif,ordre,quantite_disponible FROM produitventedirecte ORDER BY ordre,nom").await?;
@@ -6095,20 +6101,73 @@ async fn vente_directe(
     .await?;
     let settings = generic_rows(
         &state.pool,
-        "SELECT date_livraison,texte_livraison FROM reglageventedirecte WHERE id=1",
+        "SELECT date_livraison,texte_livraison,commandes_ouvertes,message_fermeture FROM reglageventedirecte WHERE id=1",
     )
     .await?
     .into_iter()
     .next()
-    .unwrap_or_else(|| json!({"date_livraison":null,"texte_livraison":null}));
+    .unwrap_or_else(|| json!({"date_livraison":null,"texte_livraison":null,"commandes_ouvertes":1,"message_fermeture":null}));
     let nb_commandes: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM commandeventedirecte")
         .fetch_one(&state.pool)
         .await?;
+
+    let debut = query
+        .get("debut")
+        .filter(|value| NaiveDate::parse_from_str(value, "%Y-%m-%d").is_ok())
+        .cloned();
+    let fin = query
+        .get("fin")
+        .filter(|value| NaiveDate::parse_from_str(value, "%Y-%m-%d").is_ok())
+        .cloned();
+    let session_id = query
+        .get("session_id")
+        .and_then(|value| value.parse::<i64>().ok())
+        .filter(|value| *value > 0);
+    let tri = match query.get("tri").map(String::as_str) {
+        Some("chiffre_affaires") => "chiffre_affaires",
+        Some("prix_moyen") => "prix_moyen",
+        Some("commandes") => "commandes",
+        Some("kg") => "kg_vendus",
+        _ => "quantite_vendue",
+    };
+    let sales_sql = format!(
+        "SELECT l.nom_produit AS produit,l.unite,ROUND(SUM(l.quantite),2) AS quantite_vendue,ROUND(SUM(CASE WHEN lower(l.unite)='kg' THEN l.quantite ELSE 0 END),2) AS kg_vendus,ROUND(SUM(CASE WHEN lower(l.unite)<>'kg' THEN l.quantite ELSE 0 END),2) AS pieces_vendues,ROUND(SUM(l.total_ligne),2) AS chiffre_affaires,ROUND(SUM(l.total_ligne)/NULLIF(SUM(l.quantite),0),2) AS prix_moyen,COUNT(DISTINCT c.id) AS commandes FROM lignecommandeventedirecte l JOIN commandeventedirecte c ON c.id=l.commande_id WHERE c.statut<>'annulee' AND (? IS NULL OR date(c.cree_le)>=date(?)) AND (? IS NULL OR date(c.cree_le)<=date(?)) AND (? IS NULL OR c.session_vente_id=?) GROUP BY l.nom_produit,l.unite ORDER BY {tri} DESC,produit COLLATE NOCASE"
+    );
+    let sales = sqlx::query(&sales_sql)
+        .bind(debut.as_deref())
+        .bind(debut.as_deref())
+        .bind(fin.as_deref())
+        .bind(fin.as_deref())
+        .bind(session_id)
+        .bind(session_id)
+        .fetch_all(&state.pool)
+        .await?;
+    let sales = rows_to_json(sales)?;
+    let totals: (i64, f64, f64, f64) = sqlx::query_as(
+        "SELECT COUNT(DISTINCT c.id),CAST(COALESCE(SUM(l.total_ligne),0) AS REAL),CAST(COALESCE(SUM(CASE WHEN lower(l.unite)='kg' THEN l.quantite ELSE 0 END),0) AS REAL),CAST(COALESCE(SUM(CASE WHEN lower(l.unite)<>'kg' THEN l.quantite ELSE 0 END),0) AS REAL) FROM lignecommandeventedirecte l JOIN commandeventedirecte c ON c.id=l.commande_id WHERE c.statut<>'annulee' AND (? IS NULL OR date(c.cree_le)>=date(?)) AND (? IS NULL OR date(c.cree_le)<=date(?)) AND (? IS NULL OR c.session_vente_id=?)",
+    )
+    .bind(debut.as_deref())
+    .bind(debut.as_deref())
+    .bind(fin.as_deref())
+    .bind(fin.as_deref())
+    .bind(session_id)
+    .bind(session_id)
+    .fetch_one(&state.pool)
+    .await?;
     let mut ctx = context(&session);
     ctx.insert("produits".into(), Value::Array(products));
     ctx.insert("sessions_vente".into(), Value::Array(sessions));
     ctx.insert("reglage".into(), settings);
     ctx.insert("nb_commandes".into(), json!(nb_commandes));
+    ctx.insert("produits_vendus".into(), Value::Array(sales));
+    ctx.insert(
+        "totaux_ventes".into(),
+        json!({"commandes":totals.0,"chiffre_affaires":totals.1,"kg":totals.2,"pieces":totals.3}),
+    );
+    ctx.insert(
+        "filtres_ventes".into(),
+        json!({"debut":debut,"fin":fin,"session_id":session_id,"tri":tri}),
+    );
     render(&state, "vente_directe.html", Value::Object(ctx))
 }
 async fn vente_directe_commandes(
@@ -6262,6 +6321,34 @@ async fn vente_reglage_livraison(
     verify_csrf(&session, &form)?;
     sqlx::query("INSERT INTO reglageventedirecte(id,date_livraison,texte_livraison) VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET date_livraison=excluded.date_livraison,texte_livraison=excluded.texte_livraison").bind(form_date(&form,"date_livraison")?).bind(form_text(&form,"texte_livraison")).execute(&state.pool).await?;
     Ok(Redirect::to("/vente-directe").into_response())
+}
+
+async fn vente_commandes_ouverture(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    verify_csrf(&session, &form)?;
+    let open = form.get("ouvert").map(String::as_str) == Some("1");
+    let message = form_text(&form, "message_fermeture")
+        .filter(|value| value.len() <= 500)
+        .unwrap_or_else(|| "Cette vente est terminée. Les commandes sont fermées.".into());
+    sqlx::query("INSERT INTO reglageventedirecte(id,commandes_ouvertes,message_fermeture) VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET commandes_ouvertes=excluded.commandes_ouvertes,message_fermeture=excluded.message_fermeture")
+        .bind(open)
+        .bind(&message)
+        .execute(&state.pool)
+        .await?;
+    db::journal(
+        &state.pool,
+        &session.nom,
+        if open { "ouvrir" } else { "fermer" },
+        "commandes_vente_directe",
+        &message,
+        "/vente-directe",
+    )
+    .await;
+    Ok(Redirect::to("/vente-directe#commandes-client").into_response())
 }
 
 async fn commande_statut(
@@ -6595,12 +6682,12 @@ async fn commande_page(
     let products=sqlx::query_as::<_,ProduitVenteDirecte>("SELECT id,nom,prix,unite,actif,ordre,quantite_disponible FROM produitventedirecte WHERE actif=1 AND (quantite_disponible IS NULL OR quantite_disponible>0) ORDER BY ordre,nom").fetch_all(&state.pool).await?;
     let settings = generic_rows(
         &state.pool,
-        "SELECT date_livraison,texte_livraison FROM reglageventedirecte WHERE id=1",
+        "SELECT date_livraison,texte_livraison,commandes_ouvertes,message_fermeture FROM reglageventedirecte WHERE id=1",
     )
     .await?
     .into_iter()
     .next()
-    .unwrap_or_else(|| json!({"date_livraison":null,"texte_livraison":null}));
+    .unwrap_or_else(|| json!({"date_livraison":null,"texte_livraison":null,"commandes_ouvertes":1,"message_fermeture":null}));
     let active=generic_rows(&state.pool,"SELECT id,nom,date_livraison FROM sessionventedirecte WHERE active=1 ORDER BY id DESC LIMIT 1").await?.into_iter().next().unwrap_or(Value::Null);
     render(
         &state,
@@ -6623,6 +6710,15 @@ async fn commande_post(
         .filter(|value| value.len() <= 40)
         .ok_or_else(|| AppError::Invalid("Téléphone obligatoire".into()))?;
     let mut tx = state.pool.begin().await?;
+    let commandes_ouvertes: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(commandes_ouvertes,1) FROM reglageventedirecte WHERE id=1",
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    .unwrap_or(1);
+    if commandes_ouvertes == 0 {
+        return Ok(Redirect::to("/commande?err=fermee").into_response());
+    }
     let products=sqlx::query_as::<_,ProduitVenteDirecte>("SELECT id,nom,prix,unite,actif,ordre,quantite_disponible FROM produitventedirecte WHERE actif=1 ORDER BY ordre,nom").fetch_all(&mut *tx).await?;
     let mut lines = Vec::new();
     let mut total = 0.0;
@@ -6781,6 +6877,26 @@ async fn utilisateur_mdp(
 }
 
 async fn sauvegarde(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+) -> AppResult<Html<String>> {
+    if !session.est_admin() {
+        return Err(AppError::Forbidden);
+    }
+    let mut ctx = context(&session);
+    ctx.insert(
+        "base_nom".into(),
+        json!(state
+            .config
+            .db_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("elevage.db")),
+    );
+    render(&state, "sauvegarde.html", Value::Object(ctx))
+}
+
+async fn sauvegarde_telecharger(
     State(state): State<AppState>,
     Extension(session): Extension<SessionData>,
 ) -> AppResult<Response> {
