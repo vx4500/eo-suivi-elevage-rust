@@ -201,6 +201,7 @@
   var source=document.getElementById('fab-source');
   var destination=document.getElementById('fab-destination');
   var movementBands=[], movementCases=[];
+  var sevrageWholeSelection=[];
   // Toast helper: non-blocking notifications
   function showToast(message, kind){
     try{
@@ -221,7 +222,11 @@
   }
   function setOpen(open){
     panel.classList.toggle('open',open); panel.setAttribute('aria-hidden',String(!open));
-    button.setAttribute('aria-expanded',String(open)); if(open){window.setTimeout(function(){sow.focus();},0);}
+    button.setAttribute('aria-expanded',String(open));
+    if(open){window.setTimeout(function(){
+      var target=typeInput.value==='sevrage'?document.getElementById('fab-bande-sevrage'):sow;
+      if(target&&!target.disabled){target.focus();}
+    },0);}
     if(open){ // refresh capacities when opening the panel to have up-to-date data
       refreshCasesCapacity();
       if(typeInput.value==='sevrage'){
@@ -361,9 +366,9 @@
       var active=section.dataset.for===type; section.hidden=!active;
       section.querySelectorAll('input,select,textarea,button').forEach(function(field){field.disabled=!active;});
     });
-    var loss=type==='perte', movement=type==='mouvement';
+    var loss=type==='perte', movement=type==='mouvement', sevrage=type==='sevrage';
     form.action=movement?'/transferts/porcs':'/saisie-rapide';
-    sow.disabled=movement; sow.required=!loss&&!movement; document.getElementById('fab-truie-wrap').hidden=movement;
+    sow.disabled=movement||sevrage; sow.required=!loss&&!movement&&!sevrage; document.getElementById('fab-truie-wrap').hidden=movement||sevrage;
     sowLabel.textContent=loss?'Truie sous la mère (facultatif)':'Truie';
     band.disabled=!loss; band.required=loss; noteWrap.hidden=type==='sortie'; note.disabled=type==='sortie';
 
@@ -373,13 +378,16 @@
       var bandSev=document.getElementById('fab-bande-sevrage');
       bandSev.disabled=false; bandSev.required=true;
       document.querySelectorAll('[name="sevrage_mode"]').forEach(function(r){r.disabled=false});
-      // show list only if mode truie
-      document.querySelectorAll('[name="sevrage_mode"]').forEach(function(r){r.addEventListener('change',function(){updateSevrageUI();});});
-      bandSev.addEventListener('change',function(){populateSevrageTruies(); refreshCasesCapacity();});
+      if(!bandSev.dataset.listenersReady){
+        document.querySelectorAll('[name="sevrage_mode"]').forEach(function(r){r.addEventListener('change',populateSevrageTruies);});
+        bandSev.addEventListener('change',function(){populateSevrageTruies(); refreshCasesCapacity();});
+        bandSev.dataset.listenersReady='1';
+      }
       // also refresh capacities now
       refreshCasesCapacity();
       // prepare add destination
       setupSevrageRepartition();
+      populateSevrageTruies();
       // start polling if panel is open
       if(panel.classList.contains('open')){ startCaseCapacityPolling(); }
     } else {
@@ -395,30 +403,28 @@
   // Sevrage helper functions
   function populateSevrageTruies(){
     var bandId=document.getElementById('fab-bande-sevrage').value; var list=document.getElementById('fab-sevrage-truies-list'); list.replaceChildren();
-    if(!bandId) { document.getElementById('fab-sevrage-truies').style.display='none'; updateSevrageUI(); return; }
+    sevrageWholeSelection=[];
+    if(!bandId) { document.getElementById('fab-sevrage-total').textContent='0'; document.getElementById('fab-sevrage-total-2').textContent='0'; document.getElementById('fab-sevrage-truies').style.display='none'; updateSevrageUI(); return; }
     var rows=_truieRows||[]; var filtered=rows.filter(function(r){return String(r.bande_code||'')!=='' && String(getBandIdForCode(r.bande_code))===String(bandId);});
     // if none match by code, fallback to any truie with bande_code present matching code via movementBands
     if(filtered.length===0){filtered = rows.filter(function(r){return r.bande_code && movementBands.some(function(b){return b.code===r.bande_code && String(b.id)===String(bandId);});});}
     // If mode 'toute', fetch an estimate for the bande to show total and avoid manual per-truie selection
     var mode = document.querySelector('[name="sevrage_mode"]:checked')?.value || 'toute';
     if(mode==='toute'){
+      document.getElementById('fab-sevrage-total').textContent='0';
+      document.getElementById('fab-sevrage-total-2').textContent='0';
       fetch('/api/bande/'+encodeURIComponent(bandId)+'/sevrage-estimate').then(function(resp){return resp.json();}).then(function(data){
-        var total = data && data.total_expected ? data.total_expected : 0;
+        sevrageWholeSelection=(data&&Array.isArray(data.truies)?data.truies:[]).map(function(item){return {id:Number(item.id),nb:Number(item.estimate)||0};}).filter(function(item){return Number.isInteger(item.id)&&item.id>0;});
+        var total=sevrageWholeSelection.reduce(function(sum,item){return sum+item.nb;},0);
         document.getElementById('fab-sevrage-total').textContent = total;
         document.getElementById('fab-sevrage-total-2').textContent = total;
-        // ensure repartition UI visible/enabled
-        document.getElementById('fab-sevrage-repartition').style.display = total>0 ? 'block' : 'none';
-        document.getElementById('fab-sevrage-repartition').querySelectorAll('input,select').forEach(function(f){f.disabled = !(total>0);});
-        // hide truie list in 'toute' mode
-        document.getElementById('fab-sevrage-truies').style.display='none';
+        updateSevrageUI();
       }).catch(function(){
-        // fallback: compute total from available per-truie values
-        var total = filtered.reduce(function(acc,r){ var p=(r.dernier_nes_vifs!=null)?(parseInt(r.dernier_nes_vifs)||0):((r.dernier_nb_sevres!=null)?(parseInt(r.dernier_nb_sevres)||0):0); return acc + p; },0);
+        sevrageWholeSelection=filtered.map(function(r){var nb=(r.dernier_nes_vifs!=null)?(parseInt(r.dernier_nes_vifs)||0):((r.dernier_nb_sevres!=null)?(parseInt(r.dernier_nb_sevres)||0):0);return {id:Number(r.id),nb:nb};}).filter(function(item){return Number.isInteger(item.id)&&item.id>0;});
+        var total=sevrageWholeSelection.reduce(function(sum,item){return sum+item.nb;},0);
         document.getElementById('fab-sevrage-total').textContent = total;
         document.getElementById('fab-sevrage-total-2').textContent = total;
-        document.getElementById('fab-sevrage-repartition').style.display = total>0 ? 'block' : 'none';
-        document.getElementById('fab-sevrage-repartition').querySelectorAll('input,select').forEach(function(f){f.disabled = !(total>0);});
-        document.getElementById('fab-sevrage-truies').style.display='none';
+        updateSevrageUI();
       });
       updateSevrageUI();
       return;
@@ -444,10 +450,10 @@
   if(rem===undefined || rem===null || rem==='') { badge.style.display='none'; badge.textContent=''; badge.className='capacity-badge'; return; }
   badge.style.display='inline-block'; var n = parseInt(rem)||0; if(n<=0){ badge.textContent = 'Plein'; badge.className='capacity-badge full'; } else { badge.textContent = 'Libre: '+n; if(n<5){ badge.className='capacity-badge warn'; } else { badge.className='capacity-badge good'; } } }
 
-  function recomputeSevrageTotal(){ var total=0; document.querySelectorAll('#fab-sevrage-truies-list .fab-sev-nb').forEach(function(inp){ if(inp.previousSibling && inp.previousSibling.checked){ var v=parseInt(inp.value)||0; total+=v; }}); document.getElementById('fab-sevrage-total').textContent=total; document.getElementById('fab-sevrage-total-2').textContent=total; document.getElementById('fab-sevrage-sum').textContent=(parseInt(document.getElementById('fab-sevrage-sum').textContent)||0); }
+  function recomputeSevrageTotal(){ var total=0; document.querySelectorAll('#fab-sevrage-truies-list>div').forEach(function(row){var cb=row.querySelector('.fab-sev-check');var inp=row.querySelector('.fab-sev-nb');if(cb&&cb.checked&&inp){total+=parseInt(inp.value)||0;}}); document.getElementById('fab-sevrage-total').textContent=total; document.getElementById('fab-sevrage-total-2').textContent=total; updateSevrageUI(); }
   function updateSevrageUI(){ var mode=document.querySelector('[name="sevrage_mode"]:checked')?.value; var total=parseInt(document.getElementById('fab-sevrage-total').textContent)||0; if(mode==='truie'){ document.getElementById('fab-sevrage-truies').style.display='block'; } else { document.getElementById('fab-sevrage-truies').style.display='none'; }
     document.getElementById('fab-sevrage-repartition').style.display = (total>0)?'block':'none'; document.getElementById('fab-sevrage-repartition').querySelectorAll('input,select').forEach(function(f){f.disabled = !(total>0);});
-    document.getElementById('fab-sevrage-sum').textContent = 0;
+    recomputeSevrageDestSum();
   }
   function setupSevrageRepartition(){
     var container=document.getElementById('fab-sevrage-lines'); container.replaceChildren();
@@ -463,7 +469,8 @@
       // initialize hint
       updateHint();
     }
-    document.getElementById('fab-sevrage-add-dest').addEventListener('click',function(){ addLine(); recomputeSevrageDestSum(); });
+    var addButton=document.getElementById('fab-sevrage-add-dest');
+    if(!addButton.dataset.listenerReady){addButton.addEventListener('click',function(){ addLine(); recomputeSevrageDestSum(); });addButton.dataset.listenerReady='1';}
     // start with one line
     addLine(); recomputeSevrageDestSum();
   }
@@ -482,6 +489,21 @@
       if(values.every(function(value){return !value;})){event.preventDefault(); showToast('Saisissez au moins l\u2019ELD, le poids ou la NEC.','error'); return; }
     }
     if(typeInput.value==='sevrage'){
+      var mode=document.querySelector('[name="sevrage_mode"]:checked')?.value||'toute';
+      var selected=[];
+      if(mode==='toute'){
+        selected=sevrageWholeSelection.slice();
+      } else {
+        document.querySelectorAll('#fab-sevrage-truies-list>div').forEach(function(row){var cb=row.querySelector('.fab-sev-check');var inp=row.querySelector('.fab-sev-nb');if(cb&&cb.checked&&inp){selected.push({id:parseInt(cb.dataset.sowId),nb:parseInt(inp.value)||0});}});
+      }
+      if(selected.length===0){event.preventDefault();showToast(mode==='toute'?'Aucune truie à sevrer dans cette bande.':'Sélectionne au moins une truie.','error');return;}
+      var expected=selected.reduce(function(sum,item){return sum+(item.nb||0);},0);
+      var dist=[];var sum=0;
+      document.querySelectorAll('#fab-sevrage-lines>div').forEach(function(line){var sel=line.querySelector('.fab-sev-dest');var inp=line.querySelector('.fab-sev-dest-nb');var nb=inp?(parseInt(inp.value)||0):0;if(sel&&sel.value&&nb>0){dist.push({case_id:parseInt(sel.value),nombre:nb});sum+=nb;}});
+      if(dist.length===0){event.preventDefault();showToast('Ajoute au moins une salle de destination.','error');return;}
+      if(sum!==expected){event.preventDefault();showToast('La somme des porcelets répartis ('+sum+') doit correspondre au total à sevrer ('+expected+').','error');return;}
+      document.getElementById('sevrage_truies').value=JSON.stringify(selected);
+      document.getElementById('sevrage_distribution').value=JSON.stringify(dist);
       // verify per-line capacities before submit
       var invalidFound=false; document.querySelectorAll('#fab-sevrage-lines div').forEach(function(line){ var sel=line.querySelector('.fab-sev-dest'); var nb=parseInt(line.querySelector('.fab-sev-dest-nb').value)||0; if(sel && sel.value){ var remaining = sel.options[sel.selectedIndex] && sel.options[sel.selectedIndex].dataset ? parseInt(sel.options[sel.selectedIndex].dataset.remaining||'') : NaN; if(!Number.isNaN(remaining) && nb>remaining){ invalidFound=true; } } }); if(invalidFound){ event.preventDefault(); showToast('Une ou plusieurs destinations dépassent la capacité restante. Ajuste la répartition.','error'); return; }
       // submit via AJAX to receive immediate refresh info
@@ -552,29 +574,6 @@
       setSubmitPending(false);
       }).catch(function(err){ setSubmitPending(false); showToast('Erreur lors de l\'enregistrement: '+(err&&err.message?err.message:'Erreur'),'error'); });
       return;
-      // collect selected truies
-      var mode=document.querySelector('[name="sevrage_mode"]:checked')?.value||'toute';
-      var selected=[]; var total=0;
-      if(mode==='toute'){
-        // collect all truies for band and use last known counts if available
-        var bandId=document.getElementById('fab-bande-sevrage').value;
-        _truieRows.filter(function(r){ return r.bande_code && String(getBandIdForCode(r.bande_code))===String(bandId);}).forEach(function(r){ var nb = (r.dernier_nes_vifs!=null)?(parseInt(r.dernier_nes_vifs)||0):((r.dernier_nb_sevres!=null)?(parseInt(r.dernier_nb_sevres)||0):0); selected.push({id:parseInt(r.id),nb:nb}); });
-      } else {
-        document.querySelectorAll('#fab-sevrage-truies-list div').forEach(function(div){ var cb=div.querySelector('.fab-sev-check'); if(cb && cb.checked){ var id=parseInt(cb.dataset.sowId); var nb=parseInt(div.querySelector('.fab-sev-nb').value)||0; selected.push({id:id,nb:nb}); total += nb; }});
-      }
-      // if mode toute, require user to enter numbers in list? We will require at least one selected or if mode toute take all but require distribution total later
-      if(mode==='truie' && selected.length===0){ event.preventDefault(); showToast('Sélectionne au moins une truie.','error'); return; }
-      // distribution
-      var dist=[]; var sum=0; document.querySelectorAll('#fab-sevrage-lines div').forEach(function(line){ var sel=line.querySelector('.fab-sev-dest'); var nb=parseInt(line.querySelector('.fab-sev-dest-nb').value)||0; if(sel && sel.value){ dist.push({case_id:parseInt(sel.value),nombre:nb}); sum += nb; }});
-      if(dist.length===0){ event.preventDefault(); showToast('Ajoute au moins une salle de destination.','error'); return; }
-      if(mode==='truie'){
-        // verify totals
-        var expected = selected.reduce(function(acc,item){return acc + (item.nb||0);},0);
-        if(sum !== expected){ event.preventDefault(); showToast('La somme des porcelets répartis ('+sum+') doit correspondre au total sélectionné ('+expected+').','error'); return; }
-      }
-      // set hidden inputs as JSON
-      document.getElementById('sevrage_truies').value = JSON.stringify(selected);
-      document.getElementById('sevrage_distribution').value = JSON.stringify(dist);
     }
   });
 })();

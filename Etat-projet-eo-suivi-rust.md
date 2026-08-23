@@ -1,14 +1,12 @@
 # EO-Suivi Élevage Rust — État du projet
 
-Version actuelle : **2.2.12** — Dernière mise à jour de ce document : 19 août 2026.
+Version actuelle : **2.2.14** — Dernière mise à jour de ce document : 23 août 2026.
 
-Ce fichier remplace et fusionne : `AUDIT-PORTAGE-RUST-2.1.2.md`,
-`DEMANDES-MODIFICATIONS-EOELEVAGE.md`, `LISTING-APPLICATION-EO-SUIVI.md`,
-`MISES-A-JOUR-RESTANTES.md` et `PORTAGE-RUST.md`. Les informations désormais
-obsolètes (anciens comptages de routes, tâches déjà livrées, doublons entre
-documents) ont été retirées. `VERSIONS-RUST.md` (historique détaillé version
-par version) et `MISE-A-JOUR-DEBIAN13.md` (procédure serveur) restent des
-fichiers séparés et ne sont pas dupliqués ici au-delà d'un résumé.
+Ce fichier fusionne les anciens audits, listings et listes de modifications.
+Les informations devenues obsolètes (anciens comptages de routes, tâches déjà
+livrées et doublons) ont été retirées. L'historique destiné aux utilisateurs
+est affiché dans l'application sur `/correctifs`; l'historique technique
+complet reste disponible dans les commits et demandes de fusion GitHub.
 
 ---
 
@@ -32,7 +30,7 @@ août 2026 ; la priorité actuelle porte sur la fiabilité des effectifs
 ## 2. Fonctions livrées
 
 - Saisie rapide (bouton « + ») : ELD, poids, NEC, IA, écho, chaleur, pertes,
-  sorties et mouvements de porcs.
+  sorties, sevrages et mouvements de porcs.
 - Transferts par bande ou unité, avec bâtiment/salle/case de destination.
 - Suivi de bande : dates clés, effectif, emplacements, marquage, avance/retard
   sur le départ ou la vente.
@@ -53,7 +51,7 @@ août 2026 ; la priorité actuelle porte sur la fiabilité des effectifs
   réversible avec rollback automatique.
 - Tri croissant/décroissant sur les tableaux (classe `.rust-sortable`).
 
-*(Détail version par version : voir `VERSIONS-RUST.md`.)*
+*(Détail des versions : voir la page `/correctifs` de l'application.)*
 
 ---
 
@@ -511,7 +509,7 @@ l'arrêt déclenche le retour arrière ; la sauvegarde de la base est conservée
 ```bash
 systemctl status eo-suivi-rust --no-pager -l
 journalctl -u eo-suivi-rust -n 80 --no-pager -l -o cat
-curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.12"
+curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.14"
 ```
 
 Puis ouvrir `https://rust-elevage.basse-chevrie.ovh`.

@@ -1,4 +1,4 @@
-# EO-Suivi Élevage — portage Rust 2.2.6
+# EO-Suivi Élevage — portage Rust 2.2.14
 
 Cette archive reprend la base EO-Suivi 1.65 sous forme d'un serveur Rust. Elle
 n'utilise plus FastAPI, SQLModel, Uvicorn ni Python pour les fonctions déjà
@@ -48,7 +48,7 @@ compatibilité avec les sauvegardes 1.55 à 1.65.
   sessions.
 
 Le détail de la correspondance fonctionnelle avec la 1.65 se trouve dans
-`ETAT-PROJET-EO-SUIVI-RUST.md`. L'OCR des images reste volontairement un
+`Etat-projet-eo-suivi-rust.md`. L'OCR des images reste volontairement un
 module externe : les imports PDF texte sont natifs et les scans sans couche
 texte sont refusés.
 
@@ -66,8 +66,7 @@ Ouvrir ensuite <http://localhost:8080>.
 Sur le serveur Debian 13 déjà relié au dépôt GitHub, la mise à jour contrôlée
 se fait avec `/opt/eo-suivi-rust-src/scripts/mettre-a-jour-debian13.sh`. Elle
 teste et sauvegarde avant l'arrêt, puis restaure l'ancien binaire si le
-contrôle de santé échoue. La première activation est détaillée dans
-`MISE-A-JOUR-DEBIAN13.md`.
+contrôle de santé échoue.
 
 Sur une base neuve, le compte temporaire est `admin` / `admin`. Le logiciel
 oblige à choisir immédiatement un mot de passe d'au moins huit caractères.
@@ -118,8 +117,8 @@ sudo apt-get install musl-tools
 ```
 
 Le schéma SQLite de l'archive a été exécuté sur une base vierge, puis sur une
-copie de la sauvegarde réelle du 16 août 2026. Les 51 tables attendues et
+copie de la sauvegarde réelle du 16 août 2026. Les tables attendues et
 leurs colonnes correspondent ; la base réelle contient en plus une ancienne
 table énergie vide, laissée intacte. Les contrôles SQLite `quick_check` et
-clés étrangères sont conformes. La 2.2.4 doit repasser les trois commandes
-Cargo ci-dessus sur le serveur avant remplacement du binaire.
+clés étrangères sont conformes. Chaque mise à jour doit repasser les trois
+commandes Cargo ci-dessus sur le serveur avant remplacement du binaire.
