@@ -10,6 +10,7 @@ BACKUP_DIR="${EO_BACKUP_DIR:-/var/backups/eo-suivi-rust}"
 SERVICE="${EO_SERVICE:-eo-suivi-rust}"
 SSH_KEY="${EO_GITHUB_SSH_KEY:-/root/.ssh/eo-suivi-rust-github}"
 LOGIN_URL="${EO_LOGIN_URL:-http://127.0.0.1:8080/login}"
+STYLE_URL="${EO_STYLE_URL:-http://127.0.0.1:8080/static/style.css}"
 
 die() {
     echo "Erreur : $*" >&2
@@ -54,8 +55,10 @@ version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)
 
 if systemctl is-active --quiet "$SERVICE"; then
     current_page=$(curl -fsS "$LOGIN_URL" 2>/dev/null || true)
-    if grep -Fq "Version Rust $version" <<<"$current_page"; then
-        echo "EO-Suivi Rust $version est déjà installé et répond correctement."
+    current_style=$(curl -fsS "$STYLE_URL?v=$version" 2>/dev/null || true)
+    if grep -Fq "Version Rust $version" <<<"$current_page" \
+        && grep -Fq "v$version" <<<"$current_style"; then
+        echo "EO-Suivi Rust $version et son interface sont déjà installés."
         exit 0
     fi
 fi
@@ -70,6 +73,7 @@ stamp=$(date +%Y%m%d_%H%M%S)
 db_backup="$BACKUP_DIR/elevage_avant_${version}_${stamp}.db"
 binary_backup="$BACKUP_DIR/eo-suivi-elevage_${stamp}"
 unit_backup="$BACKUP_DIR/eo-suivi-rust.service_${stamp}"
+static_backup="$BACKUP_DIR/static_${stamp}"
 new_binary="$APP_DIR/.eo-suivi-elevage.new-${stamp}"
 
 echo "Sauvegarde contrôlée de la base : $db_backup"
@@ -78,6 +82,7 @@ sqlite3 "$DB_FILE" ".backup '$db_backup'"
 
 binary_saved=0
 unit_saved=0
+static_saved=0
 if [[ -f "$APP_DIR/eo-suivi-elevage" ]]; then
     cp -a "$APP_DIR/eo-suivi-elevage" "$binary_backup"
     binary_saved=1
@@ -85,6 +90,10 @@ fi
 if [[ -f /etc/systemd/system/eo-suivi-rust.service ]]; then
     cp -a /etc/systemd/system/eo-suivi-rust.service "$unit_backup"
     unit_saved=1
+fi
+if [[ -d "$APP_DIR/static" ]]; then
+    cp -a "$APP_DIR/static" "$static_backup"
+    static_saved=1
 fi
 
 # Préparer le nouveau binaire sur le même système de fichiers permet au mv
@@ -105,6 +114,10 @@ restore_previous_release() {
         fi
         if [[ "$unit_saved" -eq 1 ]]; then
             install -m 0644 "$unit_backup" /etc/systemd/system/eo-suivi-rust.service
+        fi
+        if [[ "$static_saved" -eq 1 ]]; then
+            mkdir -p "$APP_DIR/static"
+            cp -a "$static_backup/." "$APP_DIR/static/"
         fi
         systemctl daemon-reload || true
         systemctl start "$SERVICE" || true
@@ -129,13 +142,15 @@ systemctl start "$SERVICE"
 healthy=0
 for _ in {1..15}; do
     if current_page=$(curl -fsS "$LOGIN_URL" 2>/dev/null) \
-        && grep -Fq "Version Rust $version" <<<"$current_page"; then
+        && current_style=$(curl -fsS "$STYLE_URL?v=$version" 2>/dev/null) \
+        && grep -Fq "Version Rust $version" <<<"$current_page" \
+        && grep -Fq "v$version" <<<"$current_style"; then
         healthy=1
         break
     fi
     sleep 1
 done
-[[ "$healthy" -eq 1 ]] || die "le contrôle HTTP/version a échoué sur $LOGIN_URL"
+[[ "$healthy" -eq 1 ]] || die "le contrôle HTTP de la version ou de l'interface a échoué."
 
 rollback_required=0
 trap - EXIT

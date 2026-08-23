@@ -1,79 +1,101 @@
 {% extends "base.html" %}{% block content %}
-<section class="home-hero">
+<section class="dashboard-toolbar">
   <div>
-    <span class="home-eyebrow">Pilotage de l’élevage</span>
-    <h1>Bonjour {{ session.nom }}</h1>
-    <p>Les étapes importantes, les effectifs et les résultats essentiels sont réunis ici.</p>
+    <span class="dashboard-eyebrow">Centre de pilotage</span>
+    <h1>Tableau de bord élevage</h1>
+    <p>Situation au {{ aujourd_hui|date_fr }} · {{ stats.band_active }} bande(s) active(s) · {{ stats.truies }} truie(s)</p>
   </div>
-  <div class="home-hero-actions">
-    <a href="/bandes" class="home-action primary">Voir les bandes</a>
-    <a href="/quotidien" class="home-action">Contrôle quotidien</a>
+  <div class="dashboard-actions">
+    <a href="/quotidien" class="dashboard-button secondary">Contrôle quotidien</a>
+    <a href="/bandes" class="dashboard-button primary">Gérer les bandes</a>
   </div>
 </section>
 
-<div class="rust-grid home-kpis">
-  <div class="card kpi"><span class="kpi-icon">🐷</span><div class="v">{{ stats.band_active }}</div><div class="l">Bandes actives</div></div>
-  <div class="card kpi"><span class="kpi-icon">🐖</span><div class="v">{{ stats.truies }}</div><div class="l">Truies actives</div></div>
-  <div class="card kpi"><span class="kpi-icon">🚚</span><div class="v">{{ stats.porcs_vendus_annee }}</div><div class="l">Porcs vendus en {{ annee }}</div></div>
-  <div class="card kpi"><span class="kpi-icon">€/kg</span><div class="v">{% if stats.prix_net_kg is not none %}{{ stats.prix_net_kg|decimal3 }} €{% else %}—{% endif %}</div><div class="l">Prix net/kg en {{ annee }}</div></div>
-  <div class="card kpi"><span class="kpi-icon">📈</span><div class="v">{% if stats.prix_dernieres_ventes is not none %}{{ stats.prix_dernieres_ventes|decimal3 }} €{% else %}—{% endif %}</div><div class="l">Moyenne des 5 dernières ventes</div></div>
-  <div class="card kpi"><span class="kpi-icon">⚠</span><div class="v">{{ stats.morts_annee }}</div><div class="l">Mortalités déclarées en {{ annee }}</div></div>
-  <div class="card kpi"><span class="kpi-icon">€</span><div class="v">{{ stats.marge|euro }}</div><div class="l">Marge partielle cumulée</div></div>
-</div>
-
-{% if capacites %}
-<section class="card home-section">
-  <div class="home-section-head"><div><span class="home-section-icon">▦</span><h2>Capacités par étape</h2></div></div>
-  <div class="rust-grid capacity-grid">{% for c in capacites %}<div class="capacity-card"><b>{{ c.occupation }}/{{ c.capacite }}</b><span>{{ c.libelle }}</span><small>{{ c.places_disponibles }} place(s) libre(s)</small></div>{% endfor %}</div>
+<section class="dashboard-kpis" aria-label="Indicateurs principaux">
+  <div class="dashboard-kpi"><span class="kpi-symbol">B</span><div><b>{{ stats.band_active }}</b><small>Bandes actives</small></div></div>
+  <div class="dashboard-kpi"><span class="kpi-symbol">T</span><div><b>{{ stats.truies }}</b><small>Truies actives</small></div></div>
+  <div class="dashboard-kpi"><span class="kpi-symbol">PV</span><div><b>{{ stats.porcs_vendus_annee }}</b><small>Porcs vendus {{ annee }}</small></div></div>
+  <div class="dashboard-kpi"><span class="kpi-symbol">€/kg</span><div><b>{% if stats.prix_net_kg is not none %}{{ stats.prix_net_kg|decimal3 }} €{% else %}—{% endif %}</b><small>Prix net {{ annee }}</small></div></div>
+  <div class="dashboard-kpi"><span class="kpi-symbol">M5</span><div><b>{% if stats.prix_dernieres_ventes is not none %}{{ stats.prix_dernieres_ventes|decimal3 }} €{% else %}—{% endif %}</b><small>Moyenne 5 ventes</small></div></div>
+  <div class="dashboard-kpi alert-kpi"><span class="kpi-symbol">P</span><div><b>{{ stats.morts_annee }}</b><small>Pertes déclarées {{ annee }}</small></div></div>
+  <div class="dashboard-kpi"><span class="kpi-symbol">€</span><div><b>{{ stats.marge|euro }}</b><small>Marge partielle</small></div></div>
 </section>
-{% endif %}
 
-<section class="home-bands">
-  <div class="home-section-head">
-    <div><span class="home-section-icon">➜</span><div><h2>Avancement des bandes</h2><p>Le cycle complet, de l’insémination au départ abattoir.</p></div></div>
-    <a href="/bandes">Gérer les bandes</a>
+<section class="band-control">
+  <div class="dashboard-section-head">
+    <div><span class="section-code">CYCLE</span><div><h2>Conduite des bandes</h2><p>Échéancier technique de l’insémination au départ abattoir.</p></div></div>
+    <a href="/planning">Ouvrir le planning complet</a>
   </div>
+
   {% for l in bandes %}
   <article class="band-process-card">
-    <div class="band-process-head">
-      <div>
+    <div class="band-command-head">
+      <div class="band-identity">
+        <span class="band-label">Bande</span>
         <a href="/bande/{{ l.id }}" class="band-process-code">{{ l.code }}</a>
-        <span class="band-current-stage">{{ l.stade }}</span>
+        {% if l.num_officiel %}<span class="band-official">N° {{ l.num_officiel }}</span>{% endif %}
       </div>
-      <div class="band-process-meta">
-        {% if l.site %}<span>📍 {{ l.site }}</span>{% endif %}
-        <span>🐖 {{ l.truies }} truie(s)</span>
-        <span>📅 Mise-bas {{ l.date_mb|date_fr }}</span>
-        {% if l.age is not none %}<span>J{{ l.age }}</span>{% endif %}
+      <div class="band-facts">
+        <div><small>Stade actuel</small><strong>{{ l.stade }}</strong></div>
+        <div><small>Âge de la bande</small><strong>{% if l.age is not none %}J{{ l.age }}{% else %}Non calculé{% endif %}</strong></div>
+        <div><small>Effectif truies</small><strong{% if l.truies == 0 %} class="warning-value"{% endif %}>{{ l.truies }}</strong></div>
+        <div><small>Site</small><strong>{% if l.site %}{{ l.site }}{% else %}Non renseigné{% endif %}</strong></div>
       </div>
     </div>
-    <div class="band-progress" role="progressbar" aria-label="Avancement de la bande {{ l.code }}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ l.progression }}">
-      <span style="width:{{ l.progression }}%"></span>
+
+    <div class="band-cycle-head">
+      <span>Avancement du cycle</span>
+      <b>{{ l.progression }} %</b>
     </div>
-    <div class="band-steps-scroll"><div class="band-steps" role="list" aria-label="Étapes de la bande {{ l.code }}">
+    <div class="band-progress" role="progressbar" aria-label="Avancement de la bande {{ l.code }}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ l.progression }}"><span style="width:{{ l.progression }}%"></span></div>
+
+    <div class="band-steps" role="list" aria-label="Étapes techniques de la bande {{ l.code }}">
       {% for e in l.etapes %}
       <div class="band-step{% if e.terminee %} is-done{% endif %}{% if e.actuelle %} is-current{% endif %}" role="listitem">
-        <span class="band-step-dot">{{ e.icone }}</span>
-        <b>{{ e.nom }}</b>
-        <small>{% if e.date %}{{ e.date|date_fr }}{% else %}À définir{% endif %}</small>
+        <span class="band-stage-code">{{ e.repere }}</span>
+        <div class="band-stage-copy"><b>{{ e.nom }}</b><small>{% if e.date %}{{ e.date|date_fr }}{% else %}Date à définir{% endif %}</small></div>
       </div>
       {% endfor %}
-    </div></div>
-    <div class="band-next"><span>Prochaine action</span><b>{{ l.prochaine }}</b><a href="/bande/{{ l.id }}">Ouvrir la fiche →</a></div>
+    </div>
+
+    <div class="band-next is-{{ l.urgence }}">
+      <span class="next-signal" aria-hidden="true"></span>
+      <div class="next-copy"><small>Prochaine intervention</small><strong>{{ l.prochaine }}</strong></div>
+      {% if l.prochaine_date %}<div class="next-date"><b>{{ l.prochaine_date|date_fr }}</b>{% if l.prochaine_delai %}<small>{{ l.prochaine_delai }}</small>{% endif %}</div>{% endif %}
+      <a href="/bande/{{ l.id }}" class="band-open">Ouvrir la fiche bande</a>
+    </div>
   </article>
   {% else %}
-  <div class="card empty-state"><span class="empty-icon">🐷</span><h3>Aucune bande active</h3><p class="muted">Créez ou réactivez une bande pour afficher son cycle.</p><a href="/bandes">Ouvrir les bandes</a></div>
+  <div class="dashboard-empty"><span>B</span><div><h3>Aucune bande active</h3><p>Créez ou réactivez une bande pour afficher son échéancier technique.</p></div><a href="/bandes">Gérer les bandes</a></div>
   {% endfor %}
 </section>
 
-<section class="card home-section">
-  <div class="home-section-head"><div><span class="home-section-icon">▥</span><h2>Courbe des dernières ventes</h2></div><a href="/economique">Ouvrir le suivi économique</a></div>
-  {% if dernieres_ventes %}<div class="sale-chart" aria-label="Prix net au kilo des dix dernières ventes">{% for p in dernieres_ventes %}<div class="sale-chart-point"><b>{{ p.prix_net_kg|decimal3 }}</b><div class="sale-chart-bar" style="height:{{ p.hauteur }}px"></div><small>{{ p.date|date_fr }}</small></div>{% endfor %}</div>{% else %}<p class="rust-empty">Aucune vente avec poids et montant.</p>{% endif %}
+{% if capacites %}
+<section class="dashboard-panel">
+  <div class="dashboard-section-head compact"><div><span class="section-code">CAP</span><div><h2>Capacités par étape</h2><p>Occupation instantanée des bâtiments.</p></div></div></div>
+  <div class="capacity-grid">{% for c in capacites %}<div class="capacity-card"><div><b>{{ c.occupation }}</b><span>/ {{ c.capacite }}</span></div><strong>{{ c.libelle }}</strong><small>{{ c.places_disponibles }} place(s) disponible(s)</small></div>{% endfor %}</div>
 </section>
+{% endif %}
 
-<div class="rust-grid home-bottom-grid">
-  <section class="card"><div class="home-section-head compact"><div><span class="home-section-icon">💉</span><h2>Inséminations à prévoir</h2></div></div>{% for i in inseminations %}<p><b>{{ i.num_travail }}</b> — {{ i.date_prevue|date_fr }}</p>{% else %}<p class="muted">Aucune alerte.</p>{% endfor %}<a href="/inseminations">Ouvrir les inséminations</a></section>
-  <section class="card"><div class="home-section-head compact"><div><span class="home-section-icon">✓</span><h2>Tâches</h2></div></div>{% for t in taches %}<p><b>{{ t.titre }}</b>{% if t.echeance %} — {{ t.echeance|date_fr }}{% endif %}</p>{% else %}<p class="muted">Aucune tâche ouverte.</p>{% endfor %}<a href="/taches">Voir les tâches</a></section>
-  <section class="card"><div class="home-section-head compact"><div><span class="home-section-icon">€</span><h2>Prix net mensuel</h2></div></div><div class="rust-scroll"><table><thead><tr><th>Mois</th><th>Porcs</th><th>€/kg net</th></tr></thead><tbody>{% for p in prix_tendance %}<tr><td>{{ p.mois }}</td><td>{{ p.porcs }}</td><td>{% if p.prix_net_kg is not none %}<b>{{ p.prix_net_kg|decimal3 }}</b>{% else %}—{% endif %}</td></tr>{% else %}<tr><td colspan="3" class="rust-empty">Aucune vente</td></tr>{% endfor %}</tbody></table></div></section>
+<div class="dashboard-lower-grid">
+  <section class="dashboard-panel sales-panel">
+    <div class="dashboard-section-head compact"><div><span class="section-code">€/KG</span><div><h2>Dernières ventes</h2><p>Évolution du prix net au kilogramme.</p></div></div><a href="/economique">Suivi économique</a></div>
+    {% if dernieres_ventes %}<div class="sale-chart" aria-label="Prix net au kilo des dix dernières ventes">{% for p in dernieres_ventes %}<div class="sale-chart-point"><b>{{ p.prix_net_kg|decimal3 }}</b><div class="sale-chart-bar" style="height:{{ p.hauteur }}px"></div><small>{{ p.date|date_fr }}</small></div>{% endfor %}</div>{% else %}<p class="rust-empty">Aucune vente avec poids et montant.</p>{% endif %}
+  </section>
+
+  <section class="dashboard-panel action-panel">
+    <div class="dashboard-section-head compact"><div><span class="section-code">IA</span><div><h2>Inséminations à prévoir</h2><p>Truies en attente d’intervention.</p></div></div><a href="/inseminations">Tout afficher</a></div>
+    <div class="dashboard-action-list">{% for i in inseminations %}<div><strong>{{ i.num_travail }}</strong><span>{{ i.date_prevue|date_fr }}</span></div>{% else %}<p class="muted">Aucune insémination en attente.</p>{% endfor %}</div>
+  </section>
+
+  <section class="dashboard-panel action-panel">
+    <div class="dashboard-section-head compact"><div><span class="section-code">À FAIRE</span><div><h2>Tâches ouvertes</h2><p>Travaux restant à traiter.</p></div></div><a href="/taches">Tout afficher</a></div>
+    <div class="dashboard-action-list">{% for t in taches %}<div><strong>{{ t.titre }}</strong><span>{% if t.echeance %}{{ t.echeance|date_fr }}{% else %}Sans échéance{% endif %}</span></div>{% else %}<p class="muted">Aucune tâche ouverte.</p>{% endfor %}</div>
+  </section>
+
+  <section class="dashboard-panel monthly-panel">
+    <div class="dashboard-section-head compact"><div><span class="section-code">MOIS</span><div><h2>Prix net mensuel</h2><p>Synthèse des apports.</p></div></div></div>
+    <div class="rust-scroll"><table><thead><tr><th>Mois</th><th>Porcs</th><th>€/kg net</th></tr></thead><tbody>{% for p in prix_tendance %}<tr><td>{{ p.mois }}</td><td>{{ p.porcs }}</td><td>{% if p.prix_net_kg is not none %}<b>{{ p.prix_net_kg|decimal3 }}</b>{% else %}—{% endif %}</td></tr>{% else %}<tr><td colspan="3" class="rust-empty">Aucune vente</td></tr>{% endfor %}</tbody></table></div>
+  </section>
 </div>
 {% endblock %}

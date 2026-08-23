@@ -66,7 +66,7 @@ fn accueil_visualise_le_cycle_et_saisie_rapide_propose_la_mise_bas() {
     let styles = include_str!("../static/style.css");
     let routes = include_str!("../src/routes/parity.rs");
 
-    assert!(dashboard.contains("Avancement des bandes"));
+    assert!(dashboard.contains("Avancement du cycle"));
     assert!(dashboard.contains("class=\"band-progress\""));
     assert!(dashboard.contains("{% for e in l.etapes %}"));
     assert!(base.contains("data-type=\"mise_bas\""));
@@ -74,7 +74,20 @@ fn accueil_visualise_le_cycle_et_saisie_rapide_propose_la_mise_bas() {
     assert!(base.contains("Perte porc et porcelet"));
     assert!(routes.contains("\"mise_bas\" =>"));
     assert!(routes.contains("perf_nt=?"));
-    assert!(styles.contains("v2.2.16 — interface plus chaleureuse"));
+    assert!(dashboard.contains("Conduite des bandes"));
+    assert!(dashboard.contains("class=\"band-stage-code\""));
+    assert!(base.contains("/static/style.css?v={{ app_version }}"));
+    assert!(styles.contains("v2.2.17 — centre de pilotage professionnel"));
+}
+
+#[test]
+fn mise_a_jour_debian_controle_aussi_la_feuille_de_style() {
+    let script = include_str!("../scripts/mettre-a-jour-debian13.sh");
+
+    assert!(script.contains("STYLE_URL="));
+    assert!(script.contains("current_style=$(curl"));
+    assert!(script.contains("grep -Fq \"v$version\""));
+    assert!(script.contains("static_backup="));
 }
 
 #[test]

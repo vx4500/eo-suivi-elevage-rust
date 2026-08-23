@@ -1,6 +1,6 @@
 # EO-Suivi Élevage Rust — État du projet
 
-Version actuelle : **2.2.16** — Dernière mise à jour de ce document : 23 août 2026.
+Version actuelle : **2.2.17** — Dernière mise à jour de ce document : 23 août 2026.
 
 Ce fichier fusionne les anciens audits, listings et listes de modifications.
 Les informations devenues obsolètes (anciens comptages de routes, tâches déjà
@@ -31,8 +31,10 @@ août 2026 ; la priorité actuelle porte sur la fiabilité des effectifs
 
 - Saisie rapide (bouton « + ») : ELD, poids, NEC, IA, écho, chaleur, mises-bas,
   pertes de porcs et porcelets, sorties, sevrages et mouvements de porcs.
-- Tableau de bord visuel : huit étapes datées par bande, stade actif, barre de
-  progression, prochaine action et présentation générale modernisée.
+- Centre de pilotage professionnel : huit étapes techniques datées par bande,
+  stade actif, progression, prochaine intervention avec délai, effectif et
+  site. La feuille de style est versionnée pour empêcher les anciens visuels
+  conservés par le navigateur ou Cloudflare.
 - Transferts par bande ou unité, avec bâtiment/salle/case de destination.
 - Suivi de bande : dates clés, effectif, emplacements, marquage, avance/retard
   sur le départ ou la vente.
@@ -514,7 +516,7 @@ l'arrêt déclenche le retour arrière ; la sauvegarde de la base est conservée
 ```bash
 systemctl status eo-suivi-rust --no-pager -l
 journalctl -u eo-suivi-rust -n 80 --no-pager -l -o cat
-curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.16"
+curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.17"
 ```
 
 Puis ouvrir `https://rust-elevage.basse-chevrie.ovh`.

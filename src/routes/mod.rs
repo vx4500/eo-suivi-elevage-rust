@@ -1230,7 +1230,7 @@ async fn password_post(
 struct BandStageView {
     nom: String,
     date: Option<String>,
-    icone: String,
+    repere: String,
     terminee: bool,
     actuelle: bool,
 }
@@ -1245,6 +1245,9 @@ struct BandView {
     age: Option<i64>,
     stade: String,
     prochaine: String,
+    prochaine_date: Option<String>,
+    prochaine_delai: Option<String>,
+    urgence: String,
     truies: i64,
     progression: i64,
     etapes: Vec<BandStageView>,
@@ -1362,13 +1365,47 @@ fn band_view(band: &Bande, sow_count: i64, schedule: BandSchedule) -> BandView {
     let today = Local::now().date_naive();
     let date = band.date_mb.as_deref().and_then(parse_stored_date);
     let age = date.map(|date| (today - date).num_days());
-    let (stade, prochaine) = age
+    let (stade, default_next) = age
         .map(|age| schedule.stage(age))
         .unwrap_or(("À renseigner", "Renseigner la date de mise-bas"));
+    let stages = schedule.stages();
     let current_stage = age.map(|age| schedule.stage_index(age)).unwrap_or(0);
-    let icons = ["💉", "🔎", "🏠", "🐷", "🍼", "↗", "🌾", "🚚"];
-    let etapes = schedule
-        .stages()
+    let cycle_complete = age.is_some_and(|age| age >= schedule.departure);
+    let next_stage = age.and_then(|age| {
+        stages
+            .iter()
+            .copied()
+            .find(|(_, offset)| *offset > age)
+    });
+    let prochaine = next_stage.map(|(name, _)| name).unwrap_or(default_next);
+    let prochaine_date = match (date, next_stage) {
+        (Some(date), Some((_, offset))) => Some(
+            (date + Duration::days(offset))
+                .format("%Y-%m-%d")
+                .to_string(),
+        ),
+        _ => None,
+    };
+    let jours_prochaine = match (age, next_stage) {
+        (Some(age), Some((_, offset))) => Some(offset - age),
+        _ => None,
+    };
+    let prochaine_delai = jours_prochaine.map(|days| {
+        if days == 1 {
+            "demain".to_string()
+        } else {
+            format!("dans {days} jours")
+        }
+    });
+    let urgence = match jours_prochaine {
+        Some(days) if days <= 7 => "urgent",
+        Some(days) if days <= 21 => "proche",
+        Some(_) => "planifie",
+        None if cycle_complete => "termine",
+        None => "incomplet",
+    };
+    let markers = ["IA", "ÉCHO", "MAT.", "MB", "SEV.", "TRANS.", "FIN.", "DÉP."];
+    let etapes = stages
         .iter()
         .enumerate()
         .map(|(index, (name, offset))| BandStageView {
@@ -1378,9 +1415,11 @@ fn band_view(band: &Bande, sow_count: i64, schedule: BandSchedule) -> BandView {
                     .format("%Y-%m-%d")
                     .to_string()
             }),
-            icone: icons[index].to_string(),
-            terminee: age.is_some() && index < current_stage,
-            actuelle: index == current_stage,
+            repere: markers[index].to_string(),
+            terminee: age.is_some() && (cycle_complete || index < current_stage),
+            actuelle: age.is_some_and(|age| {
+                !cycle_complete && age >= stages[0].1 && index == current_stage
+            }),
         })
         .collect();
     BandView {
@@ -1392,6 +1431,9 @@ fn band_view(band: &Bande, sow_count: i64, schedule: BandSchedule) -> BandView {
         age,
         stade: stade.to_string(),
         prochaine: prochaine.to_string(),
+        prochaine_date,
+        prochaine_delai,
+        urgence: urgence.to_string(),
         truies: sow_count,
         progression: age.map(|age| schedule.progression(age)).unwrap_or(0),
         etapes,
@@ -1494,6 +1536,7 @@ async fn dashboard(
     ctx.insert("prix_tendance".into(), Value::Array(price_trend));
     ctx.insert("dernieres_ventes".into(), Value::Array(latest_sales));
     ctx.insert("annee".into(), json!(year));
+    ctx.insert("aujourd_hui".into(), json!(today_iso()));
     ctx.insert("capacites".into(), Value::Array(capacites));
     ctx.insert(
         "stats".into(),

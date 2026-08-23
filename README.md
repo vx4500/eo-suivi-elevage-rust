@@ -1,4 +1,4 @@
-# EO-Suivi Élevage — portage Rust 2.2.16
+# EO-Suivi Élevage — portage Rust 2.2.17
 
 Cette archive reprend la base EO-Suivi 1.65 sous forme d'un serveur Rust. Elle
 n'utilise plus FastAPI, SQLModel, Uvicorn ni Python pour les fonctions déjà
@@ -12,8 +12,9 @@ compatibilité avec les sauvegardes 1.55 à 1.65.
   eau/électricité ;
 - connexion, rôles, limitation des tentatives, CSRF sur les formulaires et
   lecture des mots de passe PBKDF2 créés par la version Python ;
-- tableau de bord annuel avec parcours visuel des huit étapes de chaque bande,
-  dates clés, truies et événements ;
+- centre de pilotage annuel avec parcours professionnel des huit étapes de
+  chaque bande, stade actif, prochaine intervention, délai, dates clés,
+  effectif de truies et événements ;
 - chaleurs, inséminations groupées, échographies, mises-bas, sevrages,
   mesures ELD/poids/NEC et pertes de porcelets ;
 - file IA/cochettes après sevrage : cochettes, sorties de maternité et
