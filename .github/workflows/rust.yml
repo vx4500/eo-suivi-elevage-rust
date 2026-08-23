@@ -20,16 +20,7 @@ jobs:
       - name: Vérifier les scripts de déploiement
         run: bash -n scripts/mettre-a-jour-debian13.sh && sh -n scripts/build-linux-musl.sh scripts/lancer.sh
       - run: cargo clippy --all-targets -- -D warnings
-      - name: Formater les sources pour la reprise 2.2.14
-        run: cargo fmt --all
-      - name: Exporter les sources formatées
-        uses: actions/upload-artifact@v4
-        with:
-          name: sources-rustfmt-2.2.14
-          path: |
-            src
-            tests
-          if-no-files-found: error
+      - run: cargo fmt --all -- --check
       - name: Tests complets
         run: cargo test
 

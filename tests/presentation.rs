@@ -28,7 +28,10 @@ fn documentation_ne_renvoie_plus_vers_les_fichiers_supprimes() {
 
     for document in documents {
         for filename in deleted {
-            assert!(!document.contains(filename), "référence obsolète : {filename}");
+            assert!(
+                !document.contains(filename),
+                "référence obsolète : {filename}"
+            );
         }
     }
 }
@@ -47,7 +50,10 @@ fn saisie_rapide_prepare_le_sevrage_avant_lenvoi() {
         .find("var fd = new FormData(form)")
         .expect("construction des données du formulaire");
 
-    assert!(serialisation < form_data, "les truies doivent être sérialisées avant FormData");
+    assert!(
+        serialisation < form_data,
+        "les truies doivent être sérialisées avant FormData"
+    );
     assert!(template.contains("sow.disabled=movement||sevrage"));
     assert!(template.contains("selected=sevrageWholeSelection.slice()"));
     assert!(!template.contains("inp.previousSibling.checked"));

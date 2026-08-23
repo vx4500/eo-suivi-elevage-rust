@@ -52,8 +52,13 @@ fn parse_date_fr(raw: &str) -> Option<String> {
     let date = NaiveDate::parse_from_str(raw, "%d/%m/%Y")
         .or_else(|_| NaiveDate::parse_from_str(raw, "%d/%m/%y"))
         .ok()?;
-    let year = if date.year() < 100 { date.year() + 2000 } else { date.year() };
-    NaiveDate::from_ymd_opt(year, date.month(), date.day()).map(|date| date.format("%Y-%m-%d").to_string())
+    let year = if date.year() < 100 {
+        date.year() + 2000
+    } else {
+        date.year()
+    };
+    NaiveDate::from_ymd_opt(year, date.month(), date.day())
+        .map(|date| date.format("%Y-%m-%d").to_string())
 }
 
 fn number_fr(raw: &str) -> Option<f64> {
@@ -91,7 +96,10 @@ pub fn parse_fabrication_csv(bytes: &[u8]) -> Result<Vec<LigneFabrication>, Stri
         .headers()
         .map_err(|error| format!("En-tête CSV illisible : {error}"))?
         .clone();
-    let normalized: Vec<String> = headers.iter().map(|value| value.trim().to_lowercase()).collect();
+    let normalized: Vec<String> = headers
+        .iter()
+        .map(|value| value.trim().to_lowercase())
+        .collect();
     let index_of = |label: &str| normalized.iter().position(|value| value == label);
     let idx_formule = index_of("no formule").ok_or_else(|| "Colonne « No formule » manquante : ce fichier n'est pas un export Histo_fab de machine à soupe".to_string())?;
     let idx_date = index_of("date").ok_or_else(|| "Colonne « Date » manquante".to_string())?;
@@ -104,7 +112,9 @@ pub fn parse_fabrication_csv(bytes: &[u8]) -> Result<Vec<LigneFabrication>, Stri
         let get = |index: usize| record.get(index).unwrap_or("").trim();
         let no_formule = get(idx_formule).parse::<i64>().ok();
         let date = parse_date_fr(get(idx_date));
-        let heure_debut = idx_heure_debut.map(|index| get(index).to_string()).filter(|value| !value.is_empty());
+        let heure_debut = idx_heure_debut
+            .map(|index| get(index).to_string())
+            .filter(|value| !value.is_empty());
         for produit_index in 0..MAX_PRODUITS {
             let base = idx_premier_nom + produit_index * 3;
             let Some(nom) = record.get(base) else { break };
@@ -168,8 +178,14 @@ mod tests {
                     ligne2.push_str(";Select Cochette;155;155");
                 }
                 _ => {
-                    ligne1.push_str(&format!(";{};0;0", produits.get(index).copied().unwrap_or("Produit_X")));
-                    ligne2.push_str(&format!(";{};0;0", produits.get(index).copied().unwrap_or("Produit_X")));
+                    ligne1.push_str(&format!(
+                        ";{};0;0",
+                        produits.get(index).copied().unwrap_or("Produit_X")
+                    ));
+                    ligne2.push_str(&format!(
+                        ";{};0;0",
+                        produits.get(index).copied().unwrap_or("Produit_X")
+                    ));
                 }
             }
         }
@@ -200,7 +216,10 @@ mod tests {
     fn produits_distincts_est_triee_et_dedupliquee() {
         let bytes = extrait_reel(4);
         let lignes = parse_fabrication_csv(&bytes).expect("l'export doit être lu");
-        assert_eq!(produits_distincts(&lignes), vec!["Lacta Safe".to_string(), "Select Cochette".to_string()]);
+        assert_eq!(
+            produits_distincts(&lignes),
+            vec!["Lacta Safe".to_string(), "Select Cochette".to_string()]
+        );
     }
 
     #[test]

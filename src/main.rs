@@ -12,9 +12,7 @@ mod templates;
 use axum::middleware;
 use config::Config;
 use routes::AppState;
-use sqlx::sqlite::{
-    SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous,
-};
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use std::str::FromStr;
 use tower_http::compression::CompressionLayer;
 use tower_http::services::ServeDir;
