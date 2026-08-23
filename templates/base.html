@@ -79,7 +79,8 @@
     <button type="button" class="fab-t" data-type="ia">IA / saillie</button>
     <button type="button" class="fab-t" data-type="echo">Écho</button>
     <button type="button" class="fab-t" data-type="chaleur">Chaleur</button>
-    <button type="button" class="fab-t" data-type="perte">Perte porc</button>
+    <button type="button" class="fab-t" data-type="mise_bas">Mise-bas</button>
+    <button type="button" class="fab-t" data-type="perte">Perte porc et porcelet</button>
     <button type="button" class="fab-t" data-type="sortie">Sortie truie</button>
     <button type="button" class="fab-t" data-type="mouvement">Mouvement</button>
     <button type="button" class="fab-t" data-type="sevrage">Sevrage</button>
@@ -125,6 +126,18 @@
           <button type="button" data-observation="Comportement">Comportement</button>
           <button type="button" data-observation="Réflexe d’immobilité">Réflexe d’immobilité</button>
         </div>
+      </div>
+    </div>
+    <div class="fab-f fab-mise-bas" data-for="mise_bas" hidden>
+      <div class="fab-mini-grid">
+        <label>Nés vifs<input name="nes_vifs" type="number" min="0" value="0" disabled required></label>
+        <label>Mort-nés<input name="mort_nes" type="number" min="0" value="0" disabled required></label>
+        <label>Momifiés<input name="momifies" type="number" min="0" value="0" disabled></label>
+        <label>Chétifs<input name="chetifs" type="number" min="0" value="0" disabled></label>
+        <label>Écrasés<input name="ecrases" type="number" min="0" value="0" disabled></label>
+        <label>Tués par la truie<input name="tues_truie" type="number" min="0" value="0" disabled></label>
+        <label>Heure de début<input name="heure_debut" type="time" disabled></label>
+        <label>Heure de fin<input name="heure_fin" type="time" disabled></label>
       </div>
     </div>
     <div class="fab-f" data-for="perte" hidden>

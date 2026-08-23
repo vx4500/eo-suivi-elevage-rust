@@ -1,25 +1,79 @@
 {% extends "base.html" %}{% block content %}
-<h1>Bonjour {{ session.nom }}</h1>
-<div class="rust-grid">
-  <div class="card kpi"><div class="v">{{ stats.band_active }}</div><div class="l">Bandes actives</div></div>
-  <div class="card kpi"><div class="v">{{ stats.truies }}</div><div class="l">Truies actives</div></div>
-  <div class="card kpi"><div class="v">{{ stats.porcs_vendus_annee }}</div><div class="l">Porcs vendus en {{ annee }}</div></div>
-  <div class="card kpi"><div class="v">{% if stats.prix_net_kg is not none %}{{ stats.prix_net_kg|decimal3 }} €{% else %}—{% endif %}</div><div class="l">Prix net/kg en {{ annee }}</div></div>
-  <div class="card kpi"><div class="v">{% if stats.prix_dernieres_ventes is not none %}{{ stats.prix_dernieres_ventes|decimal3 }} €{% else %}—{% endif %}</div><div class="l">Moyenne des 5 dernières ventes</div></div>
-  <div class="card kpi"><div class="v">{{ stats.morts_annee }}</div><div class="l">Mortalités déclarées en {{ annee }}</div></div>
-  <div class="card kpi"><div class="v">{{ stats.marge|euro }}</div><div class="l">Marge partielle cumulée</div></div>
-</div>
-{% if capacites %}<section class="card"><h2>Capacités par étape</h2><div class="rust-grid">{% for c in capacites %}<div class="card kpi"><div class="v">{{ c.occupation }}/{{ c.capacite }}</div><div class="l">{{ c.libelle }} · {{ c.places_disponibles }} place(s) libre(s)</div></div>{% endfor %}</div></section>{% endif %}
-<section class="card"><div class="rust-actions"><h2>Courbe des dernières ventes</h2><a href="/economique">Ouvrir le suivi économique</a></div>
-{% if dernieres_ventes %}<div class="sale-chart" aria-label="Prix net au kilo des dix dernières ventes">{% for p in dernieres_ventes %}<div class="sale-chart-point"><b>{{ p.prix_net_kg|decimal3 }}</b><div class="sale-chart-bar" style="height:{{ p.hauteur }}px"></div><small>{{ p.date|date_fr }}</small></div>{% endfor %}</div>{% else %}<p class="rust-empty">Aucune vente avec poids et montant.</p>{% endif %}
+<section class="home-hero">
+  <div>
+    <span class="home-eyebrow">Pilotage de l’élevage</span>
+    <h1>Bonjour {{ session.nom }}</h1>
+    <p>Les étapes importantes, les effectifs et les résultats essentiels sont réunis ici.</p>
+  </div>
+  <div class="home-hero-actions">
+    <a href="/bandes" class="home-action primary">Voir les bandes</a>
+    <a href="/quotidien" class="home-action">Contrôle quotidien</a>
+  </div>
 </section>
-<h2>Bandes en cours</h2>
-<div class="rust-scroll"><table><thead><tr><th>Bande</th><th>Mise-bas</th><th>Stade actuel</th><th>Âge</th><th>Truies</th><th>Prochaine étape</th></tr></thead><tbody>
-{% for l in bandes %}<tr><td><a href="/bande/{{ l.id }}"><b>{{ l.code }}</b></a></td><td>{{ l.date_mb|date_fr }}</td><td><span class="rust-badge">{{ l.stade }}</span></td><td>{% if l.age is not none %}J{{ l.age }}{% else %}—{% endif %}</td><td>{{ l.truies }}</td><td>{{ l.prochaine }}</td></tr>{% else %}<tr><td colspan="6" class="rust-empty">Aucune bande active</td></tr>{% endfor %}
-</tbody></table></div>
-<div class="rust-grid" style="margin-top:16px">
-  <section class="card"><h2>Inséminations à prévoir</h2>{% for i in inseminations %}<p><b>{{ i.num_travail }}</b> — {{ i.date_prevue|date_fr }}</p>{% else %}<p class="muted">Aucune alerte.</p>{% endfor %}<a href="/inseminations">Ouvrir les inséminations</a></section>
-  <section class="card"><h2>Tâches</h2>{% for t in taches %}<p><b>{{ t.titre }}</b>{% if t.echeance %} — {{ t.echeance|date_fr }}{% endif %}</p>{% else %}<p class="muted">Aucune tâche ouverte.</p>{% endfor %}<a href="/taches">Voir les tâches</a></section>
-  <section class="card"><h2>Prix net mensuel</h2><div class="rust-scroll"><table><thead><tr><th>Mois</th><th>Porcs</th><th>€/kg net</th></tr></thead><tbody>{% for p in prix_tendance %}<tr><td>{{ p.mois }}</td><td>{{ p.porcs }}</td><td>{% if p.prix_net_kg is not none %}<b>{{ p.prix_net_kg|decimal3 }}</b>{% else %}—{% endif %}</td></tr>{% else %}<tr><td colspan="3" class="rust-empty">Aucune vente</td></tr>{% endfor %}</tbody></table></div></section>
+
+<div class="rust-grid home-kpis">
+  <div class="card kpi"><span class="kpi-icon">🐷</span><div class="v">{{ stats.band_active }}</div><div class="l">Bandes actives</div></div>
+  <div class="card kpi"><span class="kpi-icon">🐖</span><div class="v">{{ stats.truies }}</div><div class="l">Truies actives</div></div>
+  <div class="card kpi"><span class="kpi-icon">🚚</span><div class="v">{{ stats.porcs_vendus_annee }}</div><div class="l">Porcs vendus en {{ annee }}</div></div>
+  <div class="card kpi"><span class="kpi-icon">€/kg</span><div class="v">{% if stats.prix_net_kg is not none %}{{ stats.prix_net_kg|decimal3 }} €{% else %}—{% endif %}</div><div class="l">Prix net/kg en {{ annee }}</div></div>
+  <div class="card kpi"><span class="kpi-icon">📈</span><div class="v">{% if stats.prix_dernieres_ventes is not none %}{{ stats.prix_dernieres_ventes|decimal3 }} €{% else %}—{% endif %}</div><div class="l">Moyenne des 5 dernières ventes</div></div>
+  <div class="card kpi"><span class="kpi-icon">⚠</span><div class="v">{{ stats.morts_annee }}</div><div class="l">Mortalités déclarées en {{ annee }}</div></div>
+  <div class="card kpi"><span class="kpi-icon">€</span><div class="v">{{ stats.marge|euro }}</div><div class="l">Marge partielle cumulée</div></div>
+</div>
+
+{% if capacites %}
+<section class="card home-section">
+  <div class="home-section-head"><div><span class="home-section-icon">▦</span><h2>Capacités par étape</h2></div></div>
+  <div class="rust-grid capacity-grid">{% for c in capacites %}<div class="capacity-card"><b>{{ c.occupation }}/{{ c.capacite }}</b><span>{{ c.libelle }}</span><small>{{ c.places_disponibles }} place(s) libre(s)</small></div>{% endfor %}</div>
+</section>
+{% endif %}
+
+<section class="home-bands">
+  <div class="home-section-head">
+    <div><span class="home-section-icon">➜</span><div><h2>Avancement des bandes</h2><p>Le cycle complet, de l’insémination au départ abattoir.</p></div></div>
+    <a href="/bandes">Gérer les bandes</a>
+  </div>
+  {% for l in bandes %}
+  <article class="band-process-card">
+    <div class="band-process-head">
+      <div>
+        <a href="/bande/{{ l.id }}" class="band-process-code">{{ l.code }}</a>
+        <span class="band-current-stage">{{ l.stade }}</span>
+      </div>
+      <div class="band-process-meta">
+        {% if l.site %}<span>📍 {{ l.site }}</span>{% endif %}
+        <span>🐖 {{ l.truies }} truie(s)</span>
+        <span>📅 Mise-bas {{ l.date_mb|date_fr }}</span>
+        {% if l.age is not none %}<span>J{{ l.age }}</span>{% endif %}
+      </div>
+    </div>
+    <div class="band-progress" role="progressbar" aria-label="Avancement de la bande {{ l.code }}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ l.progression }}">
+      <span style="width:{{ l.progression }}%"></span>
+    </div>
+    <div class="band-steps-scroll"><div class="band-steps" role="list" aria-label="Étapes de la bande {{ l.code }}">
+      {% for e in l.etapes %}
+      <div class="band-step{% if e.terminee %} is-done{% endif %}{% if e.actuelle %} is-current{% endif %}" role="listitem">
+        <span class="band-step-dot">{{ e.icone }}</span>
+        <b>{{ e.nom }}</b>
+        <small>{% if e.date %}{{ e.date|date_fr }}{% else %}À définir{% endif %}</small>
+      </div>
+      {% endfor %}
+    </div></div>
+    <div class="band-next"><span>Prochaine action</span><b>{{ l.prochaine }}</b><a href="/bande/{{ l.id }}">Ouvrir la fiche →</a></div>
+  </article>
+  {% else %}
+  <div class="card empty-state"><span class="empty-icon">🐷</span><h3>Aucune bande active</h3><p class="muted">Créez ou réactivez une bande pour afficher son cycle.</p><a href="/bandes">Ouvrir les bandes</a></div>
+  {% endfor %}
+</section>
+
+<section class="card home-section">
+  <div class="home-section-head"><div><span class="home-section-icon">▥</span><h2>Courbe des dernières ventes</h2></div><a href="/economique">Ouvrir le suivi économique</a></div>
+  {% if dernieres_ventes %}<div class="sale-chart" aria-label="Prix net au kilo des dix dernières ventes">{% for p in dernieres_ventes %}<div class="sale-chart-point"><b>{{ p.prix_net_kg|decimal3 }}</b><div class="sale-chart-bar" style="height:{{ p.hauteur }}px"></div><small>{{ p.date|date_fr }}</small></div>{% endfor %}</div>{% else %}<p class="rust-empty">Aucune vente avec poids et montant.</p>{% endif %}
+</section>
+
+<div class="rust-grid home-bottom-grid">
+  <section class="card"><div class="home-section-head compact"><div><span class="home-section-icon">💉</span><h2>Inséminations à prévoir</h2></div></div>{% for i in inseminations %}<p><b>{{ i.num_travail }}</b> — {{ i.date_prevue|date_fr }}</p>{% else %}<p class="muted">Aucune alerte.</p>{% endfor %}<a href="/inseminations">Ouvrir les inséminations</a></section>
+  <section class="card"><div class="home-section-head compact"><div><span class="home-section-icon">✓</span><h2>Tâches</h2></div></div>{% for t in taches %}<p><b>{{ t.titre }}</b>{% if t.echeance %} — {{ t.echeance|date_fr }}{% endif %}</p>{% else %}<p class="muted">Aucune tâche ouverte.</p>{% endfor %}<a href="/taches">Voir les tâches</a></section>
+  <section class="card"><div class="home-section-head compact"><div><span class="home-section-icon">€</span><h2>Prix net mensuel</h2></div></div><div class="rust-scroll"><table><thead><tr><th>Mois</th><th>Porcs</th><th>€/kg net</th></tr></thead><tbody>{% for p in prix_tendance %}<tr><td>{{ p.mois }}</td><td>{{ p.porcs }}</td><td>{% if p.prix_net_kg is not none %}<b>{{ p.prix_net_kg|decimal3 }}</b>{% else %}—{% endif %}</td></tr>{% else %}<tr><td colspan="3" class="rust-empty">Aucune vente</td></tr>{% endfor %}</tbody></table></div></section>
 </div>
 {% endblock %}

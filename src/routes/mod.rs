@@ -1227,6 +1227,15 @@ async fn password_post(
 }
 
 #[derive(serde::Serialize)]
+struct BandStageView {
+    nom: String,
+    date: Option<String>,
+    icone: String,
+    terminee: bool,
+    actuelle: bool,
+}
+
+#[derive(serde::Serialize)]
 struct BandView {
     id: i64,
     code: String,
@@ -1237,6 +1246,8 @@ struct BandView {
     stade: String,
     prochaine: String,
     truies: i64,
+    progression: i64,
+    etapes: Vec<BandStageView>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1298,6 +1309,18 @@ impl BandSchedule {
             ("Départ / terminé", "Cycle terminé")
         }
     }
+
+    fn stage_index(self, age: i64) -> usize {
+        self.stages()
+            .iter()
+            .rposition(|(_, offset)| age >= *offset)
+            .unwrap_or(0)
+    }
+
+    fn progression(self, age: i64) -> i64 {
+        let total = self.departure + self.gestation;
+        (age + self.gestation).clamp(0, total) * 100 / total
+    }
 }
 
 async fn load_band_schedule(pool: &SqlitePool) -> AppResult<BandSchedule> {
@@ -1342,6 +1365,24 @@ fn band_view(band: &Bande, sow_count: i64, schedule: BandSchedule) -> BandView {
     let (stade, prochaine) = age
         .map(|age| schedule.stage(age))
         .unwrap_or(("À renseigner", "Renseigner la date de mise-bas"));
+    let current_stage = age.map(|age| schedule.stage_index(age)).unwrap_or(0);
+    let icons = ["💉", "🔎", "🏠", "🐷", "🍼", "↗", "🌾", "🚚"];
+    let etapes = schedule
+        .stages()
+        .iter()
+        .enumerate()
+        .map(|(index, (name, offset))| BandStageView {
+            nom: (*name).to_string(),
+            date: date.map(|date| {
+                (date + Duration::days(*offset))
+                    .format("%Y-%m-%d")
+                    .to_string()
+            }),
+            icone: icons[index].to_string(),
+            terminee: age.is_some() && index < current_stage,
+            actuelle: index == current_stage,
+        })
+        .collect();
     BandView {
         id: band.id,
         code: band.code.clone(),
@@ -1352,6 +1393,8 @@ fn band_view(band: &Bande, sow_count: i64, schedule: BandSchedule) -> BandView {
         stade: stade.to_string(),
         prochaine: prochaine.to_string(),
         truies: sow_count,
+        progression: age.map(|age| schedule.progression(age)).unwrap_or(0),
+        etapes,
     }
 }
 
@@ -9034,5 +9077,18 @@ mod gttt_tests {
             schedule.stages().map(|(_, day)| day),
             [-114, -84, -7, 0, 26, 68, 135, 205]
         );
+    }
+
+    #[test]
+    fn progression_bande_suit_les_huit_etapes() {
+        let schedule = BandSchedule::default();
+        assert_eq!(schedule.stage_index(-115), 0);
+        assert_eq!(schedule.stage_index(-87), 1);
+        assert_eq!(schedule.stage_index(0), 3);
+        assert_eq!(schedule.stage_index(28), 4);
+        assert_eq!(schedule.stage_index(215), 7);
+        assert_eq!(schedule.progression(-115), 0);
+        assert_eq!(schedule.progression(215), 100);
+        assert_eq!(schedule.progression(300), 100);
     }
 }
