@@ -1371,12 +1371,7 @@ fn band_view(band: &Bande, sow_count: i64, schedule: BandSchedule) -> BandView {
     let stages = schedule.stages();
     let current_stage = age.map(|age| schedule.stage_index(age)).unwrap_or(0);
     let cycle_complete = age.is_some_and(|age| age >= schedule.departure);
-    let next_stage = age.and_then(|age| {
-        stages
-            .iter()
-            .copied()
-            .find(|(_, offset)| *offset > age)
-    });
+    let next_stage = age.and_then(|age| stages.iter().copied().find(|(_, offset)| *offset > age));
     let prochaine = next_stage.map(|(name, _)| name).unwrap_or(default_next);
     let prochaine_date = match (date, next_stage) {
         (Some(date), Some((_, offset))) => Some(
@@ -1417,9 +1412,8 @@ fn band_view(band: &Bande, sow_count: i64, schedule: BandSchedule) -> BandView {
             }),
             repere: markers[index].to_string(),
             terminee: age.is_some() && (cycle_complete || index < current_stage),
-            actuelle: age.is_some_and(|age| {
-                !cycle_complete && age >= stages[0].1 && index == current_stage
-            }),
+            actuelle: age
+                .is_some_and(|age| !cycle_complete && age >= stages[0].1 && index == current_stage),
         })
         .collect();
     BandView {
