@@ -34,7 +34,13 @@ const SALARIE_HORS_SECTION_OK: &[&str] = &[
     "/quotidien",
 ];
 
-const ELEVEUR_ONLY: &[&str] = &["/import", "/import-pdf", "/pharmacie", "/objectif", "/cause"];
+const ELEVEUR_ONLY: &[&str] = &[
+    "/import",
+    "/import-pdf",
+    "/pharmacie",
+    "/objectif",
+    "/cause",
+];
 
 const ADMIN_ONLY: &[&str] = &[
     "/parametres",
@@ -93,7 +99,10 @@ impl SessionData {
     /// naisseur-engraisseur) : conditionne l'affichage de la reproduction,
     /// de la verraterie/maternité et de la GTTT.
     pub fn a_truies(&self) -> bool {
-        matches!(self.type_elevage.as_str(), "naisseur_engraisseur" | "naisseur")
+        matches!(
+            self.type_elevage.as_str(),
+            "naisseur_engraisseur" | "naisseur"
+        )
     }
 
     /// Vrai si le type d'élevage actif engraisse des porcs (naisseur-engraisseur,
@@ -163,7 +172,10 @@ pub fn new_csrf() -> String {
 }
 
 fn path_has_prefix(path: &str, prefix: &str) -> bool {
-    path == prefix || path.strip_prefix(prefix).is_some_and(|rest| rest.starts_with('/'))
+    path == prefix
+        || path
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with('/'))
 }
 
 fn section_for_path(path: &str) -> Option<&'static str> {
@@ -223,10 +235,7 @@ pub async fn guard(State(state): State<AppState>, mut request: Request, next: Ne
     }
 
     if let Some(session) = session {
-        if session.doit_changer_mdp
-            && path != "/mon-compte/mdp"
-            && path != "/logout"
-        {
+        if session.doit_changer_mdp && path != "/mon-compte/mdp" && path != "/logout" {
             return Redirect::to("/mon-compte/mdp?force=1").into_response();
         }
         if session.role == "engraisseur"
@@ -239,7 +248,9 @@ pub async fn guard(State(state): State<AppState>, mut request: Request, next: Ne
             return Redirect::to("/engraissement").into_response();
         }
         if !matches!(session.role.as_str(), "admin" | "eleveur")
-            && ELEVEUR_ONLY.iter().any(|prefix| path_has_prefix(&path, prefix))
+            && ELEVEUR_ONLY
+                .iter()
+                .any(|prefix| path_has_prefix(&path, prefix))
         {
             return Redirect::to("/").into_response();
         }
@@ -247,7 +258,9 @@ pub async fn guard(State(state): State<AppState>, mut request: Request, next: Ne
             return Redirect::to("/").into_response();
         }
         if session.role != "admin"
-            && ADMIN_ONLY.iter().any(|prefix| path_has_prefix(&path, prefix))
+            && ADMIN_ONLY
+                .iter()
+                .any(|prefix| path_has_prefix(&path, prefix))
         {
             return Redirect::to("/").into_response();
         }

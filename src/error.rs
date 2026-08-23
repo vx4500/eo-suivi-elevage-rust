@@ -24,7 +24,8 @@ impl IntoResponse for AppError {
             Self::NotFound => (StatusCode::NOT_FOUND, "Élément introuvable".to_string()),
             Self::Database(_) | Self::Internal(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "Une erreur est survenue. Les détails ont été enregistrés dans le journal.".to_string(),
+                "Une erreur est survenue. Les détails ont été enregistrés dans le journal."
+                    .to_string(),
             ),
         };
         (
@@ -48,4 +49,3 @@ fn html_escape(input: &str) -> String {
 }
 
 pub type AppResult<T> = Result<T, AppError>;
-

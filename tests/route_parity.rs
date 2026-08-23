@@ -108,7 +108,10 @@ fn la_saisie_rapide_est_accessible_depuis_toutes_les_pages_connectees() {
         "fetch('/api/bandes-actives')",
         "fetch('/api/cases')",
     ] {
-        assert!(base.contains(marker), "élément de saisie rapide absent: {marker}");
+        assert!(
+            base.contains(marker),
+            "élément de saisie rapide absent: {marker}"
+        );
     }
 }
 

@@ -11,8 +11,16 @@ pub async fn init(pool: &SqlitePool) -> anyhow::Result<()> {
     // présente est volontairement ignorée afin de rendre le démarrage idempotent.
     for (table, column, definition) in [
         ("utilisateur", "sections", "TEXT"),
-        ("utilisateur", "doit_changer_mdp", "INTEGER NOT NULL DEFAULT 0"),
-        ("utilisateur", "tentatives_echec", "INTEGER NOT NULL DEFAULT 0"),
+        (
+            "utilisateur",
+            "doit_changer_mdp",
+            "INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "utilisateur",
+            "tentatives_echec",
+            "INTEGER NOT NULL DEFAULT 0",
+        ),
         ("utilisateur", "bloque_jusqu", "TEXT"),
         ("truie", "num_national", "TEXT"),
         ("truie", "bande_code", "TEXT"),
@@ -40,7 +48,11 @@ pub async fn init(pool: &SqlitePool) -> anyhow::Result<()> {
         ("evenement", "suivi_actif", "INTEGER NOT NULL DEFAULT 0"),
         ("declarationmort", "case_id", "INTEGER"),
         ("produitventedirecte", "quantite_disponible", "REAL"),
-        ("releve_compteur", "remplacement_compteur", "INTEGER NOT NULL DEFAULT 0"),
+        (
+            "releve_compteur",
+            "remplacement_compteur",
+            "INTEGER NOT NULL DEFAULT 0",
+        ),
         ("releve_compteur", "prix_unitaire", "REAL"),
     ] {
         ensure_column(pool, table, column, definition).await?;
@@ -76,8 +88,14 @@ async fn verify_sqlite_pragmas(pool: &SqlitePool) -> anyhow::Result<()> {
         journal_mode.eq_ignore_ascii_case("wal"),
         "SQLite doit fonctionner en WAL (mode obtenu: {journal_mode})"
     );
-    anyhow::ensure!(busy_timeout >= 5_000, "SQLite busy_timeout inférieur à 5000 ms");
-    anyhow::ensure!(foreign_keys == 1, "les clés étrangères SQLite sont désactivées");
+    anyhow::ensure!(
+        busy_timeout >= 5_000,
+        "SQLite busy_timeout inférieur à 5000 ms"
+    );
+    anyhow::ensure!(
+        foreign_keys == 1,
+        "les clés étrangères SQLite sont désactivées"
+    );
     Ok(())
 }
 
@@ -89,7 +107,10 @@ async fn ensure_column(
 ) -> anyhow::Result<()> {
     let sql = format!("PRAGMA table_info(\"{}\")", table.replace('"', ""));
     let rows = sqlx::query(&sql).fetch_all(pool).await?;
-    if rows.iter().any(|row| row.get::<String, _>("name") == column) {
+    if rows
+        .iter()
+        .any(|row| row.get::<String, _>("name") == column)
+    {
         return Ok(());
     }
     let alter = format!(
@@ -110,16 +131,15 @@ pub async fn journal(
     detail: &str,
     chemin: &str,
 ) {
-    if let Err(error) = sqlx::query(
-        "INSERT INTO journal(utilisateur,action,objet,detail,chemin) VALUES(?,?,?,?,?)",
-    )
-    .bind(utilisateur)
-    .bind(action)
-    .bind(objet)
-    .bind(detail)
-    .bind(chemin)
-    .execute(pool)
-    .await
+    if let Err(error) =
+        sqlx::query("INSERT INTO journal(utilisateur,action,objet,detail,chemin) VALUES(?,?,?,?,?)")
+            .bind(utilisateur)
+            .bind(action)
+            .bind(objet)
+            .bind(detail)
+            .bind(chemin)
+            .execute(pool)
+            .await
     {
         tracing::warn!(%error, "journalisation impossible");
     }

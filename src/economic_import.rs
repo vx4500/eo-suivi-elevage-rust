@@ -13,8 +13,7 @@ const MAX_DECOMPRESSED_PAGE: usize = 2 * 1024 * 1024;
 /// de tableau « Désignation produit / Silos » dans le texte extrait par
 /// lopdf — probablement du texte positionné hors flux principal — alors que
 /// les lignes produit elles-mêmes restent extraites normalement.
-const ALIMENT_ROW_PATTERN: &str =
-    r"(?m)^(.+?)\s+(MI|FE|GR)\s+([0-9]+)\s+([0-9.,]+)(-?)\s*\*?\s+[0-9.,]+\s+([0-9.,]+)\s+[0-9]+\s+([0-9.,]+)(-?)\s*$";
+const ALIMENT_ROW_PATTERN: &str = r"(?m)^(.+?)\s+(MI|FE|GR)\s+([0-9]+)\s+([0-9.,]+)(-?)\s*\*?\s+[0-9.,]+\s+([0-9.,]+)\s+[0-9]+\s+([0-9.,]+)(-?)\s*$";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImportLine {
@@ -78,7 +77,9 @@ pub fn extract_pdf_text(bytes: &[u8]) -> Result<String, String> {
 /// (PDF avec compression d'objets), qui n'ont pas de mot-clé `xref` littéral.
 fn repair_startxref_offset(bytes: &[u8]) -> Option<Vec<u8>> {
     let start_marker = b"startxref";
-    let start_pos = bytes.windows(start_marker.len()).rposition(|window| window == start_marker)?;
+    let start_pos = bytes
+        .windows(start_marker.len())
+        .rposition(|window| window == start_marker)?;
     let digits_start = bytes[start_pos + start_marker.len()..]
         .iter()
         .position(|byte| byte.is_ascii_digit())
@@ -131,7 +132,10 @@ pub fn parse_document(text: &str) -> Result<ImportDocument, String> {
     {
         return parse_synthese(&normalized);
     }
-    let compact: String = upper.chars().filter(|character| !character.is_whitespace()).collect();
+    let compact: String = upper
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect();
     if compact.contains("ANIMAUXREPRODUCTEURS")
         || (compact.contains("COCHETTE") && compact.contains("REPRODUCTEURS"))
     {
@@ -147,8 +151,7 @@ pub fn parse_document(text: &str) -> Result<ImportDocument, String> {
         && (upper.contains("SILOS")
             || upper.contains("DÉSIGNATION PRODUIT")
             || upper.contains("DESIGNATION PRODUIT")
-            || Regex::new(ALIMENT_ROW_PATTERN)
-                .is_ok_and(|regex| regex.is_match(&normalized)))
+            || Regex::new(ALIMENT_ROW_PATTERN).is_ok_and(|regex| regex.is_match(&normalized)))
     {
         return parse_aliment(&normalized);
     }
@@ -215,8 +218,13 @@ fn iso_date(raw: &str) -> Option<String> {
     let date = NaiveDate::parse_from_str(&normalized, "%d/%m/%Y")
         .or_else(|_| NaiveDate::parse_from_str(&normalized, "%d/%m/%y"))
         .ok()?;
-    let year = if date.year() < 100 { date.year() + 2000 } else { date.year() };
-    NaiveDate::from_ymd_opt(year, date.month(), date.day()).map(|date| date.format("%Y-%m-%d").to_string())
+    let year = if date.year() < 100 {
+        date.year() + 2000
+    } else {
+        date.year()
+    };
+    NaiveDate::from_ymd_opt(year, date.month(), date.day())
+        .map(|date| date.format("%Y-%m-%d").to_string())
 }
 
 fn document_sign(text: &str) -> f64 {
@@ -260,7 +268,11 @@ fn parse_aliment(text: &str) -> Result<ImportDocument, String> {
     let credit = document_sign(text);
     let mut lines = Vec::new();
     for row in regex.captures_iter(text) {
-        let product = format!("{} {}", row[1].split_whitespace().collect::<Vec<_>>().join(" "), &row[2]);
+        let product = format!(
+            "{} {}",
+            row[1].split_whitespace().collect::<Vec<_>>().join(" "),
+            &row[2]
+        );
         let line_sign = if !row[5].is_empty() || !row[8].is_empty() {
             -1.0
         } else {
@@ -295,13 +307,7 @@ fn parse_aliment(text: &str) -> Result<ImportDocument, String> {
 fn parse_veto(text: &str) -> Result<ImportDocument, String> {
     let reference = capture(text, r"(?i)ACTURE\s*N[°ºo]?\s*([0-9]{6,})", 1);
     let date = capture(text, r"(?i)\bLE\s*([0-9]{2}/[0-9]{2}/[0-9]{2,4})", 1)
-        .or_else(|| {
-            capture(
-                text,
-                r"(?i)FACT\.?\s*([0-9]{2}/[0-9]{2}/[0-9]{2,4})",
-                1,
-            )
-        })
+        .or_else(|| capture(text, r"(?i)FACT\.?\s*([0-9]{2}/[0-9]{2}/[0-9]{2,4})", 1))
         .and_then(|value| iso_date(&value));
     let regex = Regex::new(
         r"(?m)^([0-9]+)\s+([A-ZÀ-ÖØ-Þ].+?)\s+4\s+[0-9 ]+?\s+([0-9.,]+)\s+([0-9.,]+)(-?)\s*$",
@@ -376,13 +382,8 @@ fn parse_semence(text: &str) -> Result<ImportDocument, String> {
     } else {
         "Semence"
     };
-    let reference = capture(text, r"(?i)\b(FAC[0-9A-Z-]+)\b", 1).or_else(|| {
-        capture(
-            text,
-            r"(?i)NUM[ÉE]RO\s+DE\s+FACTURE\s+([A-Z0-9-]+)",
-            1,
-        )
-    });
+    let reference = capture(text, r"(?i)\b(FAC[0-9A-Z-]+)\b", 1)
+        .or_else(|| capture(text, r"(?i)NUM[ÉE]RO\s+DE\s+FACTURE\s+([A-Z0-9-]+)", 1));
     let date = capture(
         text,
         r"(?i)(?:DATE|FACTURE)\s*(?:DE|DU)?\s*[:.]?\s*([0-9]{2}[/.][0-9]{2}[/.][0-9]{2,4})",
@@ -391,10 +392,16 @@ fn parse_semence(text: &str) -> Result<ImportDocument, String> {
     .or_else(|| capture(text, r"([0-9]{2}[/.][0-9]{2}[/.][0-9]{2,4})", 1))
     .and_then(|value| iso_date(&value));
     let mut ht = labeled_amount(text, &["TOTAL HT"]);
-    let mut ttc = labeled_amount(text, &["TOTAL TTC", "MONTANT TTC", "TTC A PAYER", "TTC À PAYER"]);
+    let mut ttc = labeled_amount(
+        text,
+        &["TOTAL TTC", "MONTANT TTC", "TTC A PAYER", "TTC À PAYER"],
+    );
     let fee = upper.contains("AUTORENOUVELLEMENT");
     if fee {
-        for line in text.lines().filter(|line| line.to_uppercase().contains("AUTORENOUVELLEMENT")) {
+        for line in text
+            .lines()
+            .filter(|line| line.to_uppercase().contains("AUTORENOUVELLEMENT"))
+        {
             if let Some(value) = last_amount(line) {
                 ht = Some(value.abs());
             }
@@ -421,7 +428,8 @@ fn parse_semence(text: &str) -> Result<ImportDocument, String> {
         "Redevance autorenouvellement (DanBred)".to_string()
     } else if upper.contains("DANBRED") {
         "Semence DanBred".to_string()
-    } else if upper.contains("PIETRAIN") || upper.contains("PIÉTRAIN") || upper.contains("DOSE IA") {
+    } else if upper.contains("PIETRAIN") || upper.contains("PIÉTRAIN") || upper.contains("DOSE IA")
+    {
         "Doses Piétrain (PN3)".to_string()
     } else {
         "Semence / doses IA".to_string()
@@ -456,7 +464,10 @@ fn parse_semence(text: &str) -> Result<ImportDocument, String> {
 }
 
 fn parse_genetique(text: &str) -> Result<ImportDocument, String> {
-    let compact: String = text.chars().filter(|character| !character.is_whitespace()).collect();
+    let compact: String = text
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect();
     // Sur le modèle « duplicata » réellement produit par Cooperl (le même
     // que pour les apports/factures d'aliment), les libellés « FACTURE N° »,
     // « NET A PAYER » et « BASE H.T. » font partie du fond de page (image),
@@ -479,24 +490,16 @@ fn parse_genetique(text: &str) -> Result<ImportDocument, String> {
     // ajouter une migration pour une seule information d'affichage aurait
     // été disproportionné) pour que facture et avoir restent traçables l'un
     // à l'autre même si l'éleveur ne les importe pas le même jour.
-    let avoir_facture = capture(
-        &compact,
-        r"(?i)AVOIRSURFACTURE\s*N[Oo°]?\s*([0-9]+)",
-        1,
-    );
-    let date = capture(
-        text,
-        r"(?i)\bLE\s*([0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4})",
-        1,
-    )
-    .or_else(|| {
-        capture(
-            &compact,
-            r"(?i)LIVRAISONDU([0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4})",
-            1,
-        )
-    })
-    .and_then(|value| iso_date(&value));
+    let avoir_facture = capture(&compact, r"(?i)AVOIRSURFACTURE\s*N[Oo°]?\s*([0-9]+)", 1);
+    let date = capture(text, r"(?i)\bLE\s*([0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4})", 1)
+        .or_else(|| {
+            capture(
+                &compact,
+                r"(?i)LIVRAISONDU([0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4})",
+                1,
+            )
+        })
+        .and_then(|value| iso_date(&value));
     // `-?` après le nombre d'animaux et après le poids : sur un avoir, les
     // quantités sont elles-mêmes écrites en négatif dans la colonne
     // (« 27-   COCHETTE SERENIS ... 3255,000- »). Sans ce `-?`, la ligne ne
@@ -524,11 +527,18 @@ fn parse_genetique(text: &str) -> Result<ImportDocument, String> {
     // le sens du document — plus besoin d'une liste de références codées en
     // dur comme avant, qui ne fonctionnait de toute façon plus depuis que
     // la référence n'était jamais extraite.
-    let recap = Regex::new(r"(?m)^\s*([0-9.,]+-?)\s+[0-9]\s+[0-9]+,[0-9]+%\s+([0-9.,]+-?)\s+([0-9.,]+-?)")
-        .ok()
-        .and_then(|regex| regex.captures(text));
-    let ht = recap.as_ref().and_then(|row| row.get(1)).and_then(|value| number(value.as_str()));
-    let ttc = recap.as_ref().and_then(|row| row.get(3)).and_then(|value| number(value.as_str()));
+    let recap =
+        Regex::new(r"(?m)^\s*([0-9.,]+-?)\s+[0-9]\s+[0-9]+,[0-9]+%\s+([0-9.,]+-?)\s+([0-9.,]+-?)")
+            .ok()
+            .and_then(|regex| regex.captures(text));
+    let ht = recap
+        .as_ref()
+        .and_then(|row| row.get(1))
+        .and_then(|value| number(value.as_str()));
+    let ttc = recap
+        .as_ref()
+        .and_then(|row| row.get(3))
+        .and_then(|value| number(value.as_str()));
     let is_avoir = ht.is_some_and(|value| value < 0.0)
         || ttc.is_some_and(|value| value < 0.0)
         || document_sign(text) < 0.0
@@ -596,15 +606,21 @@ fn parse_apport(text: &str) -> Result<ImportDocument, String> {
     // (NAISSEUR/ENGRAISSEUR...). La date « LE JJ/MM/AA » du même bloc est
     // la date de facturation, pas la date d'enlèvement — donc à ne prendre
     // qu'en dernier recours.
-    .or_else(|| capture(text, r"(?im)^[ \t]*([0-9]{1,2}/[0-9]{2}/[0-9]{2,4})[ \t]*$", 1))
+    .or_else(|| {
+        capture(
+            text,
+            r"(?im)^[ \t]*([0-9]{1,2}/[0-9]{2}/[0-9]{2,4})[ \t]*$",
+            1,
+        )
+    })
     .or_else(|| capture(text, r"(?i)\bLE\s*([0-9]{2}/[0-9]{2}/[0-9]{2,4})", 1))
     .and_then(|value| iso_date(&value));
     let week = capture(text, r"(?i)Semaine\s*N[°ºo]?\s*([0-9./]+)", 1);
     let total_net = captures_all(text, r"(?i)NET\s*A\s*PAYER\s*E?\s*([0-9.,]+)\s*E?", 1)
         .last()
         .and_then(|value| number(value));
-    let global_price = capture(text, r"(?i)Prix moyen porc\s*:?\s*([0-9.,]+)", 1)
-        .and_then(|value| number(&value));
+    let global_price =
+        capture(text, r"(?i)Prix moyen porc\s*:?\s*([0-9.,]+)", 1).and_then(|value| number(&value));
     let global_value = capture(text, r"(?i)Plus.?value\s*/?\s*Base\s*:?\s*([0-9.,]+)", 1)
         .and_then(|value| number(&value));
     let lots = split_lots(text)
@@ -659,7 +675,9 @@ fn parse_apport(text: &str) -> Result<ImportDocument, String> {
             (_, gross) => gross,
         };
         let average_weight = match (lot.weight, lot.pigs) {
-            (Some(weight), Some(pigs)) if pigs > 0 => Some((weight / pigs as f64 * 100.0).round() / 100.0),
+            (Some(weight), Some(pigs)) if pigs > 0 => {
+                Some((weight / pigs as f64 * 100.0).round() / 100.0)
+            }
             _ => None,
         };
         let label = match (&lot.reference, &lot.bon) {
@@ -739,20 +757,17 @@ fn parse_lot(bon: Option<String>, body: &str) -> Option<ApportLot> {
         .as_ref()
         .and_then(|row| row.get(2))
         .and_then(|value| number(value.as_str()));
-    let animal_regex = Regex::new(
-        r"(?im)^\s*([0-9]+)\s+(SAISI|CREVE|CREVÉ|CREVEE|PORC|LEGER|LÉGER|LOURD|COEUR)",
-    )
-    .ok()?;
+    let animal_regex =
+        Regex::new(r"(?im)^\s*([0-9]+)\s+(SAISI|CREVE|CREVÉ|CREVEE|PORC|LEGER|LÉGER|LOURD|COEUR)")
+            .ok()?;
     let pigs: i64 = animal_regex
         .captures_iter(body)
         .filter_map(|row| row.get(1))
         .filter_map(|value| integer(value.as_str()))
         .sum();
-    let muscle = Regex::new(
-        r"(?i)muscle\s*:\s*de la gamme\s*([0-9.,]+)\s*du lot\s*([0-9.,]+)",
-    )
-    .ok()?
-    .captures(body);
+    let muscle = Regex::new(r"(?i)muscle\s*:\s*de la gamme\s*([0-9.,]+)\s*du lot\s*([0-9.,]+)")
+        .ok()?
+        .captures(body);
     let muscle_range = muscle
         .as_ref()
         .and_then(|row| row.get(1))
@@ -761,12 +776,8 @@ fn parse_lot(bon: Option<String>, body: &str) -> Option<ApportLot> {
         .as_ref()
         .and_then(|row| row.get(2))
         .and_then(|value| number(value.as_str()));
-    let technical_value = capture(
-        body,
-        r"(?i)Value\s+Technique\s*:?\s*([0-9.,]+)\s*cts",
-        1,
-    )
-    .and_then(|value| number(&value));
+    let technical_value = capture(body, r"(?i)Value\s+Technique\s*:?\s*([0-9.,]+)\s*cts", 1)
+        .and_then(|value| number(&value));
     if reference.is_none() && weight.is_none() && gross.is_none() && pigs == 0 {
         None
     } else {
@@ -787,7 +798,9 @@ fn lot_reference(text: &str) -> Option<String> {
     let regex = Regex::new(r"\b[A-Z0-9]{4,5}\b").ok()?;
     let mut occurrences: HashMap<String, usize> = HashMap::new();
     for value in regex.find_iter(text).map(|value| value.as_str()) {
-        if value.chars().any(|character| character.is_ascii_alphabetic())
+        if value
+            .chars()
+            .any(|character| character.is_ascii_alphabetic())
             && value.chars().any(|character| character.is_ascii_digit())
         {
             *occurrences.entry(value.to_string()).or_default() += 1;
@@ -799,7 +812,11 @@ fn lot_reference(text: &str) -> Option<String> {
         .map(|(value, _)| value)
 }
 
-fn parse_economic_lines(text: &str, reference: Option<&str>, date: Option<&str>) -> Vec<ImportLine> {
+fn parse_economic_lines(
+    text: &str,
+    reference: Option<&str>,
+    date: Option<&str>,
+) -> Vec<ImportLine> {
     let Ok(keyword) = Regex::new(
         r"(?i)(\+\s*VALUE|PRIME\s+SOLIDARITE|COMPLEMENT|PARTICIPATION|FRAIS\s+DE\s+GROUPEMENT|SERVICE\s+PUBLIC|EQUARRISSAGE|ÉQUARRISSAGE|CVEE|CONTRIBUTION\s+SANITAIRE|COTISATION)",
     ) else {
@@ -880,7 +897,10 @@ fn strip_french_accents(input: &str) -> String {
 
 fn canonical_label(raw: &str) -> String {
     let upper = strip_french_accents(&raw.to_uppercase());
-    let compact: String = upper.chars().filter(|character| character.is_alphabetic()).collect();
+    let compact: String = upper
+        .chars()
+        .filter(|character| character.is_alphabetic())
+        .collect();
     let mappings = [
         ("COTISATIONAUJESKY", "Cotisation Aujeszky"),
         ("SERVICECOCHETTE", "Service cochette"),
@@ -968,8 +988,8 @@ fn parse_synthese(text: &str) -> Result<ImportDocument, String> {
         1,
     )
     .and_then(|value| iso_date(&value));
-    let range_rate = capture(text, r"(?i)([0-9]+)%\s*dans la gamme", 1)
-        .and_then(|value| number(&value));
+    let range_rate =
+        capture(text, r"(?i)([0-9]+)%\s*dans la gamme", 1).and_then(|value| number(&value));
     let mut pigs = None;
     let mut average_weight = None;
     let mut tmp = None;
@@ -993,7 +1013,10 @@ fn parse_synthese(text: &str) -> Result<ImportDocument, String> {
         kind: "synthese".into(),
         date: date.clone(),
         reference: frappe.clone(),
-        label: format!("Synthèse Uniporc {}", frappe.as_deref().unwrap_or("sans frappe")),
+        label: format!(
+            "Synthèse Uniporc {}",
+            frappe.as_deref().unwrap_or("sans frappe")
+        ),
         quantity: pigs.map(|value| value as f64),
         unit_price: None,
         amount: None,
@@ -1028,7 +1051,8 @@ fn finish_document(
     }
     let mut warnings = Vec::new();
     if reference.is_none() {
-        warnings.push("Numéro de facture ou d'apport non détecté : la confirmation est bloquée".into());
+        warnings
+            .push("Numéro de facture ou d'apport non détecté : la confirmation est bloquée".into());
     }
     if date.is_none() {
         warnings.push("Date non détectée : vérifie le document avant confirmation".into());
@@ -1081,14 +1105,28 @@ mod tests {
     #[test]
     fn repare_un_startxref_decale_comme_le_produit_ldprx() {
         let good = build_minimal_pdf("Bon n 1");
-        assert!(lopdf::Document::load_mem(&good).is_ok(), "le PDF de référence doit être valide");
+        assert!(
+            lopdf::Document::load_mem(&good).is_ok(),
+            "le PDF de référence doit être valide"
+        );
 
         // Décale l'offset déclaré de +31 octets, exactement le décalage
         // observé sur un vrai bordereau Cooperl généré par LDPRX 4.54.
         let marker = b"startxref\n";
-        let start = good.windows(marker.len()).rposition(|w| w == marker).unwrap() + marker.len();
-        let end = good[start..].iter().position(|b| !b.is_ascii_digit()).unwrap() + start;
-        let real_offset: usize = std::str::from_utf8(&good[start..end]).unwrap().parse().unwrap();
+        let start = good
+            .windows(marker.len())
+            .rposition(|w| w == marker)
+            .unwrap()
+            + marker.len();
+        let end = good[start..]
+            .iter()
+            .position(|b| !b.is_ascii_digit())
+            .unwrap()
+            + start;
+        let real_offset: usize = std::str::from_utf8(&good[start..end])
+            .unwrap()
+            .parse()
+            .unwrap();
         let mut broken = good.clone();
         broken.splice(start..end, (real_offset + 31).to_string().into_bytes());
 
@@ -1097,11 +1135,18 @@ mod tests {
             "ce cas doit reproduire l'échec observé (offset startxref invalide)"
         );
 
-        let patched = repair_startxref_offset(&broken).expect("la réparation doit trouver le vrai xref");
-        let repaired_document = lopdf::Document::load_mem(&patched).expect("le PDF réparé doit se charger");
+        let patched =
+            repair_startxref_offset(&broken).expect("la réparation doit trouver le vrai xref");
+        let repaired_document =
+            lopdf::Document::load_mem(&patched).expect("le PDF réparé doit se charger");
         let pages: Vec<u32> = repaired_document.get_pages().keys().copied().collect();
-        let text = repaired_document.extract_text_with_limit(&pages, MAX_DECOMPRESSED_PAGE).unwrap();
-        assert!(text.contains("Bon n 1"), "le texte du PDF réparé doit rester lisible, obtenu: {text:?}");
+        let text = repaired_document
+            .extract_text_with_limit(&pages, MAX_DECOMPRESSED_PAGE)
+            .unwrap();
+        assert!(
+            text.contains("Bon n 1"),
+            "le texte du PDF réparé doit rester lisible, obtenu: {text:?}"
+        );
     }
 
     #[test]
@@ -1167,7 +1212,11 @@ mod tests {
         let Ok(parsed) = parse_document(text) else {
             panic!("le document aliment sans en-tête doit tout de même être reconnu");
         };
-        assert!(parsed.warnings.is_empty(), "aucun avertissement attendu: {:?}", parsed.warnings);
+        assert!(
+            parsed.warnings.is_empty(),
+            "aucun avertissement attendu: {:?}",
+            parsed.warnings
+        );
         assert_eq!(parsed.lines.len(), 2);
         assert_eq!(parsed.lines[0].label, "GESTA PLUS FE");
         assert_eq!(parsed.lines[0].reference.as_deref(), Some("326070852454"));
@@ -1180,12 +1229,9 @@ mod tests {
             panic!("le document d'apport doit être analysé");
         };
         assert!(parsed.lines.iter().any(|line| line.kind == "vente"));
-        let Some(retention) = parsed
-            .lines
-            .iter()
-            .find(|line| line.kind == "retenue") else {
-                panic!("la retenue doit être analysée");
-            };
+        let Some(retention) = parsed.lines.iter().find(|line| line.kind == "retenue") else {
+            panic!("la retenue doit être analysée");
+        };
         assert_eq!(retention.label, "Frais de groupement");
         assert_eq!(retention.amount, Some(-120.0));
         assert!(parsed.lines.iter().any(|line| line.kind == "valorisation"));
@@ -1202,8 +1248,16 @@ mod tests {
         let Ok(parsed) = parse_document(text) else {
             panic!("le bordereau à deux lots doit être analysé");
         };
-        let ventes: Vec<_> = parsed.lines.iter().filter(|line| line.kind == "vente").collect();
-        assert_eq!(ventes.len(), 2, "les deux Bon n° doivent produire deux lignes de vente distinctes, obtenu {ventes:?}");
+        let ventes: Vec<_> = parsed
+            .lines
+            .iter()
+            .filter(|line| line.kind == "vente")
+            .collect();
+        assert_eq!(
+            ventes.len(),
+            2,
+            "les deux Bon n° doivent produire deux lignes de vente distinctes, obtenu {ventes:?}"
+        );
 
         // Date : "27/07/26", seule sur sa ligne (l'enlèvement), pas "4/08/26"
         // qui suit "LE" (la facturation).
@@ -1211,16 +1265,28 @@ mod tests {
 
         assert_eq!(ventes[0].quantity, Some(68.0));
         assert_eq!(ventes[1].quantity, Some(66.0));
-        assert_eq!(ventes[0].details.get("poids_total").and_then(Value::as_f64), Some(5517.3));
-        assert_eq!(ventes[1].details.get("poids_total").and_then(Value::as_f64), Some(5760.0));
+        assert_eq!(
+            ventes[0].details.get("poids_total").and_then(Value::as_f64),
+            Some(5517.3)
+        );
+        assert_eq!(
+            ventes[1].details.get("poids_total").and_then(Value::as_f64),
+            Some(5760.0)
+        );
 
         // Le net à payer global (19 465,50) se répartit au prorata du
         // montant brut de chaque lot (8 855,10 / 9 607,76).
         assert_eq!(ventes[0].amount, Some(9335.98));
         assert_eq!(ventes[1].amount, Some(10129.52));
 
-        assert_eq!(ventes[0].details.get("muscle_lot").and_then(Value::as_f64), Some(62.8));
-        assert_eq!(ventes[1].details.get("muscle_lot").and_then(Value::as_f64), Some(59.9));
+        assert_eq!(
+            ventes[0].details.get("muscle_lot").and_then(Value::as_f64),
+            Some(62.8)
+        );
+        assert_eq!(
+            ventes[1].details.get("muscle_lot").and_then(Value::as_f64),
+            Some(59.9)
+        );
     }
 
     #[test]
@@ -1233,7 +1299,11 @@ mod tests {
         let Ok(parsed) = parse_document(text) else {
             panic!("le document d'apport doit être analysé");
         };
-        let vente = parsed.lines.iter().find(|line| line.kind == "vente").expect("une ligne de vente");
+        let vente = parsed
+            .lines
+            .iter()
+            .find(|line| line.kind == "vente")
+            .expect("une ligne de vente");
         assert_eq!(vente.date.as_deref(), Some("2026-07-03"));
     }
 
@@ -1261,8 +1331,14 @@ mod tests {
         assert_eq!(line.date.as_deref(), Some("2025-07-29"));
         assert_eq!(line.quantity, Some(28.0));
         assert_eq!(line.amount, Some(10972.69));
-        assert_eq!(line.details.get("montant_ht").and_then(Value::as_f64), Some(10400.65));
-        assert_eq!(line.details.get("avoir").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            line.details.get("montant_ht").and_then(Value::as_f64),
+            Some(10400.65)
+        );
+        assert_eq!(
+            line.details.get("avoir").and_then(Value::as_bool),
+            Some(false)
+        );
         assert!(!line.label.starts_with("AVOIR"));
     }
 
@@ -1281,17 +1357,35 @@ mod tests {
         assert_eq!(line.reference.as_deref(), Some("1441836"));
         assert_eq!(line.quantity, Some(-28.0));
         assert_eq!(line.amount, Some(-11153.72));
-        assert_eq!(line.details.get("montant_ht").and_then(Value::as_f64), Some(-10572.25));
-        assert_eq!(line.details.get("avoir").and_then(Value::as_bool), Some(true));
-        assert_eq!(line.details.get("facture_liee").and_then(Value::as_str), Some("1441649"));
+        assert_eq!(
+            line.details.get("montant_ht").and_then(Value::as_f64),
+            Some(-10572.25)
+        );
+        assert_eq!(
+            line.details.get("avoir").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            line.details.get("facture_liee").and_then(Value::as_str),
+            Some("1441649")
+        );
         assert_eq!(line.label, "AVOIR — 28 cochettes (sur facture 1441649)");
     }
 
     #[test]
     fn les_postes_demandes_gardent_des_libelles_distincts() {
-        assert_eq!(canonical_label("PRODUIT COTISATION AUJESKY 12,00"), "Cotisation Aujeszky");
-        assert_eq!(canonical_label("SERVICE COCHETTE 20,00"), "Service cochette");
-        assert_eq!(canonical_label("PRIME COCHETTE SERENIS 30,00"), "Prime cochette Serenis");
+        assert_eq!(
+            canonical_label("PRODUIT COTISATION AUJESKY 12,00"),
+            "Cotisation Aujeszky"
+        );
+        assert_eq!(
+            canonical_label("SERVICE COCHETTE 20,00"),
+            "Service cochette"
+        );
+        assert_eq!(
+            canonical_label("PRIME COCHETTE SERENIS 30,00"),
+            "Prime cochette Serenis"
+        );
     }
 
     /// Les 10 libellés de plus-value demandés en §3 : vérifie qu'ils sont

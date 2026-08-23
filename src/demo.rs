@@ -45,12 +45,18 @@ const HORIZON_JOURS: i64 = 5 * 365;
 /// ancienne (~5 ans), espacées de `intervalle_jours`. Fonction pure pour
 /// pouvoir vérifier le nombre de bandes et l'espacement sans base de
 /// données.
-fn dates_bandes(aujourdhui: NaiveDate, intervalle_jours: i64, horizon_jours: i64) -> Vec<NaiveDate> {
+fn dates_bandes(
+    aujourdhui: NaiveDate,
+    intervalle_jours: i64,
+    horizon_jours: i64,
+) -> Vec<NaiveDate> {
     if intervalle_jours <= 0 {
         return vec![aujourdhui];
     }
     let nb = (horizon_jours / intervalle_jours).max(1);
-    (0..nb).map(|i| aujourdhui - Duration::days(i * intervalle_jours)).collect()
+    (0..nb)
+        .map(|i| aujourdhui - Duration::days(i * intervalle_jours))
+        .collect()
 }
 
 async fn marquer(tx: &mut Transaction<'_, Sqlite>, table: &str, id: i64) -> anyhow::Result<()> {
@@ -72,15 +78,17 @@ pub async fn activer(tx: &mut Transaction<'_, Sqlite>) -> anyhow::Result<()> {
     let mut rng = rand::rngs::StdRng::from_entropy();
     let today = chrono::Local::now().date_naive();
 
-    let site_principal = sqlx::query("INSERT INTO site(code,nom) VALUES('DEMO-SP','Site principal (démo)')")
-        .execute(&mut **tx)
-        .await?
-        .last_insert_rowid();
+    let site_principal =
+        sqlx::query("INSERT INTO site(code,nom) VALUES('DEMO-SP','Site principal (démo)')")
+            .execute(&mut **tx)
+            .await?
+            .last_insert_rowid();
     marquer(tx, "site", site_principal).await?;
-    let site_exterieur = sqlx::query("INSERT INTO site(code,nom) VALUES('DEMO-SE','Site extérieur (démo)')")
-        .execute(&mut **tx)
-        .await?
-        .last_insert_rowid();
+    let site_exterieur =
+        sqlx::query("INSERT INTO site(code,nom) VALUES('DEMO-SE','Site extérieur (démo)')")
+            .execute(&mut **tx)
+            .await?
+            .last_insert_rowid();
     marquer(tx, "site", site_exterieur).await?;
 
     let hash = auth::hash_password_async("demo".to_string()).await?;
@@ -122,7 +130,11 @@ pub async fn activer(tx: &mut Transaction<'_, Sqlite>) -> anyhow::Result<()> {
         let gmq_engr = rng.gen_range(760.0..=870.0_f64);
         let gmq_nv = rng.gen_range(200.0..=260.0_f64);
 
-        let site_nom = if externe { "Site extérieur (démo)" } else { "Site principal (démo)" };
+        let site_nom = if externe {
+            "Site extérieur (démo)"
+        } else {
+            "Site principal (démo)"
+        };
         let engraisseur_bind = externe.then_some(engraisseur_id);
         let band_id = sqlx::query(
             "INSERT INTO bande(code,date_mb,site,note,active,engraisseur_id,cs_truies_saillies,cs_pleines,cs_truies_mb,cs_nt_portee,cs_nv_portee,cs_mn_portee,cs_sevres_portee,cs_total_sevres,cs_tx_pertes_nv,cs_poids_sevrage,cs_gmq_ps,cs_gmq_engr,cs_gmq_nv) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -213,12 +225,21 @@ pub async fn activer(tx: &mut Transaction<'_, Sqlite>) -> anyhow::Result<()> {
                 marquer(tx, "evenement", sevrage_id).await?;
 
                 for porcelet in 0..nb_sevres {
-                    let sexe = if (porcelet + rang_truie) % 2 == 0 { "M" } else { "F" };
+                    let sexe = if (porcelet + rang_truie) % 2 == 0 {
+                        "M"
+                    } else {
+                        "F"
+                    };
                     let age_jours = (today - date_sevrage).num_days();
                     let poids1 = poids_sevrage;
                     let poids2 = (age_jours >= 60).then(|| poids_sevrage + gmq_ps / 1000.0 * 32.0);
-                    let poids3 = (age_jours >= 150).then(|| poids2.unwrap_or(poids1) + gmq_engr / 1000.0 * 90.0);
-                    let destination = if externe { "Extérieur (prestataire)" } else { "Sur place" };
+                    let poids3 = (age_jours >= 150)
+                        .then(|| poids2.unwrap_or(poids1) + gmq_engr / 1000.0 * 90.0);
+                    let destination = if externe {
+                        "Extérieur (prestataire)"
+                    } else {
+                        "Sur place"
+                    };
                     let charcutier_id = sqlx::query(
                         "INSERT INTO porccharcutier(date_naissance,bande_code,sexe,poids1,poids2,poids3,destination,note) VALUES(?,?,?,?,?,?,?,?)",
                     )
@@ -292,56 +313,114 @@ mod tests {
         let truies_actives: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM truie WHERE reformee=0")
             .fetch_one(&pool)
             .await?;
-        assert!(truies_actives > 850, "attendu plus de 850 truies actives, obtenu {truies_actives}");
+        assert!(
+            truies_actives > 850,
+            "attendu plus de 850 truies actives, obtenu {truies_actives}"
+        );
 
-        let bandes_total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM bande").fetch_one(&pool).await?;
-        assert!(bandes_total > 80, "attendu un historique de bandes sur ~5 ans, obtenu {bandes_total}");
+        let bandes_total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM bande")
+            .fetch_one(&pool)
+            .await?;
+        assert!(
+            bandes_total > 80,
+            "attendu un historique de bandes sur ~5 ans, obtenu {bandes_total}"
+        );
 
-        let plus_ancienne: String = sqlx::query_scalar("SELECT MIN(date_mb) FROM bande").fetch_one(&pool).await?;
-        let plus_recente: String = sqlx::query_scalar("SELECT MAX(date_mb) FROM bande").fetch_one(&pool).await?;
+        let plus_ancienne: String = sqlx::query_scalar("SELECT MIN(date_mb) FROM bande")
+            .fetch_one(&pool)
+            .await?;
+        let plus_recente: String = sqlx::query_scalar("SELECT MAX(date_mb) FROM bande")
+            .fetch_one(&pool)
+            .await?;
         let ecart = NaiveDate::parse_from_str(&plus_recente, "%Y-%m-%d")?
             - NaiveDate::parse_from_str(&plus_ancienne, "%Y-%m-%d")?;
-        assert!(ecart >= Duration::days(4 * 365), "attendu au moins ~5 ans d'écart, obtenu {ecart}");
+        assert!(
+            ecart >= Duration::days(4 * 365),
+            "attendu au moins ~5 ans d'écart, obtenu {ecart}"
+        );
 
-        let bandes_externes: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM bande WHERE engraisseur_id IS NOT NULL")
+        let bandes_externes: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM bande WHERE engraisseur_id IS NOT NULL")
+                .fetch_one(&pool)
+                .await?;
+        assert!(
+            bandes_externes > 0,
+            "au moins une bande doit être confiée au prestataire extérieur"
+        );
+        let bandes_sur_place: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM bande WHERE active=1 AND engraisseur_id IS NULL",
+        )
+        .fetch_one(&pool)
+        .await?;
+        assert!(
+            bandes_sur_place > 0,
+            "au moins une bande active doit rester sur place"
+        );
+
+        let charcutiers: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM porccharcutier")
             .fetch_one(&pool)
             .await?;
-        assert!(bandes_externes > 0, "au moins une bande doit être confiée au prestataire extérieur");
-        let bandes_sur_place: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM bande WHERE active=1 AND engraisseur_id IS NULL")
-            .fetch_one(&pool)
-            .await?;
-        assert!(bandes_sur_place > 0, "au moins une bande active doit rester sur place");
-
-        let charcutiers: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM porccharcutier").fetch_one(&pool).await?;
-        assert!(charcutiers > 0, "des porcs charcutiers doivent être générés pour les bandes déjà sevrées");
+        assert!(
+            charcutiers > 0,
+            "des porcs charcutiers doivent être générés pour les bandes déjà sevrées"
+        );
         let destinations: i64 = sqlx::query_scalar(
             "SELECT COUNT(DISTINCT destination) FROM porccharcutier WHERE destination IS NOT NULL",
         )
         .fetch_one(&pool)
         .await?;
-        assert_eq!(destinations, 2, "les deux destinations (sur place / extérieur) doivent apparaître");
+        assert_eq!(
+            destinations, 2,
+            "les deux destinations (sur place / extérieur) doivent apparaître"
+        );
 
-        let total_traces: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM demoobjet").fetch_one(&pool).await?;
+        let total_traces: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM demoobjet")
+            .fetch_one(&pool)
+            .await?;
         let total_reel: i64 = sqlx::query_scalar(
             "SELECT (SELECT COUNT(*) FROM bande)+(SELECT COUNT(*) FROM truie)+(SELECT COUNT(*) FROM evenement)+(SELECT COUNT(*) FROM porccharcutier)+(SELECT COUNT(*) FROM site)+(SELECT COUNT(*) FROM utilisateur)",
         )
         .fetch_one(&pool)
         .await?;
-        assert_eq!(total_traces, total_reel, "chaque ligne générée doit être tracée dans demoobjet");
+        assert_eq!(
+            total_traces, total_reel,
+            "chaque ligne générée doit être tracée dans demoobjet"
+        );
 
         // Suppression symétrique (même ordre et mêmes tables que
         // `parity::demo_basculer`) : ne doit rien laisser et ne violer
         // aucune clé étrangère.
         let mut tx = pool.begin().await?;
-        for table in ["evenement", "porccharcutier", "truie", "bande", "utilisateur", "site"] {
-            let sql = format!("DELETE FROM {table} WHERE id IN(SELECT row_id FROM demoobjet WHERE table_name=?)");
+        for table in [
+            "evenement",
+            "porccharcutier",
+            "truie",
+            "bande",
+            "utilisateur",
+            "site",
+        ] {
+            let sql = format!(
+                "DELETE FROM {table} WHERE id IN(SELECT row_id FROM demoobjet WHERE table_name=?)"
+            );
             sqlx::query(&sql).bind(table).execute(&mut *tx).await?;
         }
-        sqlx::query("DELETE FROM demoobjet").execute(&mut *tx).await?;
+        sqlx::query("DELETE FROM demoobjet")
+            .execute(&mut *tx)
+            .await?;
         tx.commit().await?;
 
-        for table in ["bande", "truie", "evenement", "porccharcutier", "site", "utilisateur", "demoobjet"] {
-            let count: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}")).fetch_one(&pool).await?;
+        for table in [
+            "bande",
+            "truie",
+            "evenement",
+            "porccharcutier",
+            "site",
+            "utilisateur",
+            "demoobjet",
+        ] {
+            let count: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
+                .fetch_one(&pool)
+                .await?;
             assert_eq!(count, 0, "{table} doit être vide après retrait de la démo");
         }
         Ok(())

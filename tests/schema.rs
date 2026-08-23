@@ -21,11 +21,10 @@ async fn schema_complet_et_ecritures_compatibles() -> anyhow::Result<()> {
 
     // SQLite renvoie normalement un INTEGER pour COALESCE(SUM(...), 0)
     // lorsque la table est vide. Le CAST garantit le décodage Rust en f64.
-    let empty_sales: f64 = sqlx::query_scalar(
-        "SELECT CAST(COALESCE(SUM(montant_net),0) AS REAL) FROM venteapport",
-    )
-    .fetch_one(&pool)
-    .await?;
+    let empty_sales: f64 =
+        sqlx::query_scalar("SELECT CAST(COALESCE(SUM(montant_net),0) AS REAL) FROM venteapport")
+            .fetch_one(&pool)
+            .await?;
     assert_eq!(empty_sales, 0.0);
 
     let tables: i64 = sqlx::query_scalar(
@@ -61,13 +60,25 @@ async fn schema_complet_et_ecritures_compatibles() -> anyhow::Result<()> {
         .execute(&mut *tx)
         .await?;
     let site = sqlx::query("INSERT INTO site(code,nom) VALUES('TEST','Site test')")
-        .execute(&mut *tx).await?.last_insert_rowid();
-    let room = sqlx::query("INSERT INTO salle(site_id,nom,nb_cases,ordre) VALUES(?,'Engraissement',1,1)")
-        .bind(site).execute(&mut *tx).await?.last_insert_rowid();
+        .execute(&mut *tx)
+        .await?
+        .last_insert_rowid();
+    let room =
+        sqlx::query("INSERT INTO salle(site_id,nom,nb_cases,ordre) VALUES(?,'Engraissement',1,1)")
+            .bind(site)
+            .execute(&mut *tx)
+            .await?
+            .last_insert_rowid();
     let pen = sqlx::query("INSERT INTO casesalle(salle_id,nom,nb_max_porcs) VALUES(?,'Case 1',20)")
-        .bind(room).execute(&mut *tx).await?.last_insert_rowid();
-    let band = sqlx::query("INSERT INTO bande(code,date_mb,active) VALUES('B-TEST','2026-08-01',1)")
-        .execute(&mut *tx).await?.last_insert_rowid();
+        .bind(room)
+        .execute(&mut *tx)
+        .await?
+        .last_insert_rowid();
+    let band =
+        sqlx::query("INSERT INTO bande(code,date_mb,active) VALUES('B-TEST','2026-08-01',1)")
+            .execute(&mut *tx)
+            .await?
+            .last_insert_rowid();
     sqlx::query("INSERT INTO mouvementstock(date,bande_code,nombre,libelle,type_saisie,est_stock) VALUES('2026-08-16','B-TEST',12,'stock porcs','inventaire',1)")
         .execute(&mut *tx).await?;
     sqlx::query("INSERT INTO transfert(date,espece,bande_id,salle_dest_id,case_dest_id,nombre) VALUES('2026-08-16','porc',?,?,?,10)")
@@ -79,8 +90,12 @@ async fn schema_complet_et_ecritures_compatibles() -> anyhow::Result<()> {
         .bind(pen).execute(&mut *tx).await?;
     sqlx::query("INSERT INTO venteapport(date,bande_id,nb_porcs,poids_total,montant_net) VALUES('2026-08-16',?,10,900,1800)")
         .bind(band).execute(&mut *tx).await?;
-    let price: f64 = sqlx::query_scalar("SELECT SUM(montant_net)/SUM(poids_total) FROM venteapport WHERE bande_id=?")
-        .bind(band).fetch_one(&mut *tx).await?;
+    let price: f64 = sqlx::query_scalar(
+        "SELECT SUM(montant_net)/SUM(poids_total) FROM venteapport WHERE bande_id=?",
+    )
+    .bind(band)
+    .fetch_one(&mut *tx)
+    .await?;
     assert!((price - 2.0).abs() < 0.0001);
     sqlx::query("INSERT INTO valorisationapport(num_apport,date,libelle,montant,categorie) VALUES('AP-TEST','2026-08-16','Frais de groupement',-25,'retenue')")
         .execute(&mut *tx).await?;
@@ -91,13 +106,21 @@ async fn schema_complet_et_ecritures_compatibles() -> anyhow::Result<()> {
         .execute(&mut *tx).await?;
     sqlx::query("INSERT INTO importligne(token,numero_ligne,action,donnees_json) VALUES('pdf-test',1,'ajouter','{\"kind\":\"aliment\"}')")
         .execute(&mut *tx).await?;
-    let preview_lines:i64=sqlx::query_scalar("SELECT COUNT(*) FROM importligne WHERE token='pdf-test' AND action='ajouter'")
-        .fetch_one(&mut *tx).await?;
-    assert_eq!(preview_lines,1);
-    let sale_session = sqlx::query("INSERT INTO sessionventedirecte(nom,active) VALUES('Session test',1)")
-        .execute(&mut *tx).await?.last_insert_rowid();
+    let preview_lines: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM importligne WHERE token='pdf-test' AND action='ajouter'",
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    assert_eq!(preview_lines, 1);
+    let sale_session =
+        sqlx::query("INSERT INTO sessionventedirecte(nom,active) VALUES('Session test',1)")
+            .execute(&mut *tx)
+            .await?
+            .last_insert_rowid();
     sqlx::query("INSERT INTO coutelevageventedirecte(session_vente_id,semence) VALUES(?,10)")
-        .bind(sale_session).execute(&mut *tx).await?;
+        .bind(sale_session)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("INSERT INTO chargeventedirecte(session_vente_id,categorie,libelle,montant) VALUES(?,'découpe','Découpe',25)")
         .bind(sale_session).execute(&mut *tx).await?;
     let product = sqlx::query("INSERT INTO produitventedirecte(nom,prix,unite,actif,ordre,quantite_disponible) VALUES('Colis test',12.5,'kg',1,1,10)")
@@ -106,22 +129,42 @@ async fn schema_complet_et_ecritures_compatibles() -> anyhow::Result<()> {
         .bind(sale_session).execute(&mut *tx).await?.last_insert_rowid();
     sqlx::query("INSERT INTO lignecommandeventedirecte(commande_id,produit_id,nom_produit,prix_unitaire,unite,quantite,total_ligne) VALUES(?,?,'Colis test',12.5,'kg',3,37.5)")
         .bind(order).bind(product).execute(&mut *tx).await?;
-    sqlx::query("UPDATE produitventedirecte SET quantite_disponible=quantite_disponible-3 WHERE id=?")
-        .bind(product).execute(&mut *tx).await?;
-    let reserved_stock: f64 = sqlx::query_scalar("SELECT quantite_disponible FROM produitventedirecte WHERE id=?")
-        .bind(product).fetch_one(&mut *tx).await?;
+    sqlx::query(
+        "UPDATE produitventedirecte SET quantite_disponible=quantite_disponible-3 WHERE id=?",
+    )
+    .bind(product)
+    .execute(&mut *tx)
+    .await?;
+    let reserved_stock: f64 =
+        sqlx::query_scalar("SELECT quantite_disponible FROM produitventedirecte WHERE id=?")
+            .bind(product)
+            .fetch_one(&mut *tx)
+            .await?;
     assert_eq!(reserved_stock, 7.0);
     // Une modification rend d'abord l'ancienne réservation, puis réserve la nouvelle.
-    sqlx::query("UPDATE produitventedirecte SET quantite_disponible=quantite_disponible+3 WHERE id=?")
-        .bind(product).execute(&mut *tx).await?;
+    sqlx::query(
+        "UPDATE produitventedirecte SET quantite_disponible=quantite_disponible+3 WHERE id=?",
+    )
+    .bind(product)
+    .execute(&mut *tx)
+    .await?;
     sqlx::query("DELETE FROM lignecommandeventedirecte WHERE commande_id=?")
-        .bind(order).execute(&mut *tx).await?;
+        .bind(order)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("INSERT INTO lignecommandeventedirecte(commande_id,produit_id,nom_produit,prix_unitaire,unite,quantite,total_ligne) VALUES(?,?,'Colis test',12.5,'kg',5,62.5)")
         .bind(order).bind(product).execute(&mut *tx).await?;
-    sqlx::query("UPDATE produitventedirecte SET quantite_disponible=quantite_disponible-5 WHERE id=?")
-        .bind(product).execute(&mut *tx).await?;
-    let edited_stock: f64 = sqlx::query_scalar("SELECT quantite_disponible FROM produitventedirecte WHERE id=?")
-        .bind(product).fetch_one(&mut *tx).await?;
+    sqlx::query(
+        "UPDATE produitventedirecte SET quantite_disponible=quantite_disponible-5 WHERE id=?",
+    )
+    .bind(product)
+    .execute(&mut *tx)
+    .await?;
+    let edited_stock: f64 =
+        sqlx::query_scalar("SELECT quantite_disponible FROM produitventedirecte WHERE id=?")
+            .bind(product)
+            .fetch_one(&mut *tx)
+            .await?;
     assert_eq!(edited_stock, 5.0);
     let preparation: f64 = sqlx::query_scalar("SELECT CAST(SUM(l.quantite) AS REAL) FROM lignecommandeventedirecte l JOIN commandeventedirecte c ON c.id=l.commande_id WHERE c.session_vente_id=? AND c.statut<>'annulee' AND l.produit_id=?")
         .bind(sale_session).bind(product).fetch_one(&mut *tx).await?;
@@ -144,10 +187,11 @@ async fn inventaire_est_un_point_de_depart_sans_double_comptage() -> anyhow::Res
     sqlx::raw_sql(include_str!("../migrations/0001_schema.sql"))
         .execute(&pool)
         .await?;
-    let band = sqlx::query("INSERT INTO bande(code,date_mb,active) VALUES('B-STOCK','2026-08-01',1)")
-        .execute(&pool)
-        .await?
-        .last_insert_rowid();
+    let band =
+        sqlx::query("INSERT INTO bande(code,date_mb,active) VALUES('B-STOCK','2026-08-01',1)")
+            .execute(&pool)
+            .await?
+            .last_insert_rowid();
     sqlx::query("INSERT INTO mouvementstock(date,bande_code,nombre,libelle,type_saisie,est_stock) VALUES('2026-08-16','B-STOCK',100,'stock porcs','inventaire',1)")
         .execute(&pool)
         .await?;
@@ -220,18 +264,21 @@ async fn etat_donnees_detecte_les_incoherences_deffectif() -> anyhow::Result<()>
         .execute(&pool)
         .await?
         .last_insert_rowid();
-    let room = sqlx::query("INSERT INTO salle(site_id,nom,nb_cases,ordre) VALUES(?,'Engraissement',2,1)")
-        .bind(site)
-        .execute(&pool)
-        .await?
-        .last_insert_rowid();
+    let room =
+        sqlx::query("INSERT INTO salle(site_id,nom,nb_cases,ordre) VALUES(?,'Engraissement',2,1)")
+            .bind(site)
+            .execute(&pool)
+            .await?
+            .last_insert_rowid();
     // Case avec un effectif calculé négatif : 5 déclarés présents, 8 morts
     // déclarées ensuite -> 5-8=-3.
-    let pen_negative = sqlx::query("INSERT INTO casesalle(salle_id,nom,nb_max_porcs) VALUES(?,'Case négative',20)")
-        .bind(room)
-        .execute(&pool)
-        .await?
-        .last_insert_rowid();
+    let pen_negative = sqlx::query(
+        "INSERT INTO casesalle(salle_id,nom,nb_max_porcs) VALUES(?,'Case négative',20)",
+    )
+    .bind(room)
+    .execute(&pool)
+    .await?
+    .last_insert_rowid();
     sqlx::query("INSERT INTO inventairecase(case_id,date,nombre,note,cree_par) VALUES(?,'2026-08-01',5,'Stock initial','test')")
         .bind(pen_negative)
         .execute(&pool)
@@ -241,19 +288,22 @@ async fn etat_donnees_detecte_les_incoherences_deffectif() -> anyhow::Result<()>
         .execute(&pool)
         .await?;
     // Case en dépassement de capacité : 3 présents pour 2 places.
-    let pen_over = sqlx::query("INSERT INTO casesalle(salle_id,nom,nb_max_porcs) VALUES(?,'Case pleine',2)")
-        .bind(room)
-        .execute(&pool)
-        .await?
-        .last_insert_rowid();
+    let pen_over =
+        sqlx::query("INSERT INTO casesalle(salle_id,nom,nb_max_porcs) VALUES(?,'Case pleine',2)")
+            .bind(room)
+            .execute(&pool)
+            .await?
+            .last_insert_rowid();
     sqlx::query("INSERT INTO inventairecase(case_id,date,nombre,note,cree_par) VALUES(?,'2026-08-01',3,'Stock initial','test')")
         .bind(pen_over)
         .execute(&pool)
         .await?;
     // Mortalité sans stade renseigné.
-    sqlx::query("INSERT INTO declarationmort(bande_code,date,nombre) VALUES('B-TEST','2026-08-11',1)")
-        .execute(&pool)
-        .await?;
+    sqlx::query(
+        "INSERT INTO declarationmort(bande_code,date,nombre) VALUES('B-TEST','2026-08-11',1)",
+    )
+    .execute(&pool)
+    .await?;
     // Porc charcutier sans bande d'origine (donnée legacy).
     sqlx::query("INSERT INTO porccharcutier(rfid,date_naissance) VALUES('RFID-TEST','2026-05-01')")
         .execute(&pool)
@@ -290,10 +340,11 @@ async fn historique_sanitaire_reunit_bandes_et_verrats() -> anyhow::Result<()> {
     sqlx::raw_sql(include_str!("../migrations/0001_schema.sql"))
         .execute(&pool)
         .await?;
-    let band = sqlx::query("INSERT INTO bande(code,date_mb,active) VALUES('B-TEST','2026-08-01',1)")
-        .execute(&pool)
-        .await?
-        .last_insert_rowid();
+    let band =
+        sqlx::query("INSERT INTO bande(code,date_mb,active) VALUES('B-TEST','2026-08-01',1)")
+            .execute(&pool)
+            .await?
+            .last_insert_rowid();
     let verrat = sqlx::query("INSERT INTO verrat(code,actif) VALUES('V-TEST',1)")
         .execute(&pool)
         .await?
@@ -311,11 +362,13 @@ async fn historique_sanitaire_reunit_bandes_et_verrats() -> anyhow::Result<()> {
         .bind(band)
         .execute(&pool)
         .await?;
-    sqlx::query("INSERT INTO acterealiseverrat(acte_id,verrat_id,date_realise) VALUES(?,?,'2026-08-12')")
-        .bind(acte_verrat)
-        .bind(verrat)
-        .execute(&pool)
-        .await?;
+    sqlx::query(
+        "INSERT INTO acterealiseverrat(acte_id,verrat_id,date_realise) VALUES(?,?,'2026-08-12')",
+    )
+    .bind(acte_verrat)
+    .bind(verrat)
+    .execute(&pool)
+    .await?;
 
     let sql = "SELECT ar.id AS id,ar.date_realise AS date_realise,b.code AS cible_nom,a.libelle,a.produit,ar.note FROM acterealise ar JOIN bande b ON b.id=ar.bande_id JOIN acteprotocole a ON a.id=ar.acte_id UNION ALL SELECT arv.id AS id,arv.date_realise AS date_realise,v.code AS cible_nom,a.libelle,a.produit,arv.note FROM acterealiseverrat arv JOIN verrat v ON v.id=arv.verrat_id JOIN acteprotocole a ON a.id=arv.acte_id ORDER BY date_realise DESC,id DESC LIMIT 250";
     #[allow(clippy::type_complexity)]
@@ -328,8 +381,18 @@ async fn historique_sanitaire_reunit_bandes_et_verrats() -> anyhow::Result<()> {
     assert_eq!(
         simplified,
         vec![
-            (1, "2026-08-12".to_string(), "V-TEST".to_string(), "Bilan sanitaire".to_string()),
-            (1, "2026-08-10".to_string(), "B-TEST".to_string(), "Vermifuge".to_string()),
+            (
+                1,
+                "2026-08-12".to_string(),
+                "V-TEST".to_string(),
+                "Bilan sanitaire".to_string()
+            ),
+            (
+                1,
+                "2026-08-10".to_string(),
+                "B-TEST".to_string(),
+                "Vermifuge".to_string()
+            ),
         ]
     );
     Ok(())
