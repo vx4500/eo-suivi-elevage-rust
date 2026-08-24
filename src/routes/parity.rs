@@ -798,12 +798,16 @@ pub(super) async fn maj_lancer(
 ) -> AppResult<Response> {
     require_admin(&session)?;
     verify_csrf(&session, &form)?;
+    let request = data_parent(&state).join("mise-a-jour-demandee");
+    tokio::fs::write(&request, format!("{}\n", chrono::Local::now().to_rfc3339()))
+        .await
+        .map_err(anyhow::Error::from)?;
     db::journal(
         &state.pool,
         &session.nom,
         "demander",
         "mise_a_jour",
-        "Exécution à confirmer sur le serveur",
+        "Demande transmise au service système",
         "/maj/lancer",
     )
     .await;
@@ -1025,10 +1029,15 @@ pub(super) async fn demo_basculer(
         // (foreign_keys=ON) : evenement référence truie et bande,
         // truie/bande référencent site/utilisateur (via engraisseur_id).
         for table in [
+            "tache",
+            "produitpharmacie",
+            "causeperte",
             "evenement",
             "porccharcutier",
             "truie",
             "bande",
+            "casesalle",
+            "salle",
             "utilisateur",
             "site",
         ] {

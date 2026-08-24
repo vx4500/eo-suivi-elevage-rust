@@ -91,6 +91,64 @@ pub async fn activer(tx: &mut Transaction<'_, Sqlite>) -> anyhow::Result<()> {
             .last_insert_rowid();
     marquer(tx, "site", site_exterieur).await?;
 
+    let salle_principale = sqlx::query("INSERT INTO salle(site_id,nom,type,nb_cases,ordre) VALUES(?,'Maternité démo','maternité',1,1)").bind(site_principal).execute(&mut **tx).await?.last_insert_rowid();
+    marquer(tx, "salle", salle_principale).await?;
+    let case_principale = sqlx::query("INSERT INTO casesalle(salle_id,nom,nb_max_porcs,rfid) VALUES(?,'Case démo principale',1400,'DEMO-CASE-01')").bind(salle_principale).execute(&mut **tx).await?.last_insert_rowid();
+    marquer(tx, "casesalle", case_principale).await?;
+    let salle_exterieure = sqlx::query("INSERT INTO salle(site_id,nom,type,nb_cases,ordre) VALUES(?,'Engraissement extérieur démo','engraissement',1,1)").bind(site_exterieur).execute(&mut **tx).await?.last_insert_rowid();
+    marquer(tx, "salle", salle_exterieure).await?;
+    let case_exterieure = sqlx::query("INSERT INTO casesalle(salle_id,nom,nb_max_porcs,rfid) VALUES(?,'Case prestataire démo',1400,'DEMO-CASE-EXT')").bind(salle_exterieure).execute(&mut **tx).await?.last_insert_rowid();
+    marquer(tx, "casesalle", case_exterieure).await?;
+
+    for cause in [
+        "Écrasement",
+        "Diarrhée",
+        "Respiratoire",
+        "Boiterie",
+        "Mort subite",
+    ] {
+        let id = sqlx::query("INSERT INTO causeperte(libelle) VALUES(?)")
+            .bind(cause)
+            .execute(&mut **tx)
+            .await?
+            .last_insert_rowid();
+        marquer(tx, "causeperte", id).await?;
+    }
+    for (produit, stock, unite, seuil, note) in [
+        (
+            "Électrolytes démo",
+            24.0,
+            "sachets",
+            5.0,
+            "Produit fictif — protocole vétérinaire requis",
+        ),
+        (
+            "Désinfectant démo",
+            18.0,
+            "litres",
+            3.0,
+            "Hygiène des locaux",
+        ),
+        (
+            "Anti-inflammatoire démo",
+            10.0,
+            "flacons",
+            2.0,
+            "Produit fictif — ordonnance obligatoire",
+        ),
+    ] {
+        let id=sqlx::query("INSERT INTO produitpharmacie(produit,stock_actuel,unite,seuil_alerte,note,maj) VALUES(?,?,?,?,?,CURRENT_TIMESTAMP)").bind(produit).bind(stock).bind(unite).bind(seuil).bind(note).execute(&mut **tx).await?.last_insert_rowid();
+        marquer(tx, "produitpharmacie", id).await?;
+    }
+    for (titre, kind, days) in [
+        ("Contrôler les débits d’eau", "sanitaire", 0_i64),
+        ("Vérifier les températures des nids", "quotidien", 1),
+        ("Inventaire pharmacie", "stock", 7),
+    ] {
+        let id=sqlx::query("INSERT INTO tache(titre,type,echeance,note) VALUES(?,?,date('now',printf('+%d day',?)),'Donnée de démonstration')").bind(titre).bind(kind).bind(days).execute(&mut **tx).await?.last_insert_rowid();
+        marquer(tx, "tache", id).await?;
+    }
+
     let hash = auth::hash_password_async("demo".to_string()).await?;
     let engraisseur_id = sqlx::query(
         "INSERT INTO utilisateur(identifiant,nom,hash_mdp,role,actif,doit_changer_mdp) VALUES('demo_prestataire','Prestataire (démo)',?,'engraisseur',1,1)",
@@ -174,13 +232,20 @@ pub async fn activer(tx: &mut Transaction<'_, Sqlite>) -> anyhow::Result<()> {
             let num_travail = format!("DEMO-{numero}-{rang_truie:03}");
             let race = races[rng.gen_range(0..races.len())];
             let rang = rng.gen_range(1..=7_i64);
+            let (salle_id, case_id) = if externe {
+                (salle_exterieure, case_exterieure)
+            } else {
+                (salle_principale, case_principale)
+            };
             let sow_id = sqlx::query(
-                "INSERT INTO truie(num_travail,race,statut,rang,bande_code,note,reformee) VALUES(?,?,'active',?,?,?,0)",
+                "INSERT INTO truie(num_travail,race,statut,rang,bande_code,salle_id,case_id,note,reformee) VALUES(?,?,'active',?,?,?,?,?,0)",
             )
             .bind(&num_travail)
             .bind(race)
             .bind(rang)
             .bind(&code)
+            .bind(salle_id)
+            .bind(case_id)
             .bind("Donnée de démonstration")
             .execute(&mut **tx)
             .await?
@@ -378,7 +443,7 @@ mod tests {
             .fetch_one(&pool)
             .await?;
         let total_reel: i64 = sqlx::query_scalar(
-            "SELECT (SELECT COUNT(*) FROM bande)+(SELECT COUNT(*) FROM truie)+(SELECT COUNT(*) FROM evenement)+(SELECT COUNT(*) FROM porccharcutier)+(SELECT COUNT(*) FROM site)+(SELECT COUNT(*) FROM utilisateur)",
+            "SELECT (SELECT COUNT(*) FROM bande)+(SELECT COUNT(*) FROM truie)+(SELECT COUNT(*) FROM evenement)+(SELECT COUNT(*) FROM porccharcutier)+(SELECT COUNT(*) FROM site)+(SELECT COUNT(*) FROM salle)+(SELECT COUNT(*) FROM casesalle)+(SELECT COUNT(*) FROM utilisateur)+(SELECT COUNT(*) FROM causeperte)+(SELECT COUNT(*) FROM produitpharmacie)+(SELECT COUNT(*) FROM tache)",
         )
         .fetch_one(&pool)
         .await?;
@@ -392,10 +457,15 @@ mod tests {
         // aucune clé étrangère.
         let mut tx = pool.begin().await?;
         for table in [
+            "tache",
+            "produitpharmacie",
+            "causeperte",
             "evenement",
             "porccharcutier",
             "truie",
             "bande",
+            "casesalle",
+            "salle",
             "utilisateur",
             "site",
         ] {
@@ -414,6 +484,11 @@ mod tests {
             "truie",
             "evenement",
             "porccharcutier",
+            "tache",
+            "produitpharmacie",
+            "causeperte",
+            "casesalle",
+            "salle",
             "site",
             "utilisateur",
             "demoobjet",

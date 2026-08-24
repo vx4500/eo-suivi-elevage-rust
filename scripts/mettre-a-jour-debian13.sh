@@ -134,9 +134,12 @@ mv "$new_binary" "$APP_DIR/eo-suivi-elevage"
 mkdir -p "$APP_DIR/static"
 cp -a static/. "$APP_DIR/static/"
 install -m 0644 eo-suivi-rust.service /etc/systemd/system/eo-suivi-rust.service
+install -m 0644 eo-suivi-rust-update.service /etc/systemd/system/eo-suivi-rust-update.service
+install -m 0644 eo-suivi-rust-update.path /etc/systemd/system/eo-suivi-rust-update.path
 chown -R eo-suivi:eo-suivi "$APP_DIR"
 systemctl daemon-reload
 systemctl enable "$SERVICE" >/dev/null
+systemctl enable --now eo-suivi-rust-update.path >/dev/null
 systemctl start "$SERVICE"
 
 healthy=0

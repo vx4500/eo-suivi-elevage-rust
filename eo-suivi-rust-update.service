@@ -1,0 +1,9 @@
+[Unit]
+Description=Mise à jour contrôlée de EO-Suivi depuis GitHub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStartPre=/usr/bin/rm -f /var/lib/eo-suivi/mise-a-jour-demandee
+ExecStart=/opt/eo-suivi-rust-src/scripts/mettre-a-jour-debian13.sh

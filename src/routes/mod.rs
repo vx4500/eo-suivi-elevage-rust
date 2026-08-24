@@ -305,6 +305,7 @@ pub fn router(state: AppState) -> Router {
         .route("/taches/{id}/fait", post(tache_fait))
         .route("/taches/{id}/supprimer", post(tache_supprimer))
         .route("/sanitaire", get(sanitaire))
+        .route("/resolution-problemes", get(resolution_problemes))
         .route("/pharmacie", get(pharmacie))
         .route("/sanitaire/acte/ajouter", post(sanitaire_acte_ajouter))
         .route("/sanitaire/acte/modifier", post(sanitaire_acte_modifier))
@@ -7573,6 +7574,26 @@ async fn pharmacie(
         json!(Local::now().date_naive().format("%Y-%m-%d").to_string()),
     );
     render(&state, "pharmacie.html", Value::Object(ctx))
+}
+
+async fn resolution_problemes(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+) -> AppResult<Html<String>> {
+    let products = generic_rows(
+        &state.pool,
+        "SELECT produit,stock_actuel,unite,note FROM produitpharmacie ORDER BY produit",
+    )
+    .await?;
+    let protocols = generic_rows(
+        &state.pool,
+        "SELECT libelle,cible,categorie,produit,dose,unite,voie,duree_j,delai_attente,preconisations FROM acteprotocole WHERE actif=1 AND produit IS NOT NULL ORDER BY categorie,libelle",
+    )
+    .await?;
+    let mut ctx = context(&session);
+    ctx.insert("produits".into(), Value::Array(products));
+    ctx.insert("protocoles".into(), Value::Array(protocols));
+    render(&state, "resolution_problemes.html", Value::Object(ctx))
 }
 
 async fn pharmacie_mouvement(

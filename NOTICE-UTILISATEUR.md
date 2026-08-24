@@ -1,6 +1,6 @@
 # Notice utilisateur — EO‑Suivi Élevage
 
-Version de la notice : 2.2.18 — mise à jour le 24 août 2026.
+Version de la notice : 2.2.19 — mise à jour le 24 août 2026.
 
 Cette notice doit être relue à chaque livraison. Toute fonction ajoutée ou
 modifiée doit être inscrite dans la section « Nouveautés de la version » avant
@@ -44,8 +44,15 @@ doit donc pas compter deux fois la sortie.
 - Pour une délivrance NOK, consulter la fiche truie et traiter les lignes
   marquées **À suivre** selon le protocole de l'élevage.
 
-## Nouveautés de la version 2.2.18
+## Nouveautés de la version 2.2.19
 
+- Assistant de résolution des principaux problèmes sanitaires et techniques,
+  avec questionnaire d'ambiance et signaux d'urgence.
+- Calculateur de quantité à partir du poids, du nombre d'animaux, de la dose
+  prescrite et de la concentration du produit.
+- Lancement sécurisé d'une mise à jour GitHub depuis Administration → Mise à
+  jour.
+- Démonstration enrichie avec structure, pharmacie, tâches et causes de perte.
 - Liste de mise-bas limitée à la période prévue, avec recherche manuelle.
 - Suivi de mise-bas et état de délivrance OK/NOK.
 - Mouvements automatiques de sortie lors des apports abattoir.

@@ -1,0 +1,9 @@
+[Unit]
+Description=Surveille les demandes de mise à jour EO-Suivi
+
+[Path]
+PathChanged=/var/lib/eo-suivi/mise-a-jour-demandee
+Unit=eo-suivi-rust-update.service
+
+[Install]
+WantedBy=multi-user.target
