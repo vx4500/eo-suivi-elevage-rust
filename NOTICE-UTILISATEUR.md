@@ -1,6 +1,6 @@
 # Notice utilisateur — EO‑Suivi Élevage
 
-Version de la notice : 2.2.23 — mise à jour le 24 août 2026.
+Version de la notice : 2.2.24 — mise à jour le 24 août 2026.
 
 Cette notice doit être relue à chaque livraison. Toute fonction ajoutée ou
 modifiée doit être inscrite dans la section « Nouveautés de la version » avant
@@ -43,6 +43,14 @@ doit donc pas compter deux fois la sortie.
   case.
 - Pour une délivrance NOK, consulter la fiche truie et traiter les lignes
   marquées **À suivre** selon le protocole de l'élevage.
+
+## Nouveautés de la version 2.2.24
+
+- L’effectif actuel de chaque case est modifiable directement depuis la fiche de la bande.
+- La section redondante « Derniers emplacements enregistrés » a été supprimée.
+- Les chétifs, écrasés et porcelets tués par la truie saisis à la mise-bas apparaissent automatiquement dans les pertes de la truie.
+- La cause d’une perte porcelet doit être choisie dans les causes configurées.
+- Les résultats de recherche conduisent directement à la fiche de la truie, de la bande ou de la commande trouvée.
 
 ## Correctifs de la version 2.2.23
 

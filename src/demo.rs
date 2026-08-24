@@ -370,6 +370,9 @@ mod tests {
         sqlx::raw_sql(include_str!("../migrations/0001_schema.sql"))
             .execute(&pool)
             .await?;
+        let causes_reference: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM causeperte")
+            .fetch_one(&pool)
+            .await?;
 
         let mut tx = pool.begin().await?;
         activer(&mut tx).await?;
@@ -448,7 +451,8 @@ mod tests {
         .fetch_one(&pool)
         .await?;
         assert_eq!(
-            total_traces, total_reel,
+            total_traces,
+            total_reel - causes_reference,
             "chaque ligne générée doit être tracée dans demoobjet"
         );
 
@@ -496,7 +500,15 @@ mod tests {
             let count: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
                 .fetch_one(&pool)
                 .await?;
-            assert_eq!(count, 0, "{table} doit être vide après retrait de la démo");
+            let attendu = if table == "causeperte" {
+                causes_reference
+            } else {
+                0
+            };
+            assert_eq!(
+                count, attendu,
+                "{table} doit retrouver son état initial après retrait de la démo"
+            );
         }
         Ok(())
     }

@@ -128,19 +128,23 @@ pub(super) async fn truie_mise_bas(
     let live = form_i64(&form, "nes_vifs").unwrap_or(0).max(0);
     let still = form_i64(&form, "mort_nes").unwrap_or(0).max(0);
     let mummies = form_i64(&form, "momifies").unwrap_or(0).max(0);
+    let weak = form_i64(&form, "chetifs").unwrap_or(0).max(0);
+    let crushed = form_i64(&form, "ecrases").unwrap_or(0).max(0);
+    let killed = form_i64(&form, "tues_truie").unwrap_or(0).max(0);
     let total = live + still + mummies;
     let existing:Option<i64>=sqlx::query_scalar("SELECT id FROM evenement WHERE truie_id=? AND type='mise_bas' AND bande_id IS ? ORDER BY id DESC LIMIT 1")
         .bind(id).bind(band_id).fetch_optional(&state.pool).await?;
     let mut tx = state.pool.begin().await?;
-    if let Some(event_id) = existing {
+    let event_id = if let Some(event_id) = existing {
         sqlx::query("UPDATE evenement SET date=?,nes_totaux=?,nes_vifs=?,mort_nes=?,momifies=?,chetifs=?,ecrases=?,tues_truie=?,heure_debut=?,heure_fin=?,suivi_actif=?,delivrance_ok=?,note=? WHERE id=?")
-            .bind(&date).bind(total).bind(live).bind(still).bind(mummies).bind(form_i64(&form,"chetifs"))
-            .bind(form_i64(&form,"ecrases")).bind(form_i64(&form,"tues_truie")).bind(form_text(&form,"heure_debut"))
+            .bind(&date).bind(total).bind(live).bind(still).bind(mummies).bind(weak)
+            .bind(crushed).bind(killed).bind(form_text(&form,"heure_debut"))
             .bind(form_text(&form,"heure_fin")).bind(form.contains_key("suivi_actif") as i64).bind(form_i64(&form,"delivrance_ok")).bind(form_text(&form,"note")).bind(event_id).execute(&mut *tx).await?;
+        event_id
     } else {
-        sqlx::query("INSERT INTO evenement(type,date,truie_id,bande_id,nes_totaux,nes_vifs,mort_nes,momifies,chetifs,ecrases,tues_truie,heure_debut,heure_fin,suivi_actif,delivrance_ok,note) VALUES('mise_bas',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-            .bind(&date).bind(id).bind(band_id).bind(total).bind(live).bind(still).bind(mummies).bind(form_i64(&form,"chetifs"))
-            .bind(form_i64(&form,"ecrases")).bind(form_i64(&form,"tues_truie")).bind(form_text(&form,"heure_debut"))
+        let result = sqlx::query("INSERT INTO evenement(type,date,truie_id,bande_id,nes_totaux,nes_vifs,mort_nes,momifies,chetifs,ecrases,tues_truie,heure_debut,heure_fin,suivi_actif,delivrance_ok,note) VALUES('mise_bas',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+            .bind(&date).bind(id).bind(band_id).bind(total).bind(live).bind(still).bind(mummies).bind(weak)
+            .bind(crushed).bind(killed).bind(form_text(&form,"heure_debut"))
             .bind(form_text(&form,"heure_fin")).bind(form.contains_key("suivi_actif") as i64).bind(form_i64(&form,"delivrance_ok")).bind(form_text(&form,"note")).execute(&mut *tx).await?;
         if parse_stored_date(&date).is_some_and(|d| d <= Local::now().date_naive()) {
             sqlx::query("UPDATE truie SET rang=rang+1,updated_at=CURRENT_TIMESTAMP WHERE id=?")
@@ -148,12 +152,22 @@ pub(super) async fn truie_mise_bas(
                 .execute(&mut *tx)
                 .await?;
         }
-    }
+        result.last_insert_rowid()
+    };
     if let Some(band_id) = band_id {
         sqlx::query("UPDATE truie SET bande_code=(SELECT code FROM bande WHERE id=?),perf_nt=?,perf_nv=?,perf_mn=?,perf_mo=?,updated_at=CURRENT_TIMESTAMP WHERE id=?")
             .bind(band_id).bind(total as f64).bind(live as f64).bind(still as f64).bind(mummies as f64).bind(id).execute(&mut *tx).await?;
     }
     tx.commit().await?;
+    synchroniser_pertes_mise_bas(
+        &state.pool,
+        event_id,
+        id,
+        band_id,
+        &date,
+        (weak, crushed, killed),
+    )
+    .await?;
     Ok(Redirect::to(&format!("/truie/{id}")).into_response())
 }
 
@@ -1276,13 +1290,14 @@ pub(super) async fn saisie_rapide(
             .fetch_optional(&state.pool)
             .await?;
             let mut tx = state.pool.begin().await?;
-            if let Some(event_id) = existing {
+            let event_id = if let Some(event_id) = existing {
                 sqlx::query("UPDATE evenement SET date=?,nes_totaux=?,nes_vifs=?,mort_nes=?,momifies=?,chetifs=?,ecrases=?,tues_truie=?,heure_debut=?,heure_fin=?,suivi_actif=?,delivrance_ok=?,note=? WHERE id=?")
                     .bind(&date).bind(total).bind(live).bind(still).bind(mummies).bind(weak).bind(crushed).bind(killed)
                     .bind(form_text(&form,"heure_debut")).bind(form_text(&form,"heure_fin")).bind(form.contains_key("suivi_actif") as i64).bind(form_i64(&form,"delivrance_ok")).bind(form_text(&form,"note"))
                     .bind(event_id).execute(&mut *tx).await?;
+                event_id
             } else {
-                sqlx::query("INSERT INTO evenement(type,date,truie_id,bande_id,nes_totaux,nes_vifs,mort_nes,momifies,chetifs,ecrases,tues_truie,heure_debut,heure_fin,suivi_actif,delivrance_ok,note) VALUES('mise_bas',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+                let result = sqlx::query("INSERT INTO evenement(type,date,truie_id,bande_id,nes_totaux,nes_vifs,mort_nes,momifies,chetifs,ecrases,tues_truie,heure_debut,heure_fin,suivi_actif,delivrance_ok,note) VALUES('mise_bas',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
                     .bind(&date).bind(sow_id).bind(band_id).bind(total).bind(live).bind(still).bind(mummies).bind(weak).bind(crushed).bind(killed)
                     .bind(form_text(&form,"heure_debut")).bind(form_text(&form,"heure_fin")).bind(form.contains_key("suivi_actif") as i64).bind(form_i64(&form,"delivrance_ok")).bind(form_text(&form,"note"))
                     .execute(&mut *tx).await?;
@@ -1294,7 +1309,8 @@ pub(super) async fn saisie_rapide(
                     .execute(&mut *tx)
                     .await?;
                 }
-            }
+                result.last_insert_rowid()
+            };
             if let Some(band_id) = band_id {
                 sqlx::query("UPDATE truie SET bande_code=(SELECT code FROM bande WHERE id=?),perf_nt=?,perf_nv=?,perf_mn=?,perf_mo=?,updated_at=CURRENT_TIMESTAMP WHERE id=?")
                     .bind(band_id).bind(total as f64).bind(live as f64).bind(still as f64).bind(mummies as f64).bind(sow_id)
@@ -1302,6 +1318,15 @@ pub(super) async fn saisie_rapide(
                 updated_band_id = Some(band_id);
             }
             tx.commit().await?;
+            synchroniser_pertes_mise_bas(
+                &state.pool,
+                event_id,
+                sow_id,
+                band_id,
+                &date,
+                (weak, crushed, killed),
+            )
+            .await?;
         }
         "ia" | "echo" | "chaleur" => {
             let sow_id = form_i64(&form, "truie_id")

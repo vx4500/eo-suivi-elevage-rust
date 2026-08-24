@@ -242,7 +242,8 @@ CREATE TABLE IF NOT EXISTS perteporcelet (
     age_j INTEGER,
     nb INTEGER NOT NULL DEFAULT 1,
     cause TEXT,
-    date TEXT
+    date TEXT,
+    evenement_id INTEGER REFERENCES evenement(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS porccharcutier (
@@ -885,3 +886,10 @@ INSERT OR IGNORE INTO reglage(cle,valeur,libelle) VALUES
 ('capacite_engraissement',800,'Capacité d’engraissement (places)');
 
 INSERT OR IGNORE INTO reglageventedirecte(id) VALUES (1);
+
+WITH defaults(libelle) AS (VALUES
+('Écrasement'),('Chétif / non conforme'),('Tué par la truie'),('Diarrhée'),
+('Respiratoire'),('Mort subite'),('Boiterie'),('Autre'))
+INSERT INTO causeperte(libelle)
+SELECT d.libelle FROM defaults d
+WHERE NOT EXISTS(SELECT 1 FROM causeperte c WHERE lower(c.libelle)=lower(d.libelle));

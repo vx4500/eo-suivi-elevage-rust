@@ -77,7 +77,27 @@ fn accueil_visualise_le_cycle_et_saisie_rapide_propose_la_mise_bas() {
     assert!(dashboard.contains("Conduite des bandes"));
     assert!(dashboard.contains("class=\"band-stage-code\""));
     assert!(base.contains("/static/style.css?v={{ app_version }}"));
-    assert!(styles.contains("v2.2.23 — modèle commandes"));
+    assert!(styles.contains("v2.2.24 — effectifs, pertes de mise-bas"));
+}
+
+#[test]
+fn version_224_corrige_effectifs_pertes_et_recherche() {
+    let routes = include_str!("../src/routes/mod.rs");
+    let parity = include_str!("../src/routes/parity.rs");
+    let band = include_str!("../templates/bande.html");
+    let sow = include_str!("../templates/truie.html");
+    let list = include_str!("../templates/liste.html");
+    let migration = include_str!("../migrations/0001_schema.sql");
+
+    assert!(band.contains("action=\"/effectifs/inventaire-case\""));
+    assert!(!band.contains("Derniers emplacements enregistrés"));
+    assert!(routes.contains("synchroniser_pertes_mise_bas"));
+    assert!(parity.contains("synchroniser_pertes_mise_bas"));
+    assert!(migration.contains("evenement_id INTEGER REFERENCES evenement"));
+    assert!(sow.contains("{% for c in causes %}"));
+    assert!(sow.contains("name=\"tues_truie\""));
+    assert!(routes.contains("'/truie/'||id AS lien"));
+    assert!(list.contains("{% if row.lien %}"));
 }
 
 #[test]

@@ -583,6 +583,40 @@ fn today_iso() -> String {
     Local::now().date_naive().format("%Y-%m-%d").to_string()
 }
 
+async fn synchroniser_pertes_mise_bas(
+    pool: &SqlitePool,
+    evenement_id: i64,
+    truie_id: i64,
+    bande_id: Option<i64>,
+    date: &str,
+    nombres: (i64, i64, i64),
+) -> AppResult<()> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM perteporcelet WHERE evenement_id=?")
+        .bind(evenement_id)
+        .execute(&mut *tx)
+        .await?;
+    for (nombre, cause) in [
+        (nombres.0, "Chétif / non conforme"),
+        (nombres.1, "Écrasement"),
+        (nombres.2, "Tué par la truie"),
+    ] {
+        if nombre > 0 {
+            sqlx::query("INSERT INTO perteporcelet(truie_id,bande_id,age_j,nb,cause,date,evenement_id) VALUES(?,?,0,?,?,?,?)")
+                .bind(truie_id)
+                .bind(bande_id)
+                .bind(nombre)
+                .bind(cause)
+                .bind(date)
+                .bind(evenement_id)
+                .execute(&mut *tx)
+                .await?;
+        }
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
 fn parse_iso_date(raw: &str) -> Option<String> {
     if raw.len() != 10 {
         return None;
@@ -1702,10 +1736,6 @@ async fn bande_detail(
     let schedule = load_band_schedule(&state.pool).await?;
     let dates = key_dates(band.date_mb.as_deref(), schedule);
     let porcs_presents = total_band_pigs(&state.pool, band.id, &band.code).await?;
-    let emplacements = generic_rows(
-        &state.pool,
-        &format!("SELECT t.date,si.code AS batiment,s.nom AS salle,c.nom AS unite,t.nombre FROM transfert t JOIN casesalle c ON c.id=t.case_dest_id JOIN salle s ON s.id=c.salle_id JOIN site si ON si.id=s.site_id WHERE t.espece='porc' AND t.bande_id={} ORDER BY t.date DESC,t.id DESC LIMIT 10", band.id),
-    ).await?;
     // Emplacement actuel (stade + effectif réel), déduit des cases où la
     // bande a été affectée : contrairement au journal ci-dessus (historique
     // brut des mouvements), chaque case n'apparaît qu'une fois, avec son
@@ -1724,7 +1754,7 @@ async fn bande_detail(
         let effectif = case_pig_count(&state.pool, case_id).await?;
         let stade = stade_from_case(&state.pool, case_id).await?;
         emplacement_actuel.push(json!({
-            "site": case.get("site"), "salle": case.get("salle"), "unite": case.get("unite"),
+            "case_id": case_id, "site": case.get("site"), "salle": case.get("salle"), "unite": case.get("unite"),
             "stade": stade, "effectif": effectif,
         }));
     }
@@ -1815,7 +1845,6 @@ async fn bande_detail(
         serde_json::to_value(&events).unwrap_or_default(),
     );
     ctx.insert("dates".into(), Value::Array(dates));
-    ctx.insert("emplacements".into(), Value::Array(emplacements));
     ctx.insert(
         "emplacement_actuel".into(),
         Value::Array(emplacement_actuel),
@@ -1847,6 +1876,7 @@ async fn bande_detail(
             "mortnes": technical_summary.taux_mortnes,
         }),
     );
+    ctx.insert("today".into(), json!(today_iso()));
     render(&state, "bande.html", Value::Object(ctx))
 }
 
@@ -2089,6 +2119,11 @@ async fn truie_detail(
         &format!("SELECT id,date,age_j,nb,cause FROM perteporcelet WHERE truie_id={id} ORDER BY date DESC,id DESC"),
     )
     .await?;
+    let causes = generic_rows(
+        &state.pool,
+        "SELECT id,libelle FROM causeperte ORDER BY libelle COLLATE NOCASE",
+    )
+    .await?;
     let bands = sqlx::query_as::<_, Bande>(BAND_SELECT_ACTIVE)
         .fetch_all(&state.pool)
         .await?;
@@ -2119,6 +2154,7 @@ async fn truie_detail(
     );
     ctx.insert("mesures".into(), Value::Array(mesures));
     ctx.insert("pertes".into(), Value::Array(pertes));
+    ctx.insert("causes".into(), Value::Array(causes));
     ctx.insert(
         "bandes".into(),
         serde_json::to_value(bands).unwrap_or_default(),
@@ -2233,6 +2269,18 @@ async fn truie_perte(
     require_writer(&session)?;
     verify_csrf(&session, &form)?;
     let nb = form_i64(&form, "nb").unwrap_or(1).max(1);
+    let cause = form_text(&form, "cause")
+        .ok_or_else(|| AppError::Invalid("Cause de perte obligatoire".into()))?;
+    let cause_exists: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM causeperte WHERE lower(libelle)=lower(?)")
+            .bind(&cause)
+            .fetch_one(&state.pool)
+            .await?;
+    if cause_exists == 0 {
+        return Err(AppError::Invalid(
+            "Sélectionnez une cause de perte configurée".into(),
+        ));
+    }
     let band_id: Option<i64> = sqlx::query_scalar(
         "SELECT b.id FROM truie t JOIN bande b ON b.code=t.bande_code WHERE t.id=? ORDER BY b.active DESC,b.id DESC LIMIT 1",
     )
@@ -2246,7 +2294,7 @@ async fn truie_perte(
     .bind(band_id)
     .bind(form_i64(&form, "age_j"))
     .bind(nb)
-    .bind(form_text(&form, "cause"))
+    .bind(cause)
     .bind(form_date_or_today(&form, "date")?)
     .execute(&state.pool)
     .await?;
@@ -2334,7 +2382,7 @@ async fn evenement_ajouter(
     } else {
         form_text(&form, "note")
     };
-    sqlx::query("INSERT INTO evenement(type,date,truie_id,bande_id,nes_totaux,nes_vifs,mort_nes,momifies,chetifs,ecrases,tues_truie,nb_sevres,poids_moyen,adoptes,retires,produit,motif,delai_attente,resultat,nb_doses,heure_debut,heure_fin,note,suivi_actif,delivrance_ok) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+    let result = sqlx::query("INSERT INTO evenement(type,date,truie_id,bande_id,nes_totaux,nes_vifs,mort_nes,momifies,chetifs,ecrases,tues_truie,nb_sevres,poids_moyen,adoptes,retires,produit,motif,delai_attente,resultat,nb_doses,heure_debut,heure_fin,note,suivi_actif,delivrance_ok) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
         .bind(&kind)
         .bind(&date)
         .bind(sow_id)
@@ -2367,6 +2415,19 @@ async fn evenement_ajouter(
                 parse_stored_date(&date).is_some_and(|value| value <= Local::now().date_naive());
             sqlx::query("UPDATE truie SET bande_code=COALESCE((SELECT code FROM bande WHERE id=?),bande_code),rang=rang+?,updated_at=CURRENT_TIMESTAMP WHERE id=?")
                 .bind(band_id).bind(if completed { 1 } else { 0 }).bind(sow_id).execute(&state.pool).await?;
+            synchroniser_pertes_mise_bas(
+                &state.pool,
+                result.last_insert_rowid(),
+                sow_id,
+                band_id,
+                &date,
+                (
+                    form_i64(&form, "chetifs").unwrap_or(0).max(0),
+                    form_i64(&form, "ecrases").unwrap_or(0).max(0),
+                    form_i64(&form, "tues_truie").unwrap_or(0).max(0),
+                ),
+            )
+            .await?;
         }
     }
     let target = sow_id
@@ -2389,6 +2450,10 @@ async fn evenement_supprimer(
             .fetch_optional(&state.pool)
             .await?;
     let mut tx = state.pool.begin().await?;
+    sqlx::query("DELETE FROM perteporcelet WHERE evenement_id=?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("DELETE FROM evenement WHERE id=?")
         .bind(id)
         .execute(&mut *tx)
@@ -3100,7 +3165,7 @@ async fn recherche(
     }
     let pattern = format!("%{q}%");
     let rows = sqlx::query(
-        "SELECT 'Truie' AS type,CAST(id AS TEXT) AS reference,COALESCE(num_travail,'')||CASE WHEN bande_code IS NOT NULL THEN ' · bande '||bande_code ELSE '' END AS detail FROM truie WHERE num_travail LIKE ? OR COALESCE(num_national,'') LIKE ? OR COALESCE(rfid,'') LIKE ? UNION ALL SELECT 'Bande',CAST(id AS TEXT),code||COALESCE(' · '||site,'') FROM bande WHERE code LIKE ? OR COALESCE(num_officiel,'') LIKE ? UNION ALL SELECT 'Apport',CAST(id AS TEXT),COALESCE(num_apport,'')||' · '||COALESCE(CAST(nb_porcs AS TEXT),'0')||' porcs' FROM venteapport WHERE COALESCE(num_apport,'') LIKE ? UNION ALL SELECT 'Commande',CAST(id AS TEXT),nom_client||' · '||COALESCE(telephone,'') FROM commandeventedirecte WHERE nom_client LIKE ? OR COALESCE(telephone,'') LIKE ? OR COALESCE(email,'') LIKE ? LIMIT 200",
+        "SELECT 'Truie' AS type,CAST(id AS TEXT) AS reference,COALESCE(num_travail,'')||CASE WHEN bande_code IS NOT NULL THEN ' · bande '||bande_code ELSE '' END AS detail,'/truie/'||id AS lien FROM truie WHERE num_travail LIKE ? OR COALESCE(num_national,'') LIKE ? OR COALESCE(rfid,'') LIKE ? UNION ALL SELECT 'Bande',CAST(id AS TEXT),code||COALESCE(' · '||site,''),'/bande/'||id FROM bande WHERE code LIKE ? OR COALESCE(num_officiel,'') LIKE ? UNION ALL SELECT 'Apport',CAST(id AS TEXT),COALESCE(num_apport,'')||' · '||COALESCE(CAST(nb_porcs AS TEXT),'0')||' porcs','/economique' FROM venteapport WHERE COALESCE(num_apport,'') LIKE ? UNION ALL SELECT 'Commande',CAST(id AS TEXT),nom_client||' · '||COALESCE(telephone,''),'/vente-directe/commande/'||id FROM commandeventedirecte WHERE nom_client LIKE ? OR COALESCE(telephone,'') LIKE ? OR COALESCE(email,'') LIKE ? LIMIT 200",
     )
     .bind(&pattern)
     .bind(&pattern)
@@ -4969,7 +5034,14 @@ async fn effectifs_inventaire_case(
         "/effectifs/inventaire-case",
     )
     .await;
-    Ok(Redirect::to("/effectifs").into_response())
+    let target = form_text(&form, "retour")
+        .filter(|value| {
+            value
+                .strip_prefix("/bande/")
+                .is_some_and(|id| !id.is_empty() && id.chars().all(|c| c.is_ascii_digit()))
+        })
+        .unwrap_or_else(|| "/effectifs".into());
+    Ok(Redirect::to(&target).into_response())
 }
 
 async fn etat_donnees(
