@@ -315,6 +315,7 @@ pub fn router(state: AppState) -> Router {
         .route("/pharmacie/regler", post(pharmacie_regler))
         .route("/planning", get(planning))
         .route("/calendrier.ics", get(calendrier_ics))
+        .route("/imports", get(imports_page))
         .route("/stock", get(stock))
         .route("/journal", get(journal))
         .route("/entretien", get(entretien).post(entretien_ajouter))
@@ -346,7 +347,7 @@ pub fn router(state: AppState) -> Router {
         .route("/contact", get(contact))
         // Compatibilité complète avec les URL de la version Python 1.65.
         .route("/abattoir/saisie", post(abattoir_saisie))
-        .route("/attente", get(parity::attente))
+        .route("/attente", get(|| async { Redirect::to("/inseminations") }))
         .route("/bande/{id}/engraisseur", post(parity::bande_engraisseur))
         .route("/bande/{id}/inventaire", post(parity::bande_inventaire))
         .route(
@@ -457,8 +458,6 @@ pub fn router(state: AppState) -> Router {
             "/sauvegarde/restaurer",
             post(parity::sauvegarde_restaurer).layer(DefaultBodyLimit::max(512 * 1024 * 1024)),
         )
-        .route("/scan", get(parity::scan))
-        .route("/scan/lookup", get(parity::scan_lookup))
         .route("/stock/doses", post(parity::stock_doses))
         .route("/template/truies.csv", get(truies_modele_csv))
         .route("/truie/{id}/chaleur", post(parity::truie_chaleur))
@@ -542,6 +541,7 @@ fn session_value(session: &SessionData) -> Value {
         "recoit_achats": session.recoit_achats(),
         "module_genetique": session.module_genetique,
         "module_prestataires": session.module_prestataires,
+        "module_charcutiers_rfid": session.module_charcutiers_rfid,
     })
 }
 
@@ -1135,6 +1135,8 @@ async fn login_post(
             let module_genetique = module_actif(&state.pool, "module_genetique", false).await?;
             let module_prestataires =
                 module_actif(&state.pool, "module_prestataires", true).await?;
+            let module_charcutiers_rfid =
+                module_actif(&state.pool, "module_charcutiers_rfid", false).await?;
             state.sessions.insert(
                 session_id.clone(),
                 SessionData {
@@ -1148,6 +1150,7 @@ async fn login_post(
                     type_elevage,
                     module_genetique,
                     module_prestataires,
+                    module_charcutiers_rfid,
                 },
             );
             let cookie = Cookie::build(("eo_session", session_id))
@@ -2247,8 +2250,8 @@ async fn truie_cochette(
     Ok(Redirect::to(&format!("/truie/{id}")).into_response())
 }
 
-const EVENT_SELECT_BY_SOW: &str = "SELECT id,type,date,truie_id,bande_id,nes_totaux,nes_vifs,mort_nes,momifies,nb_sevres,poids_moyen,adoptes,retires,produit,motif,resultat,note FROM evenement WHERE truie_id=? ORDER BY date DESC,id DESC";
-const EVENT_SELECT_BY_BAND: &str = "SELECT id,type,date,truie_id,bande_id,nes_totaux,nes_vifs,mort_nes,momifies,nb_sevres,poids_moyen,adoptes,retires,produit,motif,resultat,note FROM evenement WHERE bande_id=? ORDER BY date DESC,id DESC";
+const EVENT_SELECT_BY_SOW: &str = "SELECT id,type,date,truie_id,bande_id,nes_totaux,nes_vifs,mort_nes,momifies,nb_sevres,poids_moyen,adoptes,retires,produit,motif,resultat,suivi_actif,delivrance_ok,note FROM evenement WHERE truie_id=? ORDER BY date DESC,id DESC";
+const EVENT_SELECT_BY_BAND: &str = "SELECT id,type,date,truie_id,bande_id,nes_totaux,nes_vifs,mort_nes,momifies,nb_sevres,poids_moyen,adoptes,retires,produit,motif,resultat,suivi_actif,delivrance_ok,note FROM evenement WHERE bande_id=? ORDER BY date DESC,id DESC";
 
 async fn evenement_ajouter(
     State(state): State<AppState>,
@@ -2289,7 +2292,7 @@ async fn evenement_ajouter(
     } else {
         form_text(&form, "note")
     };
-    sqlx::query("INSERT INTO evenement(type,date,truie_id,bande_id,nes_totaux,nes_vifs,mort_nes,momifies,chetifs,ecrases,tues_truie,nb_sevres,poids_moyen,adoptes,retires,produit,motif,delai_attente,resultat,nb_doses,heure_debut,heure_fin,note,suivi_actif) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)")
+    sqlx::query("INSERT INTO evenement(type,date,truie_id,bande_id,nes_totaux,nes_vifs,mort_nes,momifies,chetifs,ecrases,tues_truie,nb_sevres,poids_moyen,adoptes,retires,produit,motif,delai_attente,resultat,nb_doses,heure_debut,heure_fin,note,suivi_actif,delivrance_ok) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
         .bind(&kind)
         .bind(&date)
         .bind(sow_id)
@@ -2313,6 +2316,8 @@ async fn evenement_ajouter(
         .bind(form_text(&form,"heure_debut"))
         .bind(form_text(&form,"heure_fin"))
         .bind(note)
+        .bind(form.contains_key("suivi_actif") as i64)
+        .bind(form_i64(&form,"delivrance_ok"))
         .execute(&state.pool).await?;
     if kind == "mise_bas" {
         if let Some(sow_id) = sow_id {
@@ -2373,7 +2378,7 @@ async fn inseminations(
 ) -> AppResult<Html<String>> {
     let candidates = generic_rows(
         &state.pool,
-        "WITH derniere AS (SELECT truie_id,MAX(date) AS date_chaleur FROM evenement WHERE type='chaleur' AND truie_id IS NOT NULL GROUP BY truie_id) SELECT t.id,t.num_travail,t.bande_code,d.date_chaleur,date(d.date_chaleur,'+1 day') AS date_conseillee,(SELECT e.note FROM evenement e WHERE e.truie_id=t.id AND e.type='chaleur' AND e.date=d.date_chaleur ORDER BY e.id DESC LIMIT 1) AS observation FROM derniere d JOIN truie t ON t.id=d.truie_id WHERE t.reformee=0 AND NOT EXISTS(SELECT 1 FROM evenement ia WHERE ia.truie_id=t.id AND ia.type='ia' AND ia.date>=d.date_chaleur) ORDER BY d.date_chaleur,t.num_travail",
+        "SELECT t.id,t.num_travail,t.bande_code,(SELECT MAX(e.date) FROM evenement e WHERE e.truie_id=t.id AND e.type='chaleur') AS date_chaleur,date((SELECT MAX(e.date) FROM evenement e WHERE e.truie_id=t.id AND e.type='chaleur'),'+1 day') AS date_conseillee,(SELECT e.note FROM evenement e WHERE e.truie_id=t.id AND e.type='chaleur' ORDER BY e.date DESC,e.id DESC LIMIT 1) AS observation,CASE WHEN EXISTS(SELECT 1 FROM evenement ch WHERE ch.truie_id=t.id AND ch.type='chaleur' AND NOT EXISTS(SELECT 1 FROM evenement ia WHERE ia.truie_id=t.id AND ia.type='ia' AND ia.date>=ch.date)) THEN 1 ELSE 0 END AS a_inseminer,CASE WHEN lower(COALESCE((SELECT e.resultat FROM evenement e WHERE e.truie_id=t.id AND e.type IN ('echo','echographie') ORDER BY e.date DESC,e.id DESC LIMIT 1),'')) IN ('vide','négative','negative','negatif','négatif') THEN 'Truie vide' WHEN t.bande_code IS NULL OR trim(t.bande_code)='' THEN CASE WHEN t.rang=0 THEN 'Cochette à préparer' ELSE 'Prochaine IA' END ELSE 'Chaleur détectée' END AS categorie FROM truie t WHERE t.reformee=0 AND (EXISTS(SELECT 1 FROM evenement ch WHERE ch.truie_id=t.id AND ch.type='chaleur' AND NOT EXISTS(SELECT 1 FROM evenement ia WHERE ia.truie_id=t.id AND ia.type='ia' AND ia.date>=ch.date)) OR lower(COALESCE((SELECT e.resultat FROM evenement e WHERE e.truie_id=t.id AND e.type IN ('echo','echographie') ORDER BY e.date DESC,e.id DESC LIMIT 1),'')) IN ('vide','négative','negative','negatif','négatif') OR t.bande_code IS NULL OR trim(t.bande_code)='') ORDER BY a_inseminer DESC,categorie,t.num_travail",
     )
     .await?;
     let bands = sqlx::query_as::<_, Bande>(BAND_SELECT_ACTIVE)
@@ -2991,6 +2996,14 @@ async fn calendrier_ics(State(state): State<AppState>) -> AppResult<Response> {
     Ok((headers, body).into_response())
 }
 
+async fn imports_page(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+) -> AppResult<Html<String>> {
+    let ctx = context(&session);
+    render(&state, "imports.html", Value::Object(ctx))
+}
+
 async fn api_bandes_actives(State(state): State<AppState>) -> AppResult<axum::Json<Value>> {
     let rows = generic_rows(
         &state.pool,
@@ -3003,7 +3016,7 @@ async fn api_bandes_actives(State(state): State<AppState>) -> AppResult<axum::Js
 async fn api_truies(State(state): State<AppState>) -> AppResult<axum::Json<Value>> {
     let rows = generic_rows(
         &state.pool,
-        "SELECT id,num_travail,bande_code,rfid FROM truie WHERE reformee=0 ORDER BY num_travail",
+        "SELECT t.id,t.num_travail,t.bande_code,t.rfid,b.date_mb AS mise_bas_prevue,CASE WHEN b.date_mb IS NOT NULL AND date(b.date_mb) BETWEEN date('now','-10 day') AND date('now','+10 day') AND NOT EXISTS(SELECT 1 FROM evenement e WHERE e.truie_id=t.id AND e.type='mise_bas' AND e.bande_id=b.id) THEN 1 ELSE 0 END AS dans_periode_mise_bas FROM truie t LEFT JOIN bande b ON b.code=t.bande_code AND b.active=1 WHERE t.reformee=0 ORDER BY t.num_travail",
     )
     .await?;
     Ok(axum::Json(Value::Array(rows)))
@@ -4305,6 +4318,9 @@ async fn charcutiers(
     Extension(session): Extension<SessionData>,
     Query(query): Query<HashMap<String, String>>,
 ) -> AppResult<Html<String>> {
+    if !session.module_charcutiers_rfid {
+        return Err(AppError::Forbidden);
+    }
     let q = query.get("q").map(|value| value.trim()).unwrap_or("");
     let rows = if q.is_empty() {
         generic_rows(
@@ -4333,6 +4349,9 @@ async fn charcutier_detail(
     Extension(session): Extension<SessionData>,
     Path(id): Path<i64>,
 ) -> AppResult<Html<String>> {
+    if !session.module_charcutiers_rfid {
+        return Err(AppError::Forbidden);
+    }
     let animal = generic_rows(
         &state.pool,
         &format!("SELECT id,rfid,date_naissance,bande_code,cahier_charges,sexe,mere_bio,mere_courante,structure,poids1,poids2,poids3,date_mort,cause_mort,type_perte,destination,note FROM porccharcutier WHERE id={id}"),
@@ -5818,6 +5837,75 @@ async fn economique_import_apercu(
     render(&state, "economique_import_apercu.html", Value::Object(ctx))
 }
 
+/// Rejouable : chaque apport possède ses propres mouvements. Les porcs sont
+/// retirés en priorité des cases où des entrées de la même bande sont tracées.
+/// Si l'origine détaillée manque, un mouvement « origine non renseignée »
+/// conserve malgré tout la sortie abattoir dans le registre.
+async fn synchronise_sortie_abattoir(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    sale_id: i64,
+    date: Option<&str>,
+    reference: &str,
+    band_id: Option<i64>,
+    number: Option<i64>,
+    lots_json: Option<&str>,
+) -> AppResult<()> {
+    sqlx::query("DELETE FROM transfert WHERE vente_apport_id=?")
+        .bind(sale_id)
+        .execute(&mut **tx)
+        .await?;
+    let mut allocations = Vec::<(i64, i64)>::new();
+    if let Some(raw) = lots_json {
+        if let Ok(Value::Array(lots)) = serde_json::from_str::<Value>(raw) {
+            for lot in lots {
+                if let (Some(band), Some(count)) = (
+                    lot.get("bande_id").and_then(Value::as_i64),
+                    lot.get("nb_porcs").and_then(Value::as_i64),
+                ) {
+                    if count > 0 {
+                        allocations.push((band, count));
+                    }
+                }
+            }
+        }
+    }
+    if allocations.is_empty() {
+        if let (Some(band), Some(count)) = (band_id, number.filter(|n| *n > 0)) {
+            allocations.push((band, count));
+        }
+    }
+    let movement_date = date
+        .map(str::to_owned)
+        .unwrap_or_else(|| Local::now().date_naive().format("%Y-%m-%d").to_string());
+    for (band, count) in allocations {
+        let cases: Vec<(i64, i64)> = sqlx::query_as(
+            "SELECT c.id,CAST(COALESCE(SUM(CASE WHEN t.case_dest_id=c.id THEN COALESCE(t.nombre,0) ELSE -COALESCE(t.nombre,0) END),0) AS INTEGER) AS disponible FROM casesalle c JOIN transfert t ON (t.case_dest_id=c.id OR t.case_source_id=c.id) WHERE t.espece='porc' AND t.bande_id=? AND t.vente_apport_id IS NULL GROUP BY c.id HAVING disponible>0 ORDER BY MAX(t.date),c.id",
+        )
+        .bind(band)
+        .fetch_all(&mut **tx)
+        .await?;
+        let mut remaining = count;
+        for (case_id, available) in cases {
+            if remaining <= 0 {
+                break;
+            }
+            let moved = remaining.min(available);
+            sqlx::query("INSERT INTO transfert(date,espece,bande_id,case_source_id,nombre,vente_apport_id,note) VALUES(?,'porc',?,?,?,?,?)")
+                .bind(&movement_date).bind(band).bind(case_id).bind(moved).bind(sale_id)
+                .bind(format!("Sortie abattoir — apport {reference}"))
+                .execute(&mut **tx).await?;
+            remaining -= moved;
+        }
+        if remaining > 0 {
+            sqlx::query("INSERT INTO transfert(date,espece,bande_id,nombre,vente_apport_id,note) VALUES(?,'porc',?,?,?,?)")
+                .bind(&movement_date).bind(band).bind(remaining).bind(sale_id)
+                .bind(format!("Sortie abattoir — apport {reference} (case d’origine non renseignée)"))
+                .execute(&mut **tx).await?;
+        }
+    }
+    Ok(())
+}
+
 async fn economique_import_confirmer(
     State(state): State<AppState>,
     Extension(session): Extension<SessionData>,
@@ -5954,6 +6042,30 @@ async fn economique_import_confirmer(
         applied += 1;
     }
     for reference in cleared_apports {
+        let sales: Vec<(
+            i64,
+            Option<String>,
+            Option<i64>,
+            Option<i64>,
+            Option<String>,
+        )> = sqlx::query_as(
+            "SELECT id,date,bande_id,nb_porcs,lots_json FROM venteapport WHERE num_apport=?",
+        )
+        .bind(&reference)
+        .fetch_all(&mut *transaction)
+        .await?;
+        for (sale_id, date, sale_band_id, number, lots_json) in sales {
+            synchronise_sortie_abattoir(
+                &mut transaction,
+                sale_id,
+                date.as_deref(),
+                &reference,
+                sale_band_id,
+                number,
+                lots_json.as_deref(),
+            )
+            .await?;
+        }
         sqlx::query("UPDATE venteapport SET total_retenues=(SELECT ROUND(COALESCE(SUM(ABS(montant)),0),2) FROM valorisationapport WHERE num_apport=? AND lower(COALESCE(categorie,''))='retenue') WHERE num_apport=?")
             .bind(&reference).bind(&reference).execute(&mut *transaction).await?;
     }
@@ -6043,7 +6155,22 @@ async fn economique_vente(
     };
     let amount = economic_amount(&form, "montant_net")
         .ok_or_else(|| AppError::Invalid("Montant net obligatoire".into()))?;
-    sqlx::query("INSERT INTO venteapport(date,num_apport,bande_id,nb_porcs,poids_total,poids_moyen,prix_moyen,plus_value,montant_net,tmp,tx_qualification,nb_hors_poids,nb_tmp_bas,nb_g2,nb_tatouage,nb_qualifies,nb_livres,muscle_gamme,muscle_lot,total_retenues) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").bind(form_date(&form,"date")?).bind(form_text(&form,"num_apport")).bind(form_i64(&form,"bande_id")).bind(number).bind(weight).bind(average).bind(form_f64(&form,"prix_moyen")).bind(form_f64(&form,"plus_value")).bind(amount).bind(form_f64(&form,"tmp")).bind(form_f64(&form,"tx_qualification")).bind(form_i64(&form,"nb_hors_poids")).bind(form_i64(&form,"nb_tmp_bas")).bind(form_i64(&form,"nb_g2")).bind(form_i64(&form,"nb_tatouage")).bind(form_i64(&form,"nb_qualifies")).bind(form_i64(&form,"nb_livres")).bind(form_f64(&form,"muscle_gamme")).bind(form_f64(&form,"muscle_lot")).bind(form_f64(&form,"total_retenues")).execute(&state.pool).await?;
+    let date = form_date(&form, "date")?;
+    let apport = form_text(&form, "num_apport");
+    let band_id = form_i64(&form, "bande_id");
+    let mut tx = state.pool.begin().await?;
+    let result=sqlx::query("INSERT INTO venteapport(date,num_apport,bande_id,nb_porcs,poids_total,poids_moyen,prix_moyen,plus_value,montant_net,tmp,tx_qualification,nb_hors_poids,nb_tmp_bas,nb_g2,nb_tatouage,nb_qualifies,nb_livres,muscle_gamme,muscle_lot,total_retenues) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").bind(&date).bind(&apport).bind(band_id).bind(number).bind(weight).bind(average).bind(form_f64(&form,"prix_moyen")).bind(form_f64(&form,"plus_value")).bind(amount).bind(form_f64(&form,"tmp")).bind(form_f64(&form,"tx_qualification")).bind(form_i64(&form,"nb_hors_poids")).bind(form_i64(&form,"nb_tmp_bas")).bind(form_i64(&form,"nb_g2")).bind(form_i64(&form,"nb_tatouage")).bind(form_i64(&form,"nb_qualifies")).bind(form_i64(&form,"nb_livres")).bind(form_f64(&form,"muscle_gamme")).bind(form_f64(&form,"muscle_lot")).bind(form_f64(&form,"total_retenues")).execute(&mut *tx).await?;
+    synchronise_sortie_abattoir(
+        &mut tx,
+        result.last_insert_rowid(),
+        date.as_deref(),
+        apport.as_deref().unwrap_or("sans numéro"),
+        band_id,
+        number,
+        None,
+    )
+    .await?;
+    tx.commit().await?;
     Ok(Redirect::to("/economique").into_response())
 }
 async fn economique_semence(
@@ -7632,6 +7759,9 @@ async fn engraissement(
     State(state): State<AppState>,
     Extension(session): Extension<SessionData>,
 ) -> AppResult<Html<String>> {
+    if !session.module_prestataires {
+        return Err(AppError::Forbidden);
+    }
     let sql = if session.role == "engraisseur" {
         format!(
             "SELECT d.id,d.horodatage,d.bande_code,d.date,d.stade,d.cause,d.poids,d.nombre,d.declare_par,d.note FROM declarationmort d JOIN bande b ON b.code=d.bande_code WHERE b.engraisseur_id={} ORDER BY d.horodatage DESC LIMIT 250",

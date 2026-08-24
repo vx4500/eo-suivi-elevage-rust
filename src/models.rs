@@ -83,6 +83,8 @@ pub struct Evenement {
     pub produit: Option<String>,
     pub motif: Option<String>,
     pub resultat: Option<String>,
+    pub suivi_actif: bool,
+    pub delivrance_ok: Option<i64>,
     pub note: Option<String>,
 }
 
@@ -163,7 +165,7 @@ mod tests {
         sqlx::query("INSERT INTO evenement(type,date,suivi_actif) VALUES('note','2026-08-17',0)")
             .execute(&pool)
             .await?;
-        let event = sqlx::query_as::<_, Evenement>("SELECT id,type,date,truie_id,bande_id,nes_totaux,nes_vifs,mort_nes,momifies,nb_sevres,poids_moyen,adoptes,retires,produit,motif,resultat,note FROM evenement WHERE type='note'")
+        let event = sqlx::query_as::<_, Evenement>("SELECT id,type,date,truie_id,bande_id,nes_totaux,nes_vifs,mort_nes,momifies,nb_sevres,poids_moyen,adoptes,retires,produit,motif,resultat,suivi_actif,delivrance_ok,note FROM evenement WHERE type='note'")
             .fetch_one(&pool)
             .await?;
         assert!(event.truie_id.is_none() && event.poids_moyen.is_none() && event.note.is_none());

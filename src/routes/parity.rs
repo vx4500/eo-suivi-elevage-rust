@@ -133,15 +133,15 @@ pub(super) async fn truie_mise_bas(
         .bind(id).bind(band_id).fetch_optional(&state.pool).await?;
     let mut tx = state.pool.begin().await?;
     if let Some(event_id) = existing {
-        sqlx::query("UPDATE evenement SET date=?,nes_totaux=?,nes_vifs=?,mort_nes=?,momifies=?,chetifs=?,ecrases=?,tues_truie=?,heure_debut=?,heure_fin=?,note=? WHERE id=?")
+        sqlx::query("UPDATE evenement SET date=?,nes_totaux=?,nes_vifs=?,mort_nes=?,momifies=?,chetifs=?,ecrases=?,tues_truie=?,heure_debut=?,heure_fin=?,suivi_actif=?,delivrance_ok=?,note=? WHERE id=?")
             .bind(&date).bind(total).bind(live).bind(still).bind(mummies).bind(form_i64(&form,"chetifs"))
             .bind(form_i64(&form,"ecrases")).bind(form_i64(&form,"tues_truie")).bind(form_text(&form,"heure_debut"))
-            .bind(form_text(&form,"heure_fin")).bind(form_text(&form,"note")).bind(event_id).execute(&mut *tx).await?;
+            .bind(form_text(&form,"heure_fin")).bind(form.contains_key("suivi_actif") as i64).bind(form_i64(&form,"delivrance_ok")).bind(form_text(&form,"note")).bind(event_id).execute(&mut *tx).await?;
     } else {
-        sqlx::query("INSERT INTO evenement(type,date,truie_id,bande_id,nes_totaux,nes_vifs,mort_nes,momifies,chetifs,ecrases,tues_truie,heure_debut,heure_fin,note) VALUES('mise_bas',?,?,?,?,?,?,?,?,?,?,?,?,?)")
+        sqlx::query("INSERT INTO evenement(type,date,truie_id,bande_id,nes_totaux,nes_vifs,mort_nes,momifies,chetifs,ecrases,tues_truie,heure_debut,heure_fin,suivi_actif,delivrance_ok,note) VALUES('mise_bas',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
             .bind(&date).bind(id).bind(band_id).bind(total).bind(live).bind(still).bind(mummies).bind(form_i64(&form,"chetifs"))
             .bind(form_i64(&form,"ecrases")).bind(form_i64(&form,"tues_truie")).bind(form_text(&form,"heure_debut"))
-            .bind(form_text(&form,"heure_fin")).bind(form_text(&form,"note")).execute(&mut *tx).await?;
+            .bind(form_text(&form,"heure_fin")).bind(form.contains_key("suivi_actif") as i64).bind(form_i64(&form,"delivrance_ok")).bind(form_text(&form,"note")).execute(&mut *tx).await?;
         if parse_stored_date(&date).is_some_and(|d| d <= Local::now().date_naive()) {
             sqlx::query("UPDATE truie SET rang=rang+1,updated_at=CURRENT_TIMESTAMP WHERE id=?")
                 .bind(id)
@@ -975,8 +975,10 @@ pub(super) async fn parametres_maj(
     if formulaire_type_elevage {
         let module_genetique = form.contains_key("module_genetique");
         let module_prestataires = form.contains_key("module_prestataires");
+        let module_charcutiers_rfid = form.contains_key("module_charcutiers_rfid");
         sqlx::query("INSERT INTO parametre(cle,valeur) VALUES('module_genetique',?) ON CONFLICT(cle) DO UPDATE SET valeur=excluded.valeur").bind(if module_genetique{"1"}else{"0"}).execute(&mut *tx).await?;
         sqlx::query("INSERT INTO parametre(cle,valeur) VALUES('module_prestataires',?) ON CONFLICT(cle) DO UPDATE SET valeur=excluded.valeur").bind(if module_prestataires{"1"}else{"0"}).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO parametre(cle,valeur) VALUES('module_charcutiers_rfid',?) ON CONFLICT(cle) DO UPDATE SET valeur=excluded.valeur").bind(if module_charcutiers_rfid{"1"}else{"0"}).execute(&mut *tx).await?;
         tx.commit().await?;
         // Les sessions déjà ouvertes voient les nouveaux réglages sans avoir à
         // se reconnecter, pour éviter un affichage incohérent le temps que
@@ -987,6 +989,7 @@ pub(super) async fn parametres_maj(
             }
             entry.value_mut().module_genetique = module_genetique;
             entry.value_mut().module_prestataires = module_prestataires;
+            entry.value_mut().module_charcutiers_rfid = module_charcutiers_rfid;
         }
     } else {
         tx.commit().await?;
@@ -1206,14 +1209,14 @@ pub(super) async fn saisie_rapide(
             .await?;
             let mut tx = state.pool.begin().await?;
             if let Some(event_id) = existing {
-                sqlx::query("UPDATE evenement SET date=?,nes_totaux=?,nes_vifs=?,mort_nes=?,momifies=?,chetifs=?,ecrases=?,tues_truie=?,heure_debut=?,heure_fin=?,note=? WHERE id=?")
+                sqlx::query("UPDATE evenement SET date=?,nes_totaux=?,nes_vifs=?,mort_nes=?,momifies=?,chetifs=?,ecrases=?,tues_truie=?,heure_debut=?,heure_fin=?,suivi_actif=?,delivrance_ok=?,note=? WHERE id=?")
                     .bind(&date).bind(total).bind(live).bind(still).bind(mummies).bind(weak).bind(crushed).bind(killed)
-                    .bind(form_text(&form,"heure_debut")).bind(form_text(&form,"heure_fin")).bind(form_text(&form,"note"))
+                    .bind(form_text(&form,"heure_debut")).bind(form_text(&form,"heure_fin")).bind(form.contains_key("suivi_actif") as i64).bind(form_i64(&form,"delivrance_ok")).bind(form_text(&form,"note"))
                     .bind(event_id).execute(&mut *tx).await?;
             } else {
-                sqlx::query("INSERT INTO evenement(type,date,truie_id,bande_id,nes_totaux,nes_vifs,mort_nes,momifies,chetifs,ecrases,tues_truie,heure_debut,heure_fin,note) VALUES('mise_bas',?,?,?,?,?,?,?,?,?,?,?,?,?)")
+                sqlx::query("INSERT INTO evenement(type,date,truie_id,bande_id,nes_totaux,nes_vifs,mort_nes,momifies,chetifs,ecrases,tues_truie,heure_debut,heure_fin,suivi_actif,delivrance_ok,note) VALUES('mise_bas',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
                     .bind(&date).bind(sow_id).bind(band_id).bind(total).bind(live).bind(still).bind(mummies).bind(weak).bind(crushed).bind(killed)
-                    .bind(form_text(&form,"heure_debut")).bind(form_text(&form,"heure_fin")).bind(form_text(&form,"note"))
+                    .bind(form_text(&form,"heure_debut")).bind(form_text(&form,"heure_fin")).bind(form.contains_key("suivi_actif") as i64).bind(form_i64(&form,"delivrance_ok")).bind(form_text(&form,"note"))
                     .execute(&mut *tx).await?;
                 if parse_stored_date(&date).is_some_and(|day| day <= Local::now().date_naive()) {
                     sqlx::query(
@@ -1374,39 +1377,6 @@ pub(super) async fn saisie_rapide(
         return Ok(axum::Json(resp).into_response());
     }
     Ok(Redirect::to("/?saisie=ok").into_response())
-}
-
-pub(super) async fn scan(
-    State(state): State<AppState>,
-    Extension(session): Extension<SessionData>,
-) -> AppResult<Html<String>> {
-    let mut ctx = context(&session);
-    ctx.insert("today".into(), json!(today_iso()));
-    render(&state, "scan.html", Value::Object(ctx))
-}
-
-pub(super) async fn scan_lookup(
-    State(state): State<AppState>,
-    Extension(_session): Extension<SessionData>,
-    Query(query): Query<HashMap<String, String>>,
-) -> AppResult<Response> {
-    let raw = query
-        .get("q")
-        .or_else(|| query.get("code"))
-        .map(|v| v.trim())
-        .filter(|v| !v.is_empty())
-        .ok_or_else(|| AppError::Invalid("Code manquant".into()))?;
-    let pattern = format!("%{}%", raw.replace('%', "\\%").replace('_', "\\_"));
-    let rows=generic_rows(&state.pool,&format!("SELECT 'truie' AS type,id,num_travail AS numero,num_national,rfid,reformee,bande_code FROM truie WHERE rfid={} OR num_national={} OR num_travail={} OR rfid LIKE {} ESCAPE '\\' OR num_national LIKE {} ESCAPE '\\' OR num_travail LIKE {} ESCAPE '\\' ORDER BY reformee,CASE WHEN rfid={} OR num_national={} OR num_travail={} THEN 0 ELSE 1 END,id DESC LIMIT 20",sql_quote(raw),sql_quote(raw),sql_quote(raw),sql_quote(&pattern),sql_quote(&pattern),sql_quote(&pattern),sql_quote(raw),sql_quote(raw),sql_quote(raw))).await?;
-    if !rows.is_empty() {
-        return Ok(axum::Json(json!({"resultats":rows})).into_response());
-    }
-    let pigs=generic_rows(&state.pool,&format!("SELECT 'charcutier' AS type,id,rfid AS numero,bande_code,date_mort FROM porccharcutier WHERE rfid={} OR rfid LIKE {} ESCAPE '\\' ORDER BY date_mort IS NOT NULL,id DESC LIMIT 20",sql_quote(raw),sql_quote(&pattern))).await?;
-    Ok(axum::Json(json!({"resultats":pigs})).into_response())
-}
-
-fn sql_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
 }
 
 pub(super) async fn sauvegarde_restaurer(

@@ -142,6 +142,7 @@ CREATE TABLE IF NOT EXISTS evenement (
     heure_debut TEXT,
     heure_fin TEXT,
     suivi_actif INTEGER NOT NULL DEFAULT 0,
+    delivrance_ok INTEGER,
     nb_sevres INTEGER,
     poids_moyen REAL,
     adoptes INTEGER,
@@ -275,6 +276,7 @@ CREATE TABLE IF NOT EXISTS transfert (
     case_dest_id INTEGER REFERENCES casesalle(id),
     nombre INTEGER,
     truie_id INTEGER REFERENCES truie(id),
+    vente_apport_id INTEGER REFERENCES venteapport(id),
     note TEXT
 );
 

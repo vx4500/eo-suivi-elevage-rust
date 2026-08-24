@@ -46,6 +46,8 @@ pub async fn init(pool: &SqlitePool) -> anyhow::Result<()> {
         ("evenement", "heure_debut", "TEXT"),
         ("evenement", "heure_fin", "TEXT"),
         ("evenement", "suivi_actif", "INTEGER NOT NULL DEFAULT 0"),
+        ("evenement", "delivrance_ok", "INTEGER"),
+        ("transfert", "vente_apport_id", "INTEGER"),
         ("declarationmort", "case_id", "INTEGER"),
         ("produitventedirecte", "quantite_disponible", "REAL"),
         (

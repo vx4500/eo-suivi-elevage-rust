@@ -84,6 +84,7 @@ pub struct SessionData {
     /// mécanisme de cache/rafraîchissement en direct que `type_elevage`.
     pub module_genetique: bool,
     pub module_prestataires: bool,
+    pub module_charcutiers_rfid: bool,
 }
 
 impl SessionData {
@@ -322,6 +323,7 @@ mod tests {
             type_elevage: type_elevage.into(),
             module_genetique: false,
             module_prestataires: true,
+            module_charcutiers_rfid: true,
         }
     }
 

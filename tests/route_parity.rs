@@ -1,4 +1,4 @@
-const PYTHON_V165_ROUTES: [&str; 68] = [
+const PYTHON_V165_ROUTES: [&str; 67] = [
     "/abattoir/saisie",
     "/attente",
     "/bande/{id}/engraisseur",
@@ -44,8 +44,7 @@ const PYTHON_V165_ROUTES: [&str; 68] = [
     "/salle/{id}/lavage",
     "/sanitaire/generer-protocole",
     "/sauvegarde/restaurer",
-    "/scan",
-    "/scan/lookup",
+    "/imports",
     "/stock/doses",
     "/template/truies.csv",
     "/truie/{id}/chaleur",
@@ -87,7 +86,7 @@ fn la_version_220_contient_les_ecrans_de_parite() {
         "planning.html",
         "stock.html",
         "journal.html",
-        "scan.html",
+        "imports.html",
         "maj.html",
         "parametres.html",
         "vente_directe_communications.html",
@@ -152,5 +151,5 @@ fn la_version_224_gere_la_file_ia_et_la_capacite_de_verraterie() {
     assert!(template.contains("action=\"/truies/affecter-bande\""));
     assert!(template.contains("Occupation actuelle"));
     assert!(template.contains("Places disponibles"));
-    assert!(navigation.contains(">IA (Cochette)<"));
+    assert!(navigation.contains(">Inséminations<"));
 }

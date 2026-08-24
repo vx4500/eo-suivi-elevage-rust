@@ -36,13 +36,13 @@
 <nav class="rust-nav">
   <a href="/">Accueil</a>
   {% if session.a_truies %}<div class="rust-menu"><span>Reproduction ▾</span><div class="rust-sub">
-    <a href="/bandes">Bandes</a><a href="/truies">Truies</a><a href="/attente">IA (Cochette)</a><a href="/inseminations">IA groupées</a><a href="/scan">Scanner</a><a href="/calendrier.ics">Calendrier ICS</a>
+    <a href="/bandes">Bandes</a><a href="/truies">Truies</a><a href="/inseminations">Inséminations</a>
     <a href="/reformes">Réformes</a><a href="/cochettes">Cochettes</a><a href="/archives">Archives</a>
   </div></div>{% endif %}
   <div class="rust-menu"><span>Élevage ▾</span><div class="rust-sub">
     <a href="/planning">Planning</a><a href="/quotidien">Quotidien</a><a href="/transferts">Transferts</a>
-    <a href="/effectifs">Effectifs</a><a href="/structure">Structure</a>{% if session.recoit_achats %}<a href="/reception">Réception</a>{% endif %}{% if session.module_genetique %}<a href="/genetique">Génétique</a>{% endif %}{% if session.engraisse %}<a href="/charcutiers">Charcutiers</a>{% endif %}{% if session.engraisse and session.module_prestataires %}<a href="/engraissement">Prestataire</a>{% endif %}
-    <a href="/taches">Tâches</a><a href="/cahiers">Cahiers</a>
+    <a href="/effectifs">Effectifs</a><a href="/structure">Structure</a>{% if session.recoit_achats %}<a href="/reception">Réception</a>{% endif %}{% if session.module_genetique %}<a href="/genetique">Génétique</a>{% endif %}{% if session.engraisse and session.module_charcutiers_rfid %}<a href="/charcutiers">Charcutiers RFID</a>{% endif %}{% if session.engraisse and session.module_prestataires %}<a href="/engraissement">Prestataire</a>{% endif %}
+    <a href="/taches">Tâches</a>
   </div></div>
   <div class="rust-menu"><span>Indicateurs ▾</span><div class="rust-sub">
     {% if session.a_truies %}<a href="/gttt">GTTT</a><a href="/productivite">Productivité</a>{% endif %}
@@ -55,7 +55,7 @@
     <a href="/vente-directe">Vente directe</a><a href="/vente-directe/commandes">Commandes clients</a><a href="/vente-directe/sessions">Sessions de vente</a><a href="/vente-directe/communications">Communications clients</a><a href="/commande">Page de commande</a>
   </div></div>
   <div class="rust-menu"><span>Exploitation ▾</span><div class="rust-sub">
-    <a href="/sanitaire">Sanitaire</a><a href="/pharmacie">Pharmacie</a><a href="/entretien">Entretien</a>
+    <a href="/sanitaire">Sanitaire</a><a href="/pharmacie">Pharmacie</a><a href="/entretien">Entretien</a><a href="/imports">Importer un document</a>
   </div></div>
   <span class="grow"></span>
   <form class="rust-search" action="/recherche" method="get"><input name="q" placeholder="Rechercher…"><button type="submit">OK</button></form>
@@ -89,6 +89,7 @@
     <input type="hidden" name="csrf_token" value="{{ session.csrf }}">
     <input type="hidden" name="type" id="fab-type" value="eld">
     <label id="fab-truie-wrap"><span id="fab-truie-label">Truie</span>
+      <input type="search" id="fab-truie-recherche" placeholder="Rechercher par numéro, RFID ou bande" hidden>
       <select name="truie_id" id="fab-truie" required><option value="">Chargement…</option></select>
     </label>
     <div class="fab-f" data-for="perte" hidden>
@@ -138,6 +139,8 @@
         <label>Tués par la truie<input name="tues_truie" type="number" min="0" value="0" disabled></label>
         <label>Heure de début<input name="heure_debut" type="time" disabled></label>
         <label>Heure de fin<input name="heure_fin" type="time" disabled></label>
+        <label>Délivrance<select name="delivrance_ok" disabled required><option value="">— à contrôler —</option><option value="1">OK</option><option value="0">NOK</option></select></label>
+        <label><input name="suivi_actif" type="checkbox" value="1" disabled> Suivi de mise-bas nécessaire</label>
       </div>
     </div>
     <div class="fab-f" data-for="perte" hidden>
@@ -207,6 +210,7 @@
   var form=document.getElementById('fab-form');
   var typeInput=document.getElementById('fab-type');
   var sow=document.getElementById('fab-truie');
+  var sowSearch=document.getElementById('fab-truie-recherche');
   var sowLabel=document.getElementById('fab-truie-label');
   var band=document.getElementById('fab-bande');
   var noteWrap=document.getElementById('fab-note-wrap');
@@ -316,6 +320,7 @@
   fetch('/api/truies').then(function(response){return response.json();}).then(function(rows){
     _truieRows = rows;
     fillSelect(sow,rows,function(row){return text(row.num_travail)+(row.bande_code?' · '+text(row.bande_code):'');});
+    if(typeInput.value==='mise_bas') refreshMiseBasSows();
     // now fetch sevrage-specific extra values (dernier mise-bas, dernier sevrage) and merge
     fetch('/api/truies-sevrage').then(function(resp){return resp.json();}).then(function(extraRows){
       var map = {};
@@ -325,6 +330,19 @@
       if(document.querySelector('[data-for="sevrage"]').hidden === false){ populateSevrageTruies(); }
     }).catch(function(){});
   }).catch(function(){sow.replaceChildren(new Option('Liste indisponible',''));});
+  function refreshMiseBasSows(){
+    if(typeInput.value!=='mise_bas') return;
+    var query=(sowSearch.value||'').trim().toLowerCase();
+    var rows=_truieRows.filter(function(row){
+      if(!query) return Number(row.dans_periode_mise_bas)===1;
+      return [row.num_travail,row.rfid,row.bande_code].some(function(v){return String(v||'').toLowerCase().includes(query);});
+    });
+    var previous=sow.value;
+    fillSelect(sow,rows,function(row){return text(row.num_travail)+(row.bande_code?' · '+text(row.bande_code):'')+(row.mise_bas_prevue?' · prévue '+text(row.mise_bas_prevue):'');});
+    if(rows.some(function(row){return String(row.id)===previous;})) sow.value=previous;
+    if(!rows.length) sow.options[0].text=query?'Aucune truie trouvée':'Aucune truie dans la période de mise-bas';
+  }
+  sowSearch.addEventListener('input',refreshMiseBasSows);
   fetch('/api/bandes-actives').then(function(response){return response.json();}).then(function(rows){
     fillSelect(band,rows,function(row){return text(row.code)+(row.site?' · '+text(row.site):'');});
     movementBands=rows; refreshMovementSources();
@@ -383,6 +401,8 @@
     form.action=movement?'/transferts/porcs':'/saisie-rapide';
     sow.disabled=movement||sevrage; sow.required=!loss&&!movement&&!sevrage; document.getElementById('fab-truie-wrap').hidden=movement||sevrage;
     sowLabel.textContent=loss?'Truie sous la mère (facultatif)':'Truie';
+    sowSearch.hidden=type!=='mise_bas';
+    if(type==='mise_bas') refreshMiseBasSows(); else if(_truieRows.length) fillSelect(sow,_truieRows,function(row){return text(row.num_travail)+(row.bande_code?' · '+text(row.bande_code):'');});
     band.disabled=!loss; band.required=loss; noteWrap.hidden=type==='sortie'; note.disabled=type==='sortie';
 
     // Sevrage: initialisation spécifique
