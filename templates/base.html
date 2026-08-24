@@ -57,6 +57,7 @@
   <div class="rust-menu"><span>Exploitation ▾</span><div class="rust-sub">
     <a href="/sanitaire">Sanitaire</a><a href="/resolution-problemes">Résolution de problèmes</a><a href="/pharmacie">Pharmacie</a><a href="/entretien">Entretien</a><a href="/imports">Importer un document</a>
   </div></div>
+  <button type="button" id="farm-alert-button" class="farm-alert-button" aria-label="Alertes de l’élevage" aria-controls="farm-alert-panel" aria-expanded="false"><span aria-hidden="true">!</span><b id="farm-alert-count">…</b></button>
   <span class="grow"></span>
   <form class="rust-search" action="/recherche" method="get"><input name="q" placeholder="Rechercher…"><button type="submit">OK</button></form>
   <div class="rust-menu"><span>Aide ▾</span><div class="rust-sub"><a href="/correctifs">Correctifs</a><a href="/apropos">À propos</a><a href="/contact">Diagnostic</a><a href="/etat-donnees">État des données</a></div></div>
@@ -64,6 +65,7 @@
   {% if session.role == 'admin' %}<div class="rust-menu"><span>Administration ▾</span><div class="rust-sub"><a href="/utilisateurs">Utilisateurs</a><a href="/parametres">Paramètres</a><a href="/reglages">Réglages</a><a href="/journal">Journal</a><a href="/maj">Mise à jour et sauvegardes</a></div></div>{% endif %}
   <a href="/logout">Déconnexion</a>
 </nav>
+<aside id="farm-alert-panel" class="farm-alert-panel" aria-label="Problèmes et informations attendues" hidden><div class="farm-alert-head"><div><b>État de l’élevage</b><small id="farm-alert-summary">Chargement…</small></div><button type="button" id="farm-alert-close" aria-label="Fermer">✕</button></div><div id="farm-alert-list" class="farm-alert-list"></div>{% if session.role != 'salarie' %}<a class="farm-alert-all" href="/etat-donnees">Ouvrir tous les contrôles</a>{% endif %}</aside>
 {% endif %}
 <main class="rust-main">
   {% if flash %}<div class="alert">{{ flash }}</div>{% endif %}
@@ -577,31 +579,6 @@
                     kpiHtml += '<div class="card kpi"><div class="v">'+(res.pertes!==undefined?res.pertes:'—')+' %</div><div class="l">Mortalité sous la mère</div></div>';
                     kpi.innerHTML = kpiHtml;
                   }
-                  // Update "Derniers emplacements enregistrés" table
-                  if(json.emplacements){
-                    var sections = Array.from(localMain.querySelectorAll('section.card'));
-                    var localEmpl = sections.find(function(s){ var h=s.querySelector('h2'); return h && /Derniers emplacements enregistrés/.test(h.textContent); });
-                    if(localEmpl){
-                      var tbody = localEmpl.querySelector('table tbody');
-                      if(tbody){
-                        tbody.replaceChildren();
-                        var rows = json.emplacements;
-                        if(rows && rows.length){
-                          rows.forEach(function(r){
-                            var tr = document.createElement('tr');
-                            var tdDate = document.createElement('td'); tdDate.textContent = r.date || ''; tr.appendChild(tdDate);
-                            var tdBat = document.createElement('td'); tdBat.textContent = r.batiment || ''; tr.appendChild(tdBat);
-                            var tdSalle = document.createElement('td'); tdSalle.textContent = r.salle || ''; tr.appendChild(tdSalle);
-                            var tdUnite = document.createElement('td'); tdUnite.textContent = r.unite || ''; tr.appendChild(tdUnite);
-                            var tdNb = document.createElement('td'); tdNb.textContent = r.nombre || ''; tr.appendChild(tdNb);
-                            tbody.appendChild(tr);
-                          });
-                        } else {
-                          var tr = document.createElement('tr'); var td = document.createElement('td'); td.colSpan=5; td.className='rust-empty'; td.textContent='Aucun emplacement enregistré — utilisez le bouton + puis Mouvement.'; tr.appendChild(td); tbody.appendChild(tr);
-                        }
-                      }
-                    }
-                  }
                 } catch(e){ /* fallback to full reload on error */ window.location.reload(); }
               }).catch(function(){ window.location.reload(); });
             }
@@ -614,6 +591,25 @@
       return;
     }
   });
+})();
+</script>
+{% endif %}
+{% if session %}
+<script>
+(function(){
+  var button=document.getElementById('farm-alert-button'), panel=document.getElementById('farm-alert-panel'), close=document.getElementById('farm-alert-close');
+  var count=document.getElementById('farm-alert-count'), summary=document.getElementById('farm-alert-summary'), list=document.getElementById('farm-alert-list');
+  if(!button||!panel){return;}
+  function setOpen(open){panel.hidden=!open;button.setAttribute('aria-expanded',String(open));}
+  button.addEventListener('click',function(){setOpen(panel.hidden);}); close.addEventListener('click',function(){setOpen(false);});
+  document.addEventListener('keydown',function(event){if(event.key==='Escape'){setOpen(false);}});
+  document.addEventListener('click',function(event){if(!panel.hidden&&!panel.contains(event.target)&&!button.contains(event.target)){setOpen(false);}});
+  fetch('/api/alertes-elevage',{headers:{'Accept':'application/json'}}).then(function(response){if(!response.ok){throw new Error('HTTP '+response.status);}return response.json();}).then(function(data){
+    var total=Number(data.total)||0, alerts=Array.isArray(data.alertes)?data.alertes:[]; count.textContent=String(total); button.classList.toggle('has-alerts',total>0);
+    summary.textContent=total?total+' point'+(total>1?'s':'')+' à contrôler':'Aucun problème détecté'; list.replaceChildren();
+    if(!alerts.length){var ok=document.createElement('p');ok.className='farm-alert-ok';ok.textContent='Les contrôles automatiques sont à jour.';list.appendChild(ok);return;}
+    alerts.forEach(function(alert){var link=document.createElement('a');link.href=alert.url||'/etat-donnees';link.className='farm-alert-item level-'+(alert.niveau||'information');var badge=document.createElement('b');badge.textContent=String(alert.nombre||0);var label=document.createElement('span');label.textContent=alert.message||'Information à contrôler';link.appendChild(badge);link.appendChild(label);list.appendChild(link);});
+  }).catch(function(){count.textContent='?';summary.textContent='Contrôle indisponible';});
 })();
 </script>
 {% endif %}

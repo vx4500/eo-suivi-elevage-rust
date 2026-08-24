@@ -8,16 +8,18 @@
 </form>{% endif %}
 {% if session.peut_modifier %}<p class="muted">Mise-bas, n° marquage et site sont modifiables directement dans le tableau, ligne par ligne.</p>
 {% for l in bandes %}<form id="bf{{ l.id }}" method="post" action="/bandes/{{ l.id }}/modifier-rapide" hidden><input type="hidden" name="csrf_token" value="{{ session.csrf }}"></form>{% endfor %}{% endif %}
-<div class="rust-scroll"><table><thead><tr><th>Bande</th><th>N° marquage</th><th>Mise-bas</th><th>Site</th><th>Stade</th><th>Truies</th><th></th></tr></thead><tbody>
+<div class="rust-scroll"><table><thead><tr><th>Bande</th><th>N° marquage</th><th>Mise-bas</th><th>Site</th><th>Stade</th><th>Truies</th><th>Après sevrage</th><th>Porcelets / porcs</th><th></th></tr></thead><tbody>
 {% for l in bandes %}<tr>
 <td><a href="/bande/{{ l.id }}"><b>{{ l.code }}</b></a>{% if l.date_mb %}<br><small class="muted">Mise-bas {{ l.date_mb|date_fr }}</small>{% endif %}</td>
 <td>{% if session.peut_modifier %}<input form="bf{{ l.id }}" name="num_officiel" value="{{ l.num_officiel or '' }}" placeholder="ex. FR35G6K07">{% else %}{{ l.num_officiel or '—' }}{% endif %}</td>
 <td>{% if session.peut_modifier %}<input form="bf{{ l.id }}" type="date" name="date_mb" value="{{ l.date_mb or '' }}">{% else %}{{ l.date_mb|date_fr }}{% endif %}</td>
 <td>{% if session.peut_modifier %}<input form="bf{{ l.id }}" name="site" value="{{ l.site or '' }}">{% else %}{{ l.site or '—' }}{% endif %}</td>
 <td>{{ l.stade }}</td><td>{{ l.truies }}</td>
+<td><span class="flow-badge">{{ l.flux.verraterie }} verraterie</span> <span class="flow-badge waiting">{{ l.flux.attente }} attente</span> <span class="flow-badge exit">{{ l.flux.reformees }} réforme</span></td>
+<td><b>{{ l.flux.sevres }} sevrés</b><br><span>{{ l.flux.vendus }} vendus{% if l.flux.derniere_vente %} · {{ l.flux.derniere_vente|date_fr }}{% endif %}</span></td>
 <td class="rust-actions">{% if session.peut_modifier %}<button form="bf{{ l.id }}" class="ghost">Enregistrer</button>
 <form method="post" action="/bande/{{ l.id }}/archiver"><input type="hidden" name="csrf_token" value="{{ session.csrf }}"><button class="ghost">Archiver</button></form>{% endif %}</td>
-</tr>{% else %}<tr><td colspan="7" class="rust-empty">Aucune bande</td></tr>{% endfor %}
+</tr>{% else %}<tr><td colspan="9" class="rust-empty">Aucune bande</td></tr>{% endfor %}
 </tbody></table></div>
 <p><a href="/archives">Voir les bandes archivées</a></p>
 {% endblock %}

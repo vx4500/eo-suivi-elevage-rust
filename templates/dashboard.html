@@ -49,6 +49,14 @@
     </div>
     <div class="band-progress" role="progressbar" aria-label="Avancement de la bande {{ l.code }}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ l.progression }}"><span style="width:{{ l.progression }}%"></span></div>
 
+    <div class="band-flow-strip" aria-label="Flux de la bande {{ l.code }}">
+      <span><small>Truies → verraterie</small><b>{{ l.flux.verraterie }}</b></span>
+      <span><small>Truies en attente</small><b>{{ l.flux.attente }}</b></span>
+      <span><small>Truies réformées</small><b>{{ l.flux.reformees }}</b></span>
+      <span><small>Porcelets sevrés</small><b>{{ l.flux.sevres }}</b></span>
+      <span><small>Porcs vendus</small><b>{{ l.flux.vendus }}</b>{% if l.flux.derniere_vente %}<em>{{ l.flux.derniere_vente|date_fr }}</em>{% endif %}</span>
+    </div>
+
     <div class="band-steps" role="list" aria-label="Étapes techniques de la bande {{ l.code }}">
       {% for e in l.etapes %}
       <div class="band-step{% if e.terminee %} is-done{% endif %}{% if e.actuelle %} is-current{% endif %}" role="listitem">

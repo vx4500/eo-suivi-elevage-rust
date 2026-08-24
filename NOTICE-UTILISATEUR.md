@@ -1,6 +1,6 @@
 # Notice utilisateur — EO‑Suivi Élevage
 
-Version de la notice : 2.2.24 — mise à jour le 24 août 2026.
+Version de la notice : 2.2.25 — mise à jour le 24 août 2026.
 
 Cette notice doit être relue à chaque livraison. Toute fonction ajoutée ou
 modifiée doit être inscrite dans la section « Nouveautés de la version » avant
@@ -43,6 +43,13 @@ doit donc pas compter deux fois la sortie.
   case.
 - Pour une délivrance NOK, consulter la fiche truie et traiter les lignes
   marquées **À suivre** selon le protocole de l'élevage.
+
+## Nouveautés de la version 2.2.25
+
+- Chaque bande présente le devenir des truies : verraterie, attente d’une nouvelle bande et réforme.
+- Le flux des porcs reprend le nombre sevré, le nombre vendu et les dates des sorties enregistrées.
+- Une bulle d’alertes accessible sur toutes les pages signale les relevés d’eau ou d’électricité attendus, les informations manquantes des bandes, les sevrages non remontés, les tâches en retard, les mises-bas à suivre et les effectifs incohérents.
+- Un clic sur une alerte ouvre directement la page de traitement correspondante.
 
 ## Nouveautés de la version 2.2.24
 

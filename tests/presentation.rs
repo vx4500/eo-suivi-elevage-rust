@@ -77,7 +77,26 @@ fn accueil_visualise_le_cycle_et_saisie_rapide_propose_la_mise_bas() {
     assert!(dashboard.contains("Conduite des bandes"));
     assert!(dashboard.contains("class=\"band-stage-code\""));
     assert!(base.contains("/static/style.css?v={{ app_version }}"));
-    assert!(styles.contains("v2.2.24 — effectifs, pertes de mise-bas"));
+    assert!(styles.contains("v2.2.25 — flux des bandes"));
+}
+
+#[test]
+fn version_225_affiche_les_flux_et_les_alertes_elevage() {
+    let routes = include_str!("../src/routes/mod.rs");
+    let base = include_str!("../templates/base.html");
+    let dashboard = include_str!("../templates/dashboard.html");
+    let bands = include_str!("../templates/bandes.html");
+    let band = include_str!("../templates/bande.html");
+
+    assert!(routes.contains("/api/alertes-elevage"));
+    assert!(routes.contains("band_flow_summary"));
+    assert!(routes.contains("Relevés d’eau attendus"));
+    assert!(routes.contains("Relevés d’électricité attendus"));
+    assert!(base.contains("id=\"farm-alert-button\""));
+    assert!(base.contains("fetch('/api/alertes-elevage'"));
+    assert!(dashboard.contains("Truies → verraterie"));
+    assert!(bands.contains("{{ l.flux.sevres }} sevrés"));
+    assert!(band.contains("{% for vente in flux.ventes %}"));
 }
 
 #[test]

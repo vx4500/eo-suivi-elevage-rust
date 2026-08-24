@@ -128,6 +128,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/cases", get(api_cases))
         .route("/api/cases-capacity", get(api_cases_capacity))
         .route("/api/causes-perte", get(api_causes_perte))
+        .route("/api/alertes-elevage", get(api_alertes_elevage))
         .route("/energie", get(energie))
         .route("/aliment-previsions", get(aliment_previsions))
         .route("/aliment-previsions/silo", post(silo_ajouter))
@@ -761,6 +762,113 @@ async fn api_causes_perte(State(state): State<AppState>) -> AppResult<axum::Json
     Ok(axum::Json(json!({"causes": causes})))
 }
 
+fn push_farm_alert(alerts: &mut Vec<Value>, count: i64, message: &str, url: &str, severity: &str) {
+    if count > 0 {
+        alerts.push(json!({
+            "nombre": count,
+            "message": message,
+            "url": url,
+            "niveau": severity,
+        }));
+    }
+}
+
+async fn api_alertes_elevage(State(state): State<AppState>) -> AppResult<axum::Json<Value>> {
+    Ok(axum::Json(farm_alerts(&state.pool).await?))
+}
+
+async fn farm_alerts(pool: &SqlitePool) -> AppResult<Value> {
+    let mut alerts = Vec::new();
+    for (kind, label) in [
+        ("eau", "Relevés d’eau attendus"),
+        ("electricite", "Relevés d’électricité attendus"),
+    ] {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM compteur_energie c WHERE c.actif=1 AND c.type=? AND COALESCE(c.rappel_jours,0)>0 AND date(COALESCE((SELECT MAX(r.date_releve) FROM releve_compteur r WHERE r.compteur_id=c.id),'1900-01-01'),printf('+%d day',c.rappel_jours))<=date('now')",
+        )
+        .bind(kind)
+        .fetch_one(pool)
+        .await?;
+        push_farm_alert(&mut alerts, count, label, "/energie", "attention");
+    }
+    for (condition, message) in [
+        (
+            "date_mb IS NULL OR trim(date_mb)=''",
+            "Bandes sans date de mise-bas",
+        ),
+        (
+            "site IS NULL OR trim(site)=''",
+            "Bandes sans site renseigné",
+        ),
+        (
+            "num_officiel IS NULL OR trim(num_officiel)=''",
+            "Bandes sans numéro de marquage",
+        ),
+    ] {
+        let count: i64 = sqlx::query_scalar(&format!(
+            "SELECT COUNT(*) FROM bande WHERE active=1 AND ({condition})"
+        ))
+        .fetch_one(pool)
+        .await?;
+        push_farm_alert(&mut alerts, count, message, "/bandes", "information");
+    }
+    let schedule = load_band_schedule(pool).await?;
+    let missing_weaning: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM bande b WHERE b.active=1 AND b.date_mb IS NOT NULL AND date(b.date_mb,printf('+%d day',?))<date('now') AND NOT EXISTS(SELECT 1 FROM evenement e WHERE e.bande_id=b.id AND e.type='sevrage')",
+    )
+    .bind(schedule.weaning)
+    .fetch_one(pool)
+    .await?;
+    push_farm_alert(
+        &mut alerts,
+        missing_weaning,
+        "Bandes arrivées au sevrage sans information",
+        "/bandes",
+        "attention",
+    );
+    let overdue_tasks: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM tache WHERE fait=0 AND echeance IS NOT NULL AND date(echeance)<date('now')",
+    )
+    .fetch_one(pool)
+    .await?;
+    push_farm_alert(
+        &mut alerts,
+        overdue_tasks,
+        "Tâches d’élevage en retard",
+        "/taches",
+        "urgent",
+    );
+    let farrowing_follow_up: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM evenement WHERE type='mise_bas' AND (suivi_actif=1 OR delivrance_ok=0)",
+    )
+    .fetch_one(pool)
+    .await?;
+    push_farm_alert(
+        &mut alerts,
+        farrowing_follow_up,
+        "Mises-bas nécessitant un suivi",
+        "/planning",
+        "urgent",
+    );
+    let case_anomalies: i64 = sqlx::query_scalar(
+        "WITH depart AS (SELECT c.id,c.nb_max_porcs,(SELECT i.date FROM inventairecase i WHERE i.case_id=c.id ORDER BY i.date DESC,i.id DESC LIMIT 1) AS inv_date,COALESCE((SELECT i.nombre FROM inventairecase i WHERE i.case_id=c.id ORDER BY i.date DESC,i.id DESC LIMIT 1),0) AS base FROM casesalle c),effectifs AS (SELECT d.id,d.nb_max_porcs,d.base+COALESCE((SELECT SUM(CASE WHEN t.case_dest_id=d.id THEN COALESCE(t.nombre,0) ELSE -COALESCE(t.nombre,0) END) FROM transfert t WHERE t.espece='porc' AND (t.case_dest_id=d.id OR t.case_source_id=d.id) AND (d.inv_date IS NULL OR t.date>d.inv_date)),0)-COALESCE((SELECT SUM(m.nombre) FROM declarationmort m WHERE m.case_id=d.id AND (d.inv_date IS NULL OR m.date>d.inv_date)),0) AS effectif FROM depart d) SELECT COUNT(*) FROM effectifs WHERE effectif<0 OR (nb_max_porcs>0 AND effectif>nb_max_porcs)",
+    )
+    .fetch_one(pool)
+    .await?;
+    push_farm_alert(
+        &mut alerts,
+        case_anomalies,
+        "Cases avec un effectif incohérent",
+        "/effectifs",
+        "urgent",
+    );
+    let total = alerts
+        .iter()
+        .filter_map(|alert| alert.get("nombre").and_then(Value::as_i64))
+        .sum::<i64>();
+    Ok(json!({"total": total, "alertes": alerts}))
+}
+
 // Fournit la capacité et l'occupation actuelle par case (pour affichage côté client)
 async fn api_cases_capacity(State(state): State<AppState>) -> AppResult<axum::Json<Value>> {
     // retourne: id, nb_max_porcs, occupancy, remaining
@@ -1314,6 +1422,7 @@ struct BandView {
     truies: i64,
     progression: i64,
     etapes: Vec<BandStageView>,
+    flux: Value,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1424,7 +1533,7 @@ async fn load_band_schedule(pool: &SqlitePool) -> AppResult<BandSchedule> {
     Ok(schedule)
 }
 
-fn band_view(band: &Bande, sow_count: i64, schedule: BandSchedule) -> BandView {
+fn band_view(band: &Bande, sow_count: i64, schedule: BandSchedule, flux: Value) -> BandView {
     let today = Local::now().date_naive();
     let date = band.date_mb.as_deref().and_then(parse_stored_date);
     let age = date.map(|date| (today - date).num_days());
@@ -1494,7 +1603,48 @@ fn band_view(band: &Bande, sow_count: i64, schedule: BandSchedule) -> BandView {
         truies: sow_count,
         progression: age.map(|age| schedule.progression(age)).unwrap_or(0),
         etapes,
+        flux,
     }
+}
+
+async fn band_flow_summary(pool: &SqlitePool, band: &Bande) -> AppResult<Value> {
+    let sow_flow = sqlx::query_as::<_, (i64, i64, i64, i64, i64)>(
+        "WITH cycle_truies AS (SELECT DISTINCT truie_id FROM evenement WHERE bande_id=? AND truie_id IS NOT NULL UNION SELECT id FROM truie WHERE bande_code=?),sevragees AS (SELECT DISTINCT truie_id FROM evenement WHERE bande_id=? AND type='sevrage' AND truie_id IS NOT NULL),vers_verraterie AS (SELECT DISTINCT w.truie_id FROM sevragees w JOIN truie t ON t.id=w.truie_id WHERE t.reformee=0 AND (EXISTS(SELECT 1 FROM transfert m LEFT JOIN casesalle c ON c.id=m.case_dest_id JOIN salle s ON s.id=COALESCE(m.salle_dest_id,c.salle_id) WHERE m.truie_id=t.id AND m.date>=(SELECT MAX(e.date) FROM evenement e WHERE e.bande_id=? AND e.truie_id=t.id AND e.type='sevrage') AND (lower(COALESCE(s.type,'')) LIKE '%verrater%' OR lower(COALESCE(s.nom,'')) LIKE '%verrater%')) OR EXISTS(SELECT 1 FROM salle s WHERE s.id=COALESCE(t.salle_id,(SELECT c.salle_id FROM casesalle c WHERE c.id=t.case_id)) AND (lower(COALESCE(s.type,'')) LIKE '%verrater%' OR lower(COALESCE(s.nom,'')) LIKE '%verrater%')))) SELECT (SELECT COUNT(*) FROM cycle_truies),(SELECT COUNT(*) FROM vers_verraterie),(SELECT COUNT(*) FROM sevragees w JOIN truie t ON t.id=w.truie_id WHERE t.reformee=0 AND (t.bande_code IS NULL OR trim(t.bande_code)='' OR NOT EXISTS(SELECT 1 FROM bande nouvelle WHERE nouvelle.code=t.bande_code AND nouvelle.active=1)) AND NOT EXISTS(SELECT 1 FROM vers_verraterie v WHERE v.truie_id=t.id)),(SELECT COUNT(*) FROM cycle_truies c JOIN truie t ON t.id=c.truie_id WHERE t.reformee=1),(SELECT CAST(COALESCE(SUM(nb_sevres),0) AS INTEGER) FROM evenement WHERE bande_id=? AND type='sevrage')",
+    )
+    .bind(band.id)
+    .bind(&band.code)
+    .bind(band.id)
+    .bind(band.id)
+    .bind(band.id)
+    .fetch_one(pool)
+    .await?;
+    let sales = generic_rows(
+        pool,
+        &format!(
+            "SELECT date,CAST(SUM(nb_porcs) AS INTEGER) AS nombre FROM (SELECT date,nb_porcs FROM venteapport WHERE bande_id={0} AND date IS NOT NULL AND nb_porcs IS NOT NULL UNION ALL SELECT v.date,CAST(json_extract(j.value,'$.nb_porcs') AS INTEGER) FROM venteapport v,json_each(v.lots_json) j WHERE v.bande_id IS NULL AND json_valid(v.lots_json) AND json_type(v.lots_json)='array' AND CAST(json_extract(j.value,'$.bande_id') AS INTEGER)={0} AND v.date IS NOT NULL) GROUP BY date ORDER BY date",
+            band.id
+        ),
+    )
+    .await?;
+    let vendus = sales
+        .iter()
+        .filter_map(|row| row.get("nombre").and_then(Value::as_i64))
+        .sum::<i64>();
+    let derniere_vente = sales
+        .last()
+        .and_then(|row| row.get("date"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    Ok(json!({
+        "truies_cycle": sow_flow.0,
+        "verraterie": sow_flow.1,
+        "attente": sow_flow.2,
+        "reformees": sow_flow.3,
+        "sevres": sow_flow.4,
+        "vendus": vendus,
+        "derniere_vente": derniere_vente,
+        "ventes": sales,
+    }))
 }
 
 async fn dashboard(
@@ -1515,7 +1665,8 @@ async fn dashboard(
                 .bind(&band.code)
                 .fetch_one(&state.pool)
                 .await?;
-        views.push(band_view(band, count, schedule));
+        let flux = band_flow_summary(&state.pool, band).await?;
+        views.push(band_view(band, count, schedule, flux));
     }
     let truies: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM truie WHERE reformee=0")
         .fetch_one(&state.pool)
@@ -1620,7 +1771,8 @@ async fn bandes(
                 .bind(&band.code)
                 .fetch_one(&state.pool)
                 .await?;
-        views.push(band_view(&band, count, schedule));
+        let flux = band_flow_summary(&state.pool, &band).await?;
+        views.push(band_view(&band, count, schedule, flux));
     }
     let mut ctx = context(&session);
     ctx.insert(
@@ -1736,6 +1888,7 @@ async fn bande_detail(
     let schedule = load_band_schedule(&state.pool).await?;
     let dates = key_dates(band.date_mb.as_deref(), schedule);
     let porcs_presents = total_band_pigs(&state.pool, band.id, &band.code).await?;
+    let flux = band_flow_summary(&state.pool, &band).await?;
     // Emplacement actuel (stade + effectif réel), déduit des cases où la
     // bande a été affectée : contrairement au journal ci-dessus (historique
     // brut des mouvements), chaque case n'apparaît qu'une fois, avec son
@@ -1845,6 +1998,7 @@ async fn bande_detail(
         serde_json::to_value(&events).unwrap_or_default(),
     );
     ctx.insert("dates".into(), Value::Array(dates));
+    ctx.insert("flux".into(), flux);
     ctx.insert(
         "emplacement_actuel".into(),
         Value::Array(emplacement_actuel),
@@ -9500,6 +9654,109 @@ async fn compatibility_fallback(
 #[cfg(test)]
 mod gttt_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn flux_bande_reunit_destinations_sevrages_et_ventes() -> anyhow::Result<()> {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await?;
+        sqlx::raw_sql(include_str!("../../migrations/0001_schema.sql"))
+            .execute(&pool)
+            .await?;
+        let band_id =
+            sqlx::query("INSERT INTO bande(code,date_mb,active) VALUES('FLUX-1','2026-01-01',1)")
+                .execute(&pool)
+                .await?
+                .last_insert_rowid();
+        let site_id = sqlx::query("INSERT INTO site(code,nom) VALUES('S1','Site 1')")
+            .execute(&pool)
+            .await?
+            .last_insert_rowid();
+        let room_id = sqlx::query(
+            "INSERT INTO salle(site_id,nom,type,nb_cases,ordre) VALUES(?,'Verraterie','verraterie',0,1)",
+        )
+        .bind(site_id)
+        .execute(&pool)
+        .await?
+        .last_insert_rowid();
+        for (number, reformed, room) in [
+            ("V-1", 0, Some(room_id)),
+            ("A-1", 0, None),
+            ("R-1", 1, None),
+        ] {
+            let sow_id = sqlx::query("INSERT INTO truie(num_travail,statut,rang,reformee,mere_cochette,salle_id) VALUES(?,'active',1,?,0,?)")
+                .bind(number)
+                .bind(reformed)
+                .bind(room)
+                .execute(&pool)
+                .await?
+                .last_insert_rowid();
+            sqlx::query("INSERT INTO evenement(type,date,truie_id,bande_id,nb_sevres,suivi_actif) VALUES('sevrage','2026-01-29',?,?,9,0)")
+                .bind(sow_id)
+                .bind(band_id)
+                .execute(&pool)
+                .await?;
+        }
+        sqlx::query("INSERT INTO venteapport(date,bande_id,nb_porcs) VALUES('2026-07-01',?,20)")
+            .bind(band_id)
+            .execute(&pool)
+            .await?;
+        sqlx::query("INSERT INTO venteapport(date,lots_json) VALUES('2026-07-08',?)")
+            .bind(format!(r#"[{{"bande_id":{band_id},"nb_porcs":5}}]"#))
+            .execute(&pool)
+            .await?;
+        let band =
+            sqlx::query_as::<_, Bande>(&format!("SELECT {BAND_FIELDS} FROM bande WHERE id=?"))
+                .bind(band_id)
+                .fetch_one(&pool)
+                .await?;
+        let flow = band_flow_summary(&pool, &band).await?;
+        assert_eq!(flow["truies_cycle"], 3);
+        assert_eq!(flow["verraterie"], 1);
+        assert_eq!(flow["attente"], 1);
+        assert_eq!(flow["reformees"], 1);
+        assert_eq!(flow["sevres"], 27);
+        assert_eq!(flow["vendus"], 25);
+        assert_eq!(flow["ventes"].as_array().map(Vec::len), Some(2));
+
+        for kind in ["eau", "electricite"] {
+            sqlx::query("INSERT INTO compteur_energie(nom,type,unite,rappel_jours,actif) VALUES(?,?,'index',7,1)")
+                .bind(format!("Compteur {kind}"))
+                .bind(kind)
+                .execute(&pool)
+                .await?;
+        }
+        sqlx::query("INSERT INTO tache(titre,echeance,fait) VALUES('Contrôle','2000-01-01',0)")
+            .execute(&pool)
+            .await?;
+        sqlx::query("INSERT INTO evenement(type,date,bande_id,suivi_actif,delivrance_ok) VALUES('mise_bas','2026-01-01',?,1,0)")
+            .bind(band_id)
+            .execute(&pool)
+            .await?;
+        let case_id =
+            sqlx::query("INSERT INTO casesalle(salle_id,nom,nb_max_porcs) VALUES(?,'Alerte',1)")
+                .bind(room_id)
+                .execute(&pool)
+                .await?
+                .last_insert_rowid();
+        sqlx::query("INSERT INTO inventairecase(case_id,date,nombre) VALUES(?,'2026-08-24',2)")
+            .bind(case_id)
+            .execute(&pool)
+            .await?;
+        let alerts = farm_alerts(&pool).await?;
+        assert_eq!(alerts["total"], 7);
+        let labels = alerts["alertes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|alert| alert["message"].as_str())
+            .collect::<Vec<_>>();
+        assert!(labels.contains(&"Relevés d’eau attendus"));
+        assert!(labels.contains(&"Relevés d’électricité attendus"));
+        assert!(labels.contains(&"Cases avec un effectif incohérent"));
+        Ok(())
+    }
 
     fn litter(
         live_born: f64,
