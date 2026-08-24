@@ -77,7 +77,7 @@ fn accueil_visualise_le_cycle_et_saisie_rapide_propose_la_mise_bas() {
     assert!(dashboard.contains("Conduite des bandes"));
     assert!(dashboard.contains("class=\"band-stage-code\""));
     assert!(base.contains("/static/style.css?v={{ app_version }}"));
-    assert!(styles.contains("v2.2.21 — bilan des ventes"));
+    assert!(styles.contains("v2.2.22 — modules lisibles"));
 }
 
 #[test]
@@ -157,4 +157,22 @@ fn version_221_corrige_commandes_et_suit_la_mise_a_jour() {
     assert!(update.contains("status_update \"compilation\""));
     assert!(update_page.contains("fetch('/maj/statut'"));
     assert!(update_page.contains("id=\"sauvegardes\""));
+}
+
+#[test]
+fn version_222_ordonne_bandes_et_rend_vente_facultative() {
+    let auth = include_str!("../src/auth.rs");
+    let routes = include_str!("../src/routes/mod.rs");
+    let database = include_str!("../src/db.rs");
+    let settings = include_str!("../templates/parametres.html");
+    let navigation = include_str!("../templates/base.html");
+
+    assert!(routes.contains("ORDER BY date_mb IS NULL,date_mb DESC,id DESC"));
+    assert!(routes.contains("affichage de secours"));
+    assert!(database.contains("\"commandeventedirecte\", \"email\""));
+    assert!(auth.contains("pub module_vente_directe: bool"));
+    assert!(settings.contains("name=\"module_vente_directe\""));
+    assert!(settings.contains("class=\"module-option\""));
+    assert!(settings.contains("Informations de l’élevage"));
+    assert!(navigation.contains("{% if session.module_vente_directe %}"));
 }

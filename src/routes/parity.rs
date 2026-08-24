@@ -797,6 +797,21 @@ pub(super) async fn maj(
             .and_then(|name| name.to_str())
             .unwrap_or("elevage.db")),
     );
+    let backup_settings = generic_rows(
+        &state.pool,
+        "SELECT cle,valeur FROM parametre WHERE cle IN ('nas_path','cloud_path','mail_sauvegarde') ORDER BY cle",
+    )
+    .await?;
+    let mut backup_map = Map::new();
+    for row in backup_settings {
+        if let Some(key) = row.get("cle").and_then(Value::as_str) {
+            backup_map.insert(
+                key.to_string(),
+                row.get("valeur").cloned().unwrap_or(Value::Null),
+            );
+        }
+    }
+    ctx.insert("sauvegarde_reglage".into(), Value::Object(backup_map));
     render(&state, "maj.html", Value::Object(ctx))
 }
 
@@ -1021,9 +1036,11 @@ pub(super) async fn parametres_maj(
         let module_genetique = form.contains_key("module_genetique");
         let module_prestataires = form.contains_key("module_prestataires");
         let module_charcutiers_rfid = form.contains_key("module_charcutiers_rfid");
+        let module_vente_directe = form.contains_key("module_vente_directe");
         sqlx::query("INSERT INTO parametre(cle,valeur) VALUES('module_genetique',?) ON CONFLICT(cle) DO UPDATE SET valeur=excluded.valeur").bind(if module_genetique{"1"}else{"0"}).execute(&mut *tx).await?;
         sqlx::query("INSERT INTO parametre(cle,valeur) VALUES('module_prestataires',?) ON CONFLICT(cle) DO UPDATE SET valeur=excluded.valeur").bind(if module_prestataires{"1"}else{"0"}).execute(&mut *tx).await?;
         sqlx::query("INSERT INTO parametre(cle,valeur) VALUES('module_charcutiers_rfid',?) ON CONFLICT(cle) DO UPDATE SET valeur=excluded.valeur").bind(if module_charcutiers_rfid{"1"}else{"0"}).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO parametre(cle,valeur) VALUES('module_vente_directe',?) ON CONFLICT(cle) DO UPDATE SET valeur=excluded.valeur").bind(if module_vente_directe{"1"}else{"0"}).execute(&mut *tx).await?;
         tx.commit().await?;
         // Les sessions déjà ouvertes voient les nouveaux réglages sans avoir à
         // se reconnecter, pour éviter un affichage incohérent le temps que
@@ -1035,6 +1052,7 @@ pub(super) async fn parametres_maj(
             entry.value_mut().module_genetique = module_genetique;
             entry.value_mut().module_prestataires = module_prestataires;
             entry.value_mut().module_charcutiers_rfid = module_charcutiers_rfid;
+            entry.value_mut().module_vente_directe = module_vente_directe;
         }
     } else {
         tx.commit().await?;

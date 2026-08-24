@@ -85,6 +85,7 @@ pub struct SessionData {
     pub module_genetique: bool,
     pub module_prestataires: bool,
     pub module_charcutiers_rfid: bool,
+    pub module_vente_directe: bool,
 }
 
 impl SessionData {
@@ -225,6 +226,7 @@ pub async fn guard(State(state): State<AppState>, mut request: Request, next: Ne
     let public = path == "/login"
         || path == "/commande"
         || path.starts_with("/commande/")
+        || (path.starts_with("/vente-directe/produit/") && path.ends_with("/image"))
         || path.starts_with("/desinscription/");
     let session_id = cookie_value(request.headers(), "eo_session");
     let session = session_id
@@ -256,6 +258,9 @@ pub async fn guard(State(state): State<AppState>, mut request: Request, next: Ne
             return Redirect::to("/").into_response();
         }
         if session.role == "salarie" && !salarie_path_allowed(&path, &session.sections) {
+            return Redirect::to("/").into_response();
+        }
+        if !session.module_vente_directe && path_has_prefix(&path, "/vente-directe") {
             return Redirect::to("/").into_response();
         }
         if session.role != "admin"
@@ -324,6 +329,7 @@ mod tests {
             module_genetique: false,
             module_prestataires: true,
             module_charcutiers_rfid: true,
+            module_vente_directe: true,
         }
     }
 

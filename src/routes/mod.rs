@@ -555,6 +555,7 @@ fn session_value(session: &SessionData) -> Value {
         "module_genetique": session.module_genetique,
         "module_prestataires": session.module_prestataires,
         "module_charcutiers_rfid": session.module_charcutiers_rfid,
+        "module_vente_directe": session.module_vente_directe,
     })
 }
 
@@ -1159,6 +1160,8 @@ async fn login_post(
                 module_actif(&state.pool, "module_prestataires", true).await?;
             let module_charcutiers_rfid =
                 module_actif(&state.pool, "module_charcutiers_rfid", false).await?;
+            let module_vente_directe =
+                module_actif(&state.pool, "module_vente_directe", true).await?;
             state.sessions.insert(
                 session_id.clone(),
                 SessionData {
@@ -1173,6 +1176,7 @@ async fn login_post(
                     module_genetique,
                     module_prestataires,
                     module_charcutiers_rfid,
+                    module_vente_directe,
                 },
             );
             let cookie = Cookie::build(("eo_session", session_id))
@@ -1565,7 +1569,7 @@ async fn dashboard(
 }
 
 const BAND_FIELDS: &str = "id,code,num_officiel,date_mb,site,note,active,cs_truies_saillies,cs_pleines,cs_truies_mb,cs_nt_portee,cs_nv_portee,cs_mn_portee,cs_sevres_portee,cs_total_sevres,cs_tx_pertes_nv,cs_poids_sevrage,cs_gmq_ps,cs_gmq_engr";
-const BAND_SELECT_ACTIVE: &str = "SELECT id,code,num_officiel,date_mb,site,note,active,cs_truies_saillies,cs_pleines,cs_truies_mb,cs_nt_portee,cs_nv_portee,cs_mn_portee,cs_sevres_portee,cs_total_sevres,cs_tx_pertes_nv,cs_poids_sevrage,cs_gmq_ps,cs_gmq_engr FROM bande WHERE active=1 ORDER BY COALESCE(date_mb,'9999-12-31'),id";
+const BAND_SELECT_ACTIVE: &str = "SELECT id,code,num_officiel,date_mb,site,note,active,cs_truies_saillies,cs_pleines,cs_truies_mb,cs_nt_portee,cs_nv_portee,cs_mn_portee,cs_sevres_portee,cs_total_sevres,cs_tx_pertes_nv,cs_poids_sevrage,cs_gmq_ps,cs_gmq_engr FROM bande WHERE active=1 ORDER BY date_mb IS NULL,date_mb DESC,id DESC";
 
 async fn bandes(
     State(state): State<AppState>,
@@ -1946,7 +1950,7 @@ async fn archives(
         &session,
         "Bandes archivées",
         "Historique conservé",
-        "SELECT id,code,date_mb,site,note FROM bande WHERE active=0 ORDER BY date_mb",
+        "SELECT id,code,date_mb,site,note FROM bande WHERE active=0 ORDER BY date_mb DESC,id DESC",
         &["id", "code", "date_mb", "site", "note"],
     )
     .await
@@ -3045,7 +3049,7 @@ async fn imports_page(
 async fn api_bandes_actives(State(state): State<AppState>) -> AppResult<axum::Json<Value>> {
     let rows = generic_rows(
         &state.pool,
-        "SELECT id,code,date_mb,site FROM bande WHERE active=1 ORDER BY date_mb",
+        "SELECT id,code,date_mb,site FROM bande WHERE active=1 ORDER BY date_mb DESC,id DESC",
     )
     .await?;
     Ok(axum::Json(Value::Array(rows)))
@@ -3063,7 +3067,7 @@ async fn api_truies(State(state): State<AppState>) -> AppResult<axum::Json<Value
 async fn api_bandes(State(state): State<AppState>) -> AppResult<axum::Json<Value>> {
     let rows = generic_rows(
         &state.pool,
-        "SELECT id,code,date_mb,site,active FROM bande ORDER BY active DESC,date_mb,id",
+        "SELECT id,code,date_mb,site,active FROM bande ORDER BY active DESC,date_mb DESC,id DESC",
     )
     .await?;
     Ok(axum::Json(Value::Array(rows)))
@@ -3760,7 +3764,7 @@ async fn productivite(
     let gttt_period = gttt_summary(&gttt_litters);
     let (objectives, available_objectives) =
         productivite_objectives(&state.pool, &cutoff, &gttt_period).await?;
-    let rows = sqlx::query("SELECT b.id,b.code,b.date_mb,b.site,b.cs_truies_saillies,b.cs_pleines,b.cs_truies_mb,b.cs_nv_portee,b.cs_sevres_portee,b.cs_total_sevres,b.cs_tx_pertes_nv,b.cs_poids_sevrage,b.cs_gmq_ps,b.cs_gmq_engr,(SELECT MIN(e.date) FROM evenement e WHERE e.bande_id=b.id AND e.type='ia') AS premiere_ia_reelle,(SELECT MIN(e.date) FROM evenement e WHERE e.bande_id=b.id AND e.type='mise_bas' AND e.date<=date('now')) AS premiere_mb_reelle,(SELECT MAX(e.date) FROM evenement e WHERE e.bande_id=b.id AND e.type='sevrage') AS dernier_sevrage_reel,(SELECT COUNT(*) FROM evenement e WHERE e.bande_id=b.id AND e.type IN('echo','echographie')) AS echos,(SELECT COUNT(*) FROM evenement e WHERE e.bande_id=b.id AND e.type IN('echo','echographie') AND lower(COALESCE(e.resultat,'')) IN('positive','positif','pleine','oui')) AS echos_positives,ROUND(100.0*(SELECT COUNT(*) FROM evenement e WHERE e.bande_id=b.id AND e.type IN('echo','echographie') AND lower(COALESCE(e.resultat,'')) IN('positive','positif','pleine','oui'))/NULLIF((SELECT COUNT(*) FROM evenement e WHERE e.bande_id=b.id AND e.type IN('echo','echographie')),0),1) AS taux_pleines_echo,ROUND(100.0*COALESCE(b.cs_truies_mb,0)/NULLIF(b.cs_truies_saillies,0),1) AS taux_mb_saillies FROM bande b WHERE b.date_mb>=date('now',?) ORDER BY b.date_mb,b.id")
+    let rows = sqlx::query("SELECT b.id,b.code,b.date_mb,b.site,b.cs_truies_saillies,b.cs_pleines,b.cs_truies_mb,b.cs_nv_portee,b.cs_sevres_portee,b.cs_total_sevres,b.cs_tx_pertes_nv,b.cs_poids_sevrage,b.cs_gmq_ps,b.cs_gmq_engr,(SELECT MIN(e.date) FROM evenement e WHERE e.bande_id=b.id AND e.type='ia') AS premiere_ia_reelle,(SELECT MIN(e.date) FROM evenement e WHERE e.bande_id=b.id AND e.type='mise_bas' AND e.date<=date('now')) AS premiere_mb_reelle,(SELECT MAX(e.date) FROM evenement e WHERE e.bande_id=b.id AND e.type='sevrage') AS dernier_sevrage_reel,(SELECT COUNT(*) FROM evenement e WHERE e.bande_id=b.id AND e.type IN('echo','echographie')) AS echos,(SELECT COUNT(*) FROM evenement e WHERE e.bande_id=b.id AND e.type IN('echo','echographie') AND lower(COALESCE(e.resultat,'')) IN('positive','positif','pleine','oui')) AS echos_positives,ROUND(100.0*(SELECT COUNT(*) FROM evenement e WHERE e.bande_id=b.id AND e.type IN('echo','echographie') AND lower(COALESCE(e.resultat,'')) IN('positive','positif','pleine','oui'))/NULLIF((SELECT COUNT(*) FROM evenement e WHERE e.bande_id=b.id AND e.type IN('echo','echographie')),0),1) AS taux_pleines_echo,ROUND(100.0*COALESCE(b.cs_truies_mb,0)/NULLIF(b.cs_truies_saillies,0),1) AS taux_mb_saillies FROM bande b WHERE b.date_mb>=date('now',?) ORDER BY b.date_mb DESC,b.id DESC")
         .bind(&cutoff)
         .fetch_all(&state.pool)
         .await?;
@@ -4489,7 +4493,7 @@ async fn transferts(
     .await?;
     let mut bands = generic_rows(
         &state.pool,
-        "SELECT id,code,date_mb,site FROM bande WHERE active=1 ORDER BY date_mb,code",
+        "SELECT id,code,date_mb,site FROM bande WHERE active=1 ORDER BY date_mb DESC,code",
     )
     .await?;
     for band in &mut bands {
@@ -4841,7 +4845,7 @@ async fn effectifs(
     let case_inventories=generic_rows(&state.pool,"SELECT i.id,i.date,i.nombre,i.note,i.cree_par,c.nom AS case_nom,s.nom AS salle,COALESCE(si.nom,si.code) AS site FROM inventairecase i JOIN casesalle c ON c.id=i.case_id JOIN salle s ON s.id=c.salle_id JOIN site si ON si.id=s.site_id ORDER BY i.date DESC,i.id DESC LIMIT 100").await?;
     let mut bands = generic_rows(
         &state.pool,
-        "SELECT id,code,date_mb,site FROM bande WHERE active=1 ORDER BY date_mb,code",
+        "SELECT id,code,date_mb,site FROM bande WHERE active=1 ORDER BY date_mb DESC,code",
     )
     .await?;
     for band in &mut bands {
@@ -6422,12 +6426,22 @@ async fn vente_directe_commandes(
     Extension(session): Extension<SessionData>,
 ) -> AppResult<Html<String>> {
     require_writer(&session)?;
-    let orders=generic_rows(&state.pool,"SELECT c.id,c.cree_le,c.nom_client,c.telephone,c.email,c.notes,c.statut,c.total,c.session_vente_id,s.nom AS session_nom,(SELECT GROUP_CONCAT(l.nom_produit||' × '||l.quantite,', ') FROM lignecommandeventedirecte l WHERE l.commande_id=c.id) AS lignes FROM commandeventedirecte c LEFT JOIN sessionventedirecte s ON s.id=c.session_vente_id ORDER BY c.cree_le DESC,c.id DESC LIMIT 500").await?;
+    let orders = match generic_rows(&state.pool,"SELECT c.id,c.cree_le,c.nom_client,c.telephone,c.email,c.notes,c.statut,c.total,c.session_vente_id,s.nom AS session_nom,(SELECT GROUP_CONCAT(l.nom_produit||' × '||l.quantite,', ') FROM lignecommandeventedirecte l WHERE l.commande_id=c.id) AS lignes FROM commandeventedirecte c LEFT JOIN sessionventedirecte s ON s.id=c.session_vente_id ORDER BY c.cree_le DESC,c.id DESC LIMIT 500").await {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::warn!(%error, "lecture complète des commandes impossible, affichage de secours");
+            generic_rows(&state.pool,"SELECT id,cree_le,nom_client,telephone,email,notes,statut,total,NULL AS session_vente_id,NULL AS session_nom,'Détail disponible dans Modifier' AS lignes FROM commandeventedirecte ORDER BY id DESC LIMIT 500").await?
+        }
+    };
     let sessions = generic_rows(
         &state.pool,
         "SELECT id,nom,date_livraison,active FROM sessionventedirecte ORDER BY active DESC,id DESC",
     )
-    .await?;
+    .await
+    .unwrap_or_else(|error| {
+        tracing::warn!(%error, "liste des sessions de vente indisponible");
+        Vec::new()
+    });
     let mut ctx = context(&session);
     ctx.insert("commandes".into(), Value::Array(orders));
     ctx.insert("sessions_vente".into(), Value::Array(sessions));
@@ -6505,6 +6519,9 @@ async fn produit_modifier(
 }
 
 async fn produit_image(State(state): State<AppState>, Path(id): Path<i64>) -> AppResult<Response> {
+    if !module_actif(&state.pool, "module_vente_directe", true).await? {
+        return Err(AppError::NotFound);
+    }
     let image: Option<(Vec<u8>, String)> = sqlx::query_as(
         "SELECT image_data,image_mime FROM produitventedirecte WHERE id=? AND image_data IS NOT NULL AND image_mime IS NOT NULL",
     )
@@ -7014,6 +7031,13 @@ async fn commande_page(
     State(state): State<AppState>,
     Query(query): Query<HashMap<String, String>>,
 ) -> AppResult<Html<String>> {
+    if !module_actif(&state.pool, "module_vente_directe", true).await? {
+        return render(
+            &state,
+            "commande.html",
+            json!({"produits":[],"reglage":{"commandes_ouvertes":0,"message_fermeture":"Le module de vente directe est désactivé."},"session_active":null,"ok":false,"error":""}),
+        );
+    }
     let products=sqlx::query_as::<_,ProduitVenteDirecte>("SELECT id,nom,prix,unite,actif,ordre,quantite_disponible,image_mime FROM produitventedirecte WHERE actif=1 AND (quantite_disponible IS NULL OR quantite_disponible>0) ORDER BY ordre,nom").fetch_all(&state.pool).await?;
     let settings = generic_rows(
         &state.pool,
@@ -7035,6 +7059,9 @@ async fn commande_post(
     State(state): State<AppState>,
     Form(form): Form<HashMap<String, String>>,
 ) -> AppResult<Response> {
+    if !module_actif(&state.pool, "module_vente_directe", true).await? {
+        return Ok(Redirect::to("/commande?err=fermee").into_response());
+    }
     if form_text(&form, "website").is_some() {
         return Ok(Redirect::to("/commande?ok=1").into_response());
     }
@@ -7508,7 +7535,7 @@ async fn sanitaire(
     let protocols = generic_rows(&state.pool, "SELECT id,libelle,cible,reference,jour,produit,dose,unite,voie,duree_j,delai_attente,aiguille,preconisations,note FROM acteprotocole WHERE actif=1 ORDER BY cible,jour,id").await?;
     let bands = generic_rows(
         &state.pool,
-        "SELECT id,code,date_mb FROM bande WHERE active=1 ORDER BY date_mb,code",
+        "SELECT id,code,date_mb FROM bande WHERE active=1 ORDER BY date_mb DESC,code",
     )
     .await?;
     let verrats = generic_rows(
@@ -7674,7 +7701,7 @@ async fn pharmacie(
     let movements=generic_rows(&state.pool,"SELECT id,produit,date,type,quantite,bande_code,note FROM mouvementpharmacie ORDER BY date DESC,id DESC LIMIT 300").await?;
     let bands = generic_rows(
         &state.pool,
-        "SELECT code FROM bande WHERE active=1 ORDER BY date_mb,code",
+        "SELECT code FROM bande WHERE active=1 ORDER BY date_mb DESC,code",
     )
     .await?;
     let mut ctx = context(&session);
@@ -7908,11 +7935,11 @@ async fn engraissement(
     let declarations = generic_rows(&state.pool, &sql).await?;
     let band_sql = if session.role == "engraisseur" {
         format!(
-            "SELECT id,code,instructions,poids_cible FROM bande WHERE active=1 AND engraisseur_id={} ORDER BY date_mb,code",
+            "SELECT id,code,instructions,poids_cible FROM bande WHERE active=1 AND engraisseur_id={} ORDER BY date_mb DESC,code",
             session.uid
         )
     } else {
-        "SELECT id,code,instructions,poids_cible FROM bande WHERE active=1 ORDER BY date_mb,code"
+        "SELECT id,code,instructions,poids_cible FROM bande WHERE active=1 ORDER BY date_mb DESC,code"
             .to_string()
     };
     let bands = generic_rows(&state.pool, &band_sql).await?;
@@ -9229,8 +9256,18 @@ async fn parametres(
         .iter()
         .map(|(code, libelle)| json!({"code":code,"libelle":libelle}))
         .collect();
+    let mut infos = Map::new();
+    for row in &params {
+        if let Some(key) = row.get("cle").and_then(Value::as_str) {
+            infos.insert(
+                key.to_string(),
+                row.get("valeur").cloned().unwrap_or(Value::Null),
+            );
+        }
+    }
     let mut ctx = context(&session);
     ctx.insert("parametres".into(), Value::Array(params));
+    ctx.insert("infos".into(), Value::Object(infos));
     ctx.insert("reglages".into(), Value::Array(settings));
     ctx.insert("plans_aliment".into(), Value::Array(feed));
     ctx.insert("causes".into(), Value::Array(causes));

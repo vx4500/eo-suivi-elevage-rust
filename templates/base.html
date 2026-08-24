@@ -51,9 +51,9 @@
   <div class="rust-menu"><span>Économie ▾</span><div class="rust-sub">
     <a href="/economique">Économie</a><a href="/aliment-previsions">Prévisions aliment</a><a href="/energie">Eau & électricité</a><a href="/stock">Stocks</a>
   </div></div>
-  <div class="rust-menu"><span>Vente ▾</span><div class="rust-sub">
+  {% if session.module_vente_directe %}<div class="rust-menu"><span>Vente ▾</span><div class="rust-sub">
     <a href="/vente-directe">Vente directe</a><a href="/vente-directe/commandes">Commandes clients</a><a href="/vente-directe/bilan">Récapitulatif</a><a href="/vente-directe/sessions">Sessions de vente</a><a href="/vente-directe/communications">Communications clients</a><a href="/commande">Page de commande</a>
-  </div></div>
+  </div></div>{% endif %}
   <div class="rust-menu"><span>Exploitation ▾</span><div class="rust-sub">
     <a href="/sanitaire">Sanitaire</a><a href="/resolution-problemes">Résolution de problèmes</a><a href="/pharmacie">Pharmacie</a><a href="/entretien">Entretien</a><a href="/imports">Importer un document</a>
   </div></div>

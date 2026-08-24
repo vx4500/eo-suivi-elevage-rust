@@ -1,6 +1,6 @@
 # Notice utilisateur — EO‑Suivi Élevage
 
-Version de la notice : 2.2.21 — mise à jour le 24 août 2026.
+Version de la notice : 2.2.22 — mise à jour le 24 août 2026.
 
 Cette notice doit être relue à chaque livraison. Toute fonction ajoutée ou
 modifiée doit être inscrite dans la section « Nouveautés de la version » avant
@@ -43,6 +43,15 @@ doit donc pas compter deux fois la sortie.
   case.
 - Pour une délivrance NOK, consulter la fiche truie et traiter les lignes
   marquées **À suivre** selon le protocole de l'élevage.
+
+## Nouveautés de la version 2.2.22
+
+- Page Commandes clients renforcée avec affichage de secours pour les anciennes bases incomplètes.
+- Migration de compatibilité étendue à toutes les colonnes historiques des commandes et sessions de vente.
+- Bandes affichées de la plus récente à la plus ancienne dans les listes principales.
+- Module Vente directe activable ou désactivable depuis les paramètres.
+- Présentation du profil et des modules plus lisible, avec libellés explicites.
+- Informations de l’élevage nettoyées : les noms techniques des paramètres ne sont plus affichés.
 
 ## Nouveautés de la version 2.2.21
 
