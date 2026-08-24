@@ -262,6 +262,7 @@ pub(super) async fn truie_reclasser_verrat(
     Ok(Redirect::to("/truies").into_response())
 }
 
+#[allow(dead_code)]
 pub(super) async fn attente(
     State(state): State<AppState>,
     Extension(session): Extension<SessionData>,

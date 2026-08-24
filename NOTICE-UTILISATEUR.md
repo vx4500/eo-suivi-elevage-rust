@@ -1,6 +1,6 @@
 # Notice utilisateur — EO‑Suivi Élevage
 
-Version de la notice : 2.2.17 — mise à jour le 24 août 2026.
+Version de la notice : 2.2.18 — mise à jour le 24 août 2026.
 
 Cette notice doit être relue à chaque livraison. Toute fonction ajoutée ou
 modifiée doit être inscrite dans la section « Nouveautés de la version » avant
@@ -44,7 +44,7 @@ doit donc pas compter deux fois la sortie.
 - Pour une délivrance NOK, consulter la fiche truie et traiter les lignes
   marquées **À suivre** selon le protocole de l'élevage.
 
-## Nouveautés de la version 2.2.17
+## Nouveautés de la version 2.2.18
 
 - Liste de mise-bas limitée à la période prévue, avec recherche manuelle.
 - Suivi de mise-bas et état de délivrance OK/NOK.

@@ -5837,6 +5837,14 @@ async fn economique_import_apercu(
     render(&state, "economique_import_apercu.html", Value::Object(ctx))
 }
 
+type SaleMovementRow = (
+    i64,
+    Option<String>,
+    Option<i64>,
+    Option<i64>,
+    Option<String>,
+);
+
 /// Rejouable : chaque apport possède ses propres mouvements. Les porcs sont
 /// retirés en priorité des cases où des entrées de la même bande sont tracées.
 /// Si l'origine détaillée manque, un mouvement « origine non renseignée »
@@ -6042,13 +6050,7 @@ async fn economique_import_confirmer(
         applied += 1;
     }
     for reference in cleared_apports {
-        let sales: Vec<(
-            i64,
-            Option<String>,
-            Option<i64>,
-            Option<i64>,
-            Option<String>,
-        )> = sqlx::query_as(
+        let sales: Vec<SaleMovementRow> = sqlx::query_as(
             "SELECT id,date,bande_id,nb_porcs,lots_json FROM venteapport WHERE num_apport=?",
         )
         .bind(&reference)
