@@ -6652,11 +6652,11 @@ async fn vente_directe_commandes(
     Extension(session): Extension<SessionData>,
 ) -> AppResult<Html<String>> {
     require_writer(&session)?;
-    let orders = match generic_rows(&state.pool,"SELECT c.id,c.cree_le,c.nom_client,c.telephone,c.email,c.notes,c.statut,c.total,c.session_vente_id,s.nom AS session_nom,(SELECT GROUP_CONCAT(l.nom_produit||' × '||l.quantite,', ') FROM lignecommandeventedirecte l WHERE l.commande_id=c.id) AS lignes FROM commandeventedirecte c LEFT JOIN sessionventedirecte s ON s.id=c.session_vente_id ORDER BY c.cree_le DESC,c.id DESC LIMIT 500").await {
+    let orders = match generic_rows(&state.pool,"SELECT c.id,c.cree_le,c.nom_client,c.telephone,c.email,c.notes,c.statut,c.total,c.session_vente_id,s.nom AS session_nom,(SELECT GROUP_CONCAT(l.nom_produit||' × '||l.quantite||' '||l.unite,', ') FROM lignecommandeventedirecte l WHERE l.commande_id=c.id) AS lignes,ROUND(COALESCE((SELECT SUM(l.quantite) FROM lignecommandeventedirecte l WHERE l.commande_id=c.id AND lower(trim(l.unite)) IN ('kg','kilogramme','kilogrammes','kilo','kilos')),0),2) AS kg_commandes FROM commandeventedirecte c LEFT JOIN sessionventedirecte s ON s.id=c.session_vente_id ORDER BY c.cree_le DESC,c.id DESC LIMIT 500").await {
         Ok(rows) => rows,
         Err(error) => {
             tracing::warn!(%error, "lecture complète des commandes impossible, affichage de secours");
-            generic_rows(&state.pool,"SELECT id,cree_le,nom_client,telephone,email,notes,statut,total,NULL AS session_vente_id,NULL AS session_nom,'Détail disponible dans Modifier' AS lignes FROM commandeventedirecte ORDER BY id DESC LIMIT 500").await?
+            generic_rows(&state.pool,"SELECT id,cree_le,nom_client,telephone,email,notes,statut,total,NULL AS session_vente_id,NULL AS session_nom,'Détail disponible dans Modifier' AS lignes,0 AS kg_commandes FROM commandeventedirecte ORDER BY id DESC LIMIT 500").await?
         }
     };
     let sessions = generic_rows(
@@ -7211,10 +7211,30 @@ async fn vente_commande_imprimer(
     let Some(order) = order.into_iter().next() else {
         return Err(AppError::NotFound);
     };
-    let lines=generic_rows(&state.pool,&format!("SELECT nom_produit,prix_unitaire,unite,quantite,total_ligne FROM lignecommandeventedirecte WHERE commande_id={id} ORDER BY id")).await?;
+    let lines=generic_rows(&state.pool,&format!("SELECT nom_produit,prix_unitaire,unite,quantite,CASE WHEN lower(trim(unite)) IN ('kg','kilogramme','kilogrammes','kilo','kilos') THEN quantite ELSE NULL END AS poids_kg,total_ligne FROM lignecommandeventedirecte WHERE commande_id={id} ORDER BY id")).await?;
+    let totals = generic_rows(
+        &state.pool,
+        &format!(
+            "SELECT COUNT(*) AS lignes,ROUND(COALESCE(SUM(CASE WHEN lower(trim(unite)) IN ('kg','kilogramme','kilogrammes','kilo','kilos') THEN quantite ELSE 0 END),0),2) AS poids_kg,ROUND(COALESCE(SUM(CASE WHEN lower(trim(unite)) NOT IN ('kg','kilogramme','kilogrammes','kilo','kilos') THEN quantite ELSE 0 END),0),2) AS autres_unites,ROUND(COALESCE(SUM(total_ligne),0),2) AS montant FROM lignecommandeventedirecte WHERE commande_id={id}"
+        ),
+    )
+    .await?
+    .into_iter()
+    .next()
+    .unwrap_or_else(|| json!({"lignes":0,"poids_kg":0,"autres_unites":0,"montant":0}));
+    let farm = generic_rows(
+        &state.pool,
+        "SELECT MAX(CASE WHEN cle='nom_elevage' THEN valeur END) AS nom,MAX(CASE WHEN cle='adresse_elevage' THEN valeur END) AS adresse,MAX(CASE WHEN cle='telephone_elevage' THEN valeur END) AS telephone,MAX(CASE WHEN cle='email_elevage' THEN valeur END) AS email FROM parametre",
+    )
+    .await?
+    .into_iter()
+    .next()
+    .unwrap_or_else(|| json!({}));
     let mut ctx = context(&session);
     ctx.insert("commande".into(), order);
     ctx.insert("lignes".into(), Value::Array(lines));
+    ctx.insert("totaux".into(), totals);
+    ctx.insert("elevage".into(), farm);
     render(&state, "vente_commande_impression.html", Value::Object(ctx))
 }
 

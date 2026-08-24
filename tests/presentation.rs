@@ -77,7 +77,24 @@ fn accueil_visualise_le_cycle_et_saisie_rapide_propose_la_mise_bas() {
     assert!(dashboard.contains("Conduite des bandes"));
     assert!(dashboard.contains("class=\"band-stage-code\""));
     assert!(base.contains("/static/style.css?v={{ app_version }}"));
-    assert!(styles.contains("v2.2.25 — flux des bandes"));
+    assert!(styles.contains("v2.2.26 — bon de commande client"));
+}
+
+#[test]
+fn version_226_imprime_un_bon_de_commande_client_complet() {
+    let routes = include_str!("../src/routes/mod.rs");
+    let orders = include_str!("../templates/vente_directe_commandes.html");
+    let print = include_str!("../templates/vente_commande_impression.html");
+
+    assert!(orders.contains(">Bon de commande</a>"));
+    assert!(orders.contains("kg commandés"));
+    assert!(routes.contains("AS poids_kg"));
+    assert!(routes.contains("adresse_elevage"));
+    assert!(print.contains("Produit commandé"));
+    assert!(print.contains("Poids commandé"));
+    assert!(print.contains("Prix unitaire"));
+    assert!(print.contains("TOTAL À RÉGLER"));
+    assert!(print.contains("window.print()"));
 }
 
 #[test]

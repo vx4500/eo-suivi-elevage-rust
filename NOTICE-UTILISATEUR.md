@@ -1,6 +1,6 @@
 # Notice utilisateur — EO‑Suivi Élevage
 
-Version de la notice : 2.2.25 — mise à jour le 24 août 2026.
+Version de la notice : 2.2.26 — mise à jour le 24 août 2026.
 
 Cette notice doit être relue à chaque livraison. Toute fonction ajoutée ou
 modifiée doit être inscrite dans la section « Nouveautés de la version » avant
@@ -43,6 +43,13 @@ doit donc pas compter deux fois la sortie.
   case.
 - Pour une délivrance NOK, consulter la fiche truie et traiter les lignes
   marquées **À suivre** selon le protocole de l'élevage.
+
+## Nouveautés de la version 2.2.26
+
+- Le bouton « Bon de commande » de chaque commande client ouvre un document A4 prêt à imprimer.
+- Le document présente l’élevage, le client, la session, la date de livraison, chaque produit, son unité, la quantité, le poids en kilogrammes, le prix unitaire et le montant de ligne.
+- Le récapitulatif indique le poids total commandé, les autres unités et le montant total à régler.
+- Des cases de préparation et des emplacements de signature ou règlement facilitent la remise au client.
 
 ## Nouveautés de la version 2.2.25
 

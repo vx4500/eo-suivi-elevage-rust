@@ -1,5 +1,5 @@
 {% extends "base.html" %}{% block content %}
-<p><a href="/vente-directe/commandes">← Retour aux commandes</a> · <a href="/vente-directe/commande/{{ commande.id }}/imprimer" target="_blank">Imprimer</a></p>
+<p><a href="/vente-directe/commandes">← Retour aux commandes</a> · <a href="/vente-directe/commande/{{ commande.id }}/imprimer" target="_blank">Imprimer le bon de commande</a></p>
 <h1>Modifier la commande n° {{ commande.id }}</h1>
 <form class="card" method="post" action="/vente-directe/commande/{{ commande.id }}/modifier">
   <input type="hidden" name="csrf_token" value="{{ session.csrf }}">
