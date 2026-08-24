@@ -28,6 +28,10 @@ pub fn build() -> anyhow::Result<Environment<'static>> {
         include_str!("../templates/vente_directe.html"),
     )?;
     env.add_template(
+        "vente_directe_commandes.html",
+        include_str!("../templates/vente_directe_commandes.html"),
+    )?;
+    env.add_template(
         "vente_commande_modifier.html",
         include_str!("../templates/vente_commande_modifier.html"),
     )?;

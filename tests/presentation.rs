@@ -77,7 +77,7 @@ fn accueil_visualise_le_cycle_et_saisie_rapide_propose_la_mise_bas() {
     assert!(dashboard.contains("Conduite des bandes"));
     assert!(dashboard.contains("class=\"band-stage-code\""));
     assert!(base.contains("/static/style.css?v={{ app_version }}"));
-    assert!(styles.contains("v2.2.22 — modules lisibles"));
+    assert!(styles.contains("v2.2.23 — modèle commandes"));
 }
 
 #[test]
@@ -175,4 +175,15 @@ fn version_222_ordonne_bandes_et_rend_vente_facultative() {
     assert!(settings.contains("class=\"module-option\""));
     assert!(settings.contains("Informations de l’élevage"));
     assert!(navigation.contains("{% if session.module_vente_directe %}"));
+}
+
+#[test]
+fn commandes_clients_est_enregistree_et_journalise_avec_date() {
+    let templates = include_str!("../src/templates.rs");
+    let database = include_str!("../src/db.rs");
+
+    assert!(templates.contains("\"vente_directe_commandes.html\","));
+    assert!(templates.contains("include_str!(\"../templates/vente_directe_commandes.html\")"));
+    assert!(database.contains("journal(horodatage,utilisateur"));
+    assert!(database.contains("VALUES(CURRENT_TIMESTAMP,?,?,?,?,?)"));
 }

@@ -193,7 +193,7 @@ pub async fn journal(
     chemin: &str,
 ) {
     if let Err(error) =
-        sqlx::query("INSERT INTO journal(utilisateur,action,objet,detail,chemin) VALUES(?,?,?,?,?)")
+        sqlx::query("INSERT INTO journal(horodatage,utilisateur,action,objet,detail,chemin) VALUES(CURRENT_TIMESTAMP,?,?,?,?,?)")
             .bind(utilisateur)
             .bind(action)
             .bind(objet)

@@ -1,4 +1,4 @@
-# EO-Suivi Élevage — portage Rust 2.2.22
+# EO-Suivi Élevage — portage Rust 2.2.23
 
 Cette archive reprend la base EO-Suivi 1.65 sous forme d'un serveur Rust. Elle
 n'utilise plus FastAPI, SQLModel, Uvicorn ni Python pour les fonctions déjà
