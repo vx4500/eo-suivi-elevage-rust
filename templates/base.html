@@ -152,7 +152,7 @@
         <select name="case_id" id="fab-case" disabled><option value="">— aucune / sous la mère —</option></select>
       </label>
       <label>Cause
-        <select name="cause" disabled><option>Écrasement</option><option>Chétif / non conforme</option><option>Diarrhée</option><option>Respiratoire</option><option>Mort subite</option><option>Boiterie</option><option>Autre</option></select>
+        <select name="cause" id="fab-cause" disabled><option>Chargement des causes configurées…</option></select>
       </label>
       <label>Âge (jours)<input name="age_j" inputmode="numeric" min="0" disabled></label>
       <label>Poids (kg)<input name="poids" inputmode="decimal" disabled></label>
@@ -390,6 +390,11 @@
   }).catch(function(){});
   var now=new Date(); now.setMinutes(now.getMinutes()-now.getTimezoneOffset());
   document.getElementById('fab-date').value=now.toISOString().slice(0,10);
+  fetch('/api/causes-perte',{credentials:'same-origin'}).then(function(response){return response.ok?response.json():Promise.reject();}).then(function(data){
+    var cause=document.getElementById('fab-cause'), rows=data.causes||[]; cause.replaceChildren();
+    rows.forEach(function(row){cause.add(new Option(row.libelle,row.libelle));});
+    if(!rows.length){cause.add(new Option('Autre','Autre'));}
+  }).catch(function(){var cause=document.getElementById('fab-cause');cause.replaceChildren(new Option('Autre','Autre'));});
   function chooseType(type,chosen){
     typeInput.value=type;
     document.querySelectorAll('.fab-t').forEach(function(item){item.classList.toggle('on',item===chosen);});

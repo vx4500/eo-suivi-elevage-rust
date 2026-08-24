@@ -127,6 +127,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/bande/{id}", get(api_bande_json))
         .route("/api/cases", get(api_cases))
         .route("/api/cases-capacity", get(api_cases_capacity))
+        .route("/api/causes-perte", get(api_causes_perte))
         .route("/energie", get(energie))
         .route("/aliment-previsions", get(aliment_previsions))
         .route("/aliment-previsions/silo", post(silo_ajouter))
@@ -208,6 +209,10 @@ pub fn router(state: AppState) -> Router {
         .route("/vente-directe/commandes", get(vente_directe_commandes))
         .route("/vente-directe/produit-ajouter", post(produit_ajouter))
         .route("/vente-directe/produit/{id}", post(produit_modifier))
+        .route(
+            "/vente-directe/produit/{id}/image",
+            get(produit_image).post(produit_image_maj),
+        )
         .route(
             "/vente-directe/produit/{id}/inventaire",
             post(produit_inventaire),
@@ -343,6 +348,7 @@ pub fn router(state: AppState) -> Router {
         .route("/vente-directe/sessions", get(vente_sessions))
         .route("/reglages", get(reglages))
         .route("/parametres", get(parametres))
+        .route("/parametres/conduite-bandes", post(conduite_bandes_maj))
         .route("/correctifs", get(correctifs))
         .route("/apropos", get(apropos))
         .route("/contact", get(contact))
@@ -703,6 +709,15 @@ async fn api_bande_sevrage_estimate(
     Ok(axum::Json(
         json!({"band_id": id, "total_expected": total, "truies": list}),
     ))
+}
+
+async fn api_causes_perte(State(state): State<AppState>) -> AppResult<axum::Json<Value>> {
+    let causes = generic_rows(
+        &state.pool,
+        "SELECT id,libelle FROM causeperte ORDER BY libelle COLLATE NOCASE",
+    )
+    .await?;
+    Ok(axum::Json(json!({"causes": causes})))
 }
 
 // Fournit la capacité et l'occupation actuelle par case (pour affichage côté client)
@@ -1567,6 +1582,22 @@ async fn bandes(
     ctx.insert(
         "bandes".into(),
         serde_json::to_value(views).unwrap_or_default(),
+    );
+    let nombre_bandes: i64 = sqlx::query_scalar(
+        "SELECT CAST(valeur AS INTEGER) FROM parametre WHERE cle='nombre_bandes'",
+    )
+    .fetch_optional(&state.pool)
+    .await?
+    .unwrap_or(3);
+    let intervalle_bandes_j: i64 = sqlx::query_scalar(
+        "SELECT CAST(valeur AS INTEGER) FROM parametre WHERE cle='intervalle_bandes_j'",
+    )
+    .fetch_optional(&state.pool)
+    .await?
+    .unwrap_or(49);
+    ctx.insert(
+        "conduite_bandes".into(),
+        json!({"nombre":nombre_bandes,"intervalle_j":intervalle_bandes_j}),
     );
     render(&state, "bandes.html", Value::Object(ctx))
 }
@@ -6303,7 +6334,7 @@ async fn vente_directe(
     Query(query): Query<HashMap<String, String>>,
 ) -> AppResult<Html<String>> {
     require_writer(&session)?;
-    let products=generic_rows(&state.pool,"SELECT id,nom,prix,unite,actif,ordre,quantite_disponible FROM produitventedirecte ORDER BY ordre,nom").await?;
+    let products=generic_rows(&state.pool,"SELECT id,nom,prix,unite,actif,ordre,quantite_disponible,image_mime FROM produitventedirecte ORDER BY ordre,nom").await?;
     let sessions = generic_rows(
         &state.pool,
         "SELECT id,nom,date_livraison,active FROM sessionventedirecte ORDER BY active DESC,id DESC",
@@ -6435,6 +6466,68 @@ async fn produit_modifier(
         .bind(price)
         .bind(unit)
         .bind(form.contains_key("actif"))
+        .bind(id)
+        .execute(&state.pool)
+        .await?;
+    Ok(Redirect::to("/vente-directe#produits").into_response())
+}
+
+async fn produit_image(State(state): State<AppState>, Path(id): Path<i64>) -> AppResult<Response> {
+    let image: Option<(Vec<u8>, String)> = sqlx::query_as(
+        "SELECT image_data,image_mime FROM produitventedirecte WHERE id=? AND image_data IS NOT NULL AND image_mime IS NOT NULL",
+    )
+    .bind(id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((bytes, mime)) = image else {
+        return Err(AppError::NotFound);
+    };
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_str(&mime).map_err(|_| AppError::Invalid("Image invalide".into()))?,
+    );
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=3600"),
+    );
+    Ok((headers, bytes).into_response())
+}
+
+async fn produit_image_maj(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Path(id): Path<i64>,
+    multipart: Multipart,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    let (form, file, _) = parity::multipart_fields(multipart, "image").await?;
+    verify_csrf(&session, &form)?;
+    if form.contains_key("supprimer_image") {
+        sqlx::query("UPDATE produitventedirecte SET image_data=NULL,image_mime=NULL WHERE id=?")
+            .bind(id)
+            .execute(&state.pool)
+            .await?;
+        return Ok(Redirect::to("/vente-directe#produits").into_response());
+    }
+    let bytes = file.ok_or_else(|| AppError::Invalid("Image obligatoire".into()))?;
+    if bytes.len() > 5 * 1024 * 1024 {
+        return Err(AppError::Invalid("Image limitée à 5 Mo".into()));
+    }
+    let mime = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        "image/png"
+    } else if bytes.starts_with(b"\xff\xd8\xff") {
+        "image/jpeg"
+    } else if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        "image/webp"
+    } else {
+        return Err(AppError::Invalid(
+            "Format refusé : utilisez une image JPEG, PNG ou WebP".into(),
+        ));
+    };
+    sqlx::query("UPDATE produitventedirecte SET image_data=?,image_mime=? WHERE id=?")
+        .bind(bytes)
+        .bind(mime)
         .bind(id)
         .execute(&state.pool)
         .await?;
@@ -6889,7 +6982,7 @@ async fn commande_page(
     State(state): State<AppState>,
     Query(query): Query<HashMap<String, String>>,
 ) -> AppResult<Html<String>> {
-    let products=sqlx::query_as::<_,ProduitVenteDirecte>("SELECT id,nom,prix,unite,actif,ordre,quantite_disponible FROM produitventedirecte WHERE actif=1 AND (quantite_disponible IS NULL OR quantite_disponible>0) ORDER BY ordre,nom").fetch_all(&state.pool).await?;
+    let products=sqlx::query_as::<_,ProduitVenteDirecte>("SELECT id,nom,prix,unite,actif,ordre,quantite_disponible,image_mime FROM produitventedirecte WHERE actif=1 AND (quantite_disponible IS NULL OR quantite_disponible>0) ORDER BY ordre,nom").fetch_all(&state.pool).await?;
     let settings = generic_rows(
         &state.pool,
         "SELECT date_livraison,texte_livraison,commandes_ouvertes,message_fermeture FROM reglageventedirecte WHERE id=1",
@@ -6929,7 +7022,7 @@ async fn commande_post(
     if commandes_ouvertes == 0 {
         return Ok(Redirect::to("/commande?err=fermee").into_response());
     }
-    let products=sqlx::query_as::<_,ProduitVenteDirecte>("SELECT id,nom,prix,unite,actif,ordre,quantite_disponible FROM produitventedirecte WHERE actif=1 ORDER BY ordre,nom").fetch_all(&mut *tx).await?;
+    let products=sqlx::query_as::<_,ProduitVenteDirecte>("SELECT id,nom,prix,unite,actif,ordre,quantite_disponible,image_mime FROM produitventedirecte WHERE actif=1 ORDER BY ordre,nom").fetch_all(&mut *tx).await?;
     let mut lines = Vec::new();
     let mut total = 0.0;
     for product in products {
@@ -9079,9 +9172,67 @@ async fn parametres(
     ctx.insert("reglages".into(), Value::Array(settings));
     ctx.insert("plans_aliment".into(), Value::Array(feed));
     ctx.insert("causes".into(), Value::Array(causes));
+    let nombre_bandes: i64 = sqlx::query_scalar(
+        "SELECT CAST(valeur AS INTEGER) FROM parametre WHERE cle='nombre_bandes'",
+    )
+    .fetch_optional(&state.pool)
+    .await?
+    .unwrap_or(3);
+    let intervalle_bandes_j: i64 = sqlx::query_scalar(
+        "SELECT CAST(valeur AS INTEGER) FROM parametre WHERE cle='intervalle_bandes_j'",
+    )
+    .fetch_optional(&state.pool)
+    .await?
+    .unwrap_or(49);
+    let gestation = reglage_i64(&state.pool, "gestation", 115).await?;
+    let sevrage = reglage_i64(&state.pool, "sevrage", 28).await?;
+    let retour_chaleur = reglage_i64(&state.pool, "chaleur_post_sevrage_j", 5).await?;
+    ctx.insert(
+        "conduite_bandes".into(),
+        json!({"nombre":nombre_bandes,"intervalle_j":intervalle_bandes_j,"cycle_j":gestation+sevrage+retour_chaleur}),
+    );
     ctx.insert("demo_actif".into(), json!(demo > 0));
     ctx.insert("types_elevage".into(), Value::Array(types_elevage));
     render(&state, "parametres.html", Value::Object(ctx))
+}
+
+async fn conduite_bandes_maj(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    if !session.est_admin() {
+        return Err(AppError::Forbidden);
+    }
+    verify_csrf(&session, &form)?;
+    let nombre = form_i64(&form, "nombre_bandes")
+        .filter(|value| [3, 4, 5, 7, 10, 20, 21].contains(value))
+        .ok_or_else(|| AppError::Invalid("Nombre de bandes non reconnu".into()))?;
+    let intervalle = form_i64(&form, "intervalle_bandes_j")
+        .filter(|value| (7..=70).contains(value))
+        .ok_or_else(|| AppError::Invalid("Intervalle entre bandes invalide".into()))?;
+    let mut tx = state.pool.begin().await?;
+    for (key, value) in [
+        ("nombre_bandes", nombre),
+        ("intervalle_bandes_j", intervalle),
+    ] {
+        sqlx::query("INSERT INTO parametre(cle,valeur) VALUES(?,?) ON CONFLICT(cle) DO UPDATE SET valeur=excluded.valeur")
+            .bind(key)
+            .bind(value.to_string())
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    db::journal(
+        &state.pool,
+        &session.nom,
+        "modifier",
+        "conduite_bandes",
+        &format!("{nombre} bandes, intervalle {intervalle} jours"),
+        "/parametres/conduite-bandes",
+    )
+    .await;
+    Ok(Redirect::to("/parametres#conduite-bandes").into_response())
 }
 
 async fn correctifs(

@@ -1,6 +1,6 @@
 # Notice utilisateur — EO‑Suivi Élevage
 
-Version de la notice : 2.2.19 — mise à jour le 24 août 2026.
+Version de la notice : 2.2.20 — mise à jour le 24 août 2026.
 
 Cette notice doit être relue à chaque livraison. Toute fonction ajoutée ou
 modifiée doit être inscrite dans la section « Nouveautés de la version » avant
@@ -43,6 +43,15 @@ doit donc pas compter deux fois la sortie.
   case.
 - Pour une délivrance NOK, consulter la fiche truie et traiter les lignes
   marquées **À suivre** selon le protocole de l'élevage.
+
+## Nouveautés de la version 2.2.20
+
+- Gestion paramétrable des conduites en 3, 4, 5, 7, 10, 20 ou 21 bandes, avec intervalle ajustable.
+- Date de mise-bas visible à côté du nom de bande et résultats pondérés arrondis à deux décimales.
+- Jours de transition des plans d’alimentation modifiables directement dans le tableau.
+- Causes de pertes de la saisie rapide synchronisées avec les paramètres.
+- Assistant de résolution des problèmes progressif, organisé par stade et question par question.
+- Images JPEG, PNG ou WebP importables pour les produits de la page de commande client.
 
 ## Nouveautés de la version 2.2.19
 

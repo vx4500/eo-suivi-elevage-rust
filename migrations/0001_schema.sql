@@ -479,7 +479,9 @@ CREATE TABLE IF NOT EXISTS produitventedirecte (
     unite TEXT NOT NULL DEFAULT 'kg',
     actif INTEGER NOT NULL DEFAULT 1,
     ordre INTEGER NOT NULL DEFAULT 0,
-    quantite_disponible REAL
+    quantite_disponible REAL,
+    image_data BLOB,
+    image_mime TEXT
 );
 
 CREATE TABLE IF NOT EXISTS reglageventedirecte (

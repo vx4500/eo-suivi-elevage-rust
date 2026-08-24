@@ -390,7 +390,7 @@ details[open] summary{margin-bottom:10px}
 @media(max-width:420px){.home-action{flex-basis:100%}.home-kpis .v{font-size:1.25rem}.fab-mini-grid{grid-template-columns:1fr}}
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}
 
-/* v2.2.19 — résolution sanitaire, mise à jour web et démonstration enrichie */
+/* v2.2.20 — conduite en bandes, assistant progressif et visuels produits */
 :root{
   --pilot-navy:#172820;
   --pilot-green:#245b43;

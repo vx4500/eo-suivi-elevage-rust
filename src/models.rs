@@ -97,6 +97,7 @@ pub struct ProduitVenteDirecte {
     pub actif: bool,
     pub ordre: i64,
     pub quantite_disponible: Option<f64>,
+    pub image_mime: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, FromRow)]

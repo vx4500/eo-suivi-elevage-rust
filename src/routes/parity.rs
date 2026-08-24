@@ -814,7 +814,7 @@ pub(super) async fn maj_lancer(
     Ok(Redirect::to("/maj?demande=1").into_response())
 }
 
-async fn multipart_fields(
+pub(super) async fn multipart_fields(
     mut multipart: Multipart,
     file_name: &str,
 ) -> AppResult<(HashMap<String, String>, Option<Vec<u8>>, Option<String>)> {

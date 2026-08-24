@@ -1,5 +1,6 @@
 {% extends "base.html" %}{% block content %}
 <h1>Bandes</h1>
+<div class="card"><b>Conduite configurée : {{ conduite_bandes.nombre }} bandes</b> · intervalle {{ conduite_bandes.intervalle_j }} jours. <a href="/parametres#conduite-bandes">Modifier la conduite</a></div>
 {% if session.peut_modifier %}<form class="card rust-actions" method="post" action="/bandes/ajouter">
   <input type="hidden" name="csrf_token" value="{{ session.csrf }}">
   <label>Code<input name="code" required></label><label>N° marquage<input name="num_officiel" placeholder="ex. FR35G6K07"></label>
@@ -9,7 +10,7 @@
 {% for l in bandes %}<form id="bf{{ l.id }}" method="post" action="/bandes/{{ l.id }}/modifier-rapide" hidden><input type="hidden" name="csrf_token" value="{{ session.csrf }}"></form>{% endfor %}{% endif %}
 <div class="rust-scroll"><table><thead><tr><th>Bande</th><th>N° marquage</th><th>Mise-bas</th><th>Site</th><th>Stade</th><th>Truies</th><th></th></tr></thead><tbody>
 {% for l in bandes %}<tr>
-<td><a href="/bande/{{ l.id }}"><b>{{ l.code }}</b></a></td>
+<td><a href="/bande/{{ l.id }}"><b>{{ l.code }}</b></a>{% if l.date_mb %}<br><small class="muted">Mise-bas {{ l.date_mb|date_fr }}</small>{% endif %}</td>
 <td>{% if session.peut_modifier %}<input form="bf{{ l.id }}" name="num_officiel" value="{{ l.num_officiel or '' }}" placeholder="ex. FR35G6K07">{% else %}{{ l.num_officiel or '—' }}{% endif %}</td>
 <td>{% if session.peut_modifier %}<input form="bf{{ l.id }}" type="date" name="date_mb" value="{{ l.date_mb or '' }}">{% else %}{{ l.date_mb|date_fr }}{% endif %}</td>
 <td>{% if session.peut_modifier %}<input form="bf{{ l.id }}" name="site" value="{{ l.site or '' }}">{% else %}{{ l.site or '—' }}{% endif %}</td>

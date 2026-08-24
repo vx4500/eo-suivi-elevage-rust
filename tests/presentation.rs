@@ -77,7 +77,7 @@ fn accueil_visualise_le_cycle_et_saisie_rapide_propose_la_mise_bas() {
     assert!(dashboard.contains("Conduite des bandes"));
     assert!(dashboard.contains("class=\"band-stage-code\""));
     assert!(base.contains("/static/style.css?v={{ app_version }}"));
-    assert!(styles.contains("v2.2.19 — résolution sanitaire"));
+    assert!(styles.contains("v2.2.20 — conduite en bandes"));
 }
 
 #[test]
@@ -105,6 +105,24 @@ fn vente_directe_classe_les_produits_et_peut_fermer_les_commandes() {
     assert!(customer.contains("⏹ Fin de la vente"));
     assert!(customer.contains("{% if not reglage.commandes_ouvertes %}"));
     assert!(migration.contains("commandes_ouvertes INTEGER NOT NULL DEFAULT 1"));
+}
+
+#[test]
+fn version_220_gere_bandes_causes_assistant_et_images() {
+    let routes = include_str!("../src/routes/mod.rs");
+    let bands = include_str!("../templates/bandes.html");
+    let settings = include_str!("../templates/parametres.html");
+    let quick = include_str!("../templates/base.html");
+    let assistant = include_str!("../templates/resolution_problemes.html");
+    let products = include_str!("../templates/vente_directe.html");
+
+    assert!(bands.contains("Mise-bas {{ l.date_mb|date_fr }}"));
+    assert!(settings.contains("/parametres/conduite-bandes"));
+    assert!(settings.contains("/parametres/aliment/{{ p.id }}/modifier"));
+    assert!(quick.contains("/api/causes-perte"));
+    assert!(assistant.contains("Question '+(index+1)+' sur '"));
+    assert!(routes.contains("image_data,image_mime"));
+    assert!(products.contains("accept=\"image/jpeg,image/png,image/webp\""));
 }
 
 #[test]
