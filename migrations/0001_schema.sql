@@ -502,7 +502,8 @@ CREATE TABLE IF NOT EXISTS sessionventedirecte (
     bande_reference TEXT,
     active INTEGER NOT NULL DEFAULT 1,
     notes TEXT,
-    date_cloture TEXT
+    date_cloture TEXT,
+    date_limite_commandes TEXT
 );
 
 CREATE TABLE IF NOT EXISTS coutelevageventedirecte (
@@ -513,7 +514,13 @@ CREATE TABLE IF NOT EXISTS coutelevageventedirecte (
     maternite REAL NOT NULL DEFAULT 0,
     post_sevrage REAL NOT NULL DEFAULT 0,
     engraissement REAL NOT NULL DEFAULT 0,
-    veto_autres REAL NOT NULL DEFAULT 0
+    veto_autres REAL NOT NULL DEFAULT 0,
+    bande_id INTEGER REFERENCES bande(id),
+    nb_porcs_calcules INTEGER,
+    poids_moyen_kg REAL,
+    cout_par_porc REAL,
+    cout_par_kg REAL,
+    calcule_le TEXT
 );
 
 CREATE TABLE IF NOT EXISTS chargeventedirecte (
@@ -548,7 +555,10 @@ CREATE TABLE IF NOT EXISTS commandeventedirecte (
     email TEXT,
     notes TEXT,
     statut TEXT NOT NULL DEFAULT 'nouvelle',
-    total REAL NOT NULL DEFAULT 0
+    total REAL NOT NULL DEFAULT 0,
+    token_modification TEXT,
+    code_modification TEXT,
+    recap_envoye_le TEXT
 );
 
 CREATE TABLE IF NOT EXISTS reglagecommunicationventedirecte (

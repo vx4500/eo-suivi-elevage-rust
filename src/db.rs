@@ -88,6 +88,9 @@ pub async fn init(pool: &SqlitePool) -> anyhow::Result<()> {
             "TEXT NOT NULL DEFAULT 'nouvelle'",
         ),
         ("commandeventedirecte", "total", "REAL NOT NULL DEFAULT 0"),
+        ("commandeventedirecte", "token_modification", "TEXT"),
+        ("commandeventedirecte", "code_modification", "TEXT"),
+        ("commandeventedirecte", "recap_envoye_le", "TEXT"),
         (
             "sessionventedirecte",
             "nom",
@@ -108,6 +111,13 @@ pub async fn init(pool: &SqlitePool) -> anyhow::Result<()> {
         ),
         ("sessionventedirecte", "notes", "TEXT"),
         ("sessionventedirecte", "date_cloture", "TEXT"),
+        ("sessionventedirecte", "date_limite_commandes", "TEXT"),
+        ("coutelevageventedirecte", "bande_id", "INTEGER"),
+        ("coutelevageventedirecte", "nb_porcs_calcules", "INTEGER"),
+        ("coutelevageventedirecte", "poids_moyen_kg", "REAL"),
+        ("coutelevageventedirecte", "cout_par_porc", "REAL"),
+        ("coutelevageventedirecte", "cout_par_kg", "REAL"),
+        ("coutelevageventedirecte", "calcule_le", "TEXT"),
         (
             "reglageventedirecte",
             "commandes_ouvertes",
@@ -123,6 +133,13 @@ pub async fn init(pool: &SqlitePool) -> anyhow::Result<()> {
     ] {
         ensure_column(pool, table, column, definition).await?;
     }
+
+    sqlx::query("UPDATE commandeventedirecte SET token_modification=lower(hex(randomblob(32))) WHERE token_modification IS NULL OR trim(token_modification)=''")
+        .execute(pool)
+        .await?;
+    sqlx::query("UPDATE commandeventedirecte SET code_modification=upper(substr(hex(randomblob(8)),1,8)) WHERE code_modification IS NULL OR trim(code_modification)=''")
+        .execute(pool)
+        .await?;
 
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM utilisateur")
         .fetch_one(pool)

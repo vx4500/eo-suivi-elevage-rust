@@ -77,7 +77,30 @@ fn accueil_visualise_le_cycle_et_saisie_rapide_propose_la_mise_bas() {
     assert!(dashboard.contains("Conduite des bandes"));
     assert!(dashboard.contains("class=\"band-stage-code\""));
     assert!(base.contains("/static/style.css?v={{ app_version }}"));
-    assert!(styles.contains("v2.2.26 — bon de commande client"));
+    assert!(styles.contains("v2.2.27 — coûts d'élevage"));
+}
+
+#[test]
+fn version_227_calcule_les_couts_et_permet_la_modification_client() {
+    let routes = include_str!("../src/routes/mod.rs");
+    let communications = include_str!("../src/routes/parity.rs");
+    let sessions = include_str!("../templates/vente_sessions.html");
+    let confirmation = include_str!("../templates/commande_confirmation.html");
+    let edit = include_str!("../templates/commande_client_modifier.html");
+    let schema = include_str!("../migrations/0001_schema.sql");
+
+    assert!(routes.contains("/vente-directe/session/{id}/cout-calculer"));
+    assert!(routes.contains("/commande/modifier/{token}"));
+    assert!(routes.contains("date_limite_commandes IS NULL OR date('now')"));
+    assert!(sessions.contains("coût d’élevage"));
+    assert!(sessions.contains("par porc"));
+    assert!(sessions.contains("par kg"));
+    assert!(confirmation.contains("code personnel"));
+    assert!(edit.contains("Enregistrer toute la commande"));
+    assert!(communications.contains("envoyer_recap_commande"));
+    assert!(schema.contains("token_modification TEXT"));
+    assert!(schema.contains("cout_par_porc REAL"));
+    assert!(schema.contains("cout_par_kg REAL"));
 }
 
 #[test]

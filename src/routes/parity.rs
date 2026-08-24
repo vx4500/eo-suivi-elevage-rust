@@ -1630,6 +1630,103 @@ async fn log_message(
     Ok(())
 }
 
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+pub(super) struct RecapCommande<'a> {
+    pub order_id: i64,
+    pub client_id: Option<i64>,
+    pub destinataire: &'a str,
+    pub nom_client: &'a str,
+    pub token: &'a str,
+    pub code: &'a str,
+    pub total: f64,
+    pub lignes: &'a [(String, f64, String, f64)],
+}
+
+pub(super) async fn envoyer_recap_commande(
+    pool: &SqlitePool,
+    recap: RecapCommande<'_>,
+) -> AppResult<()> {
+    let RecapCommande {
+        order_id,
+        client_id,
+        destinataire,
+        nom_client,
+        token,
+        code,
+        total,
+        lignes,
+    } = recap;
+    let settings = comm_settings(pool).await?;
+    let public_url: Option<String> =
+        sqlx::query_scalar("SELECT valeur FROM parametre WHERE cle='public_url'")
+            .fetch_optional(pool)
+            .await?;
+    let path = format!("/commande/modifier/{token}");
+    let link = public_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| format!("{}{path}", value.trim_end_matches('/')))
+        .unwrap_or(path);
+    let mut list = String::new();
+    for (product, quantity, unit, amount) in lignes {
+        list.push_str(&format!(
+            "<li><strong>{}</strong> — {:.2} {} — {:.2} €</li>",
+            escape_html(product),
+            quantity,
+            escape_html(unit),
+            amount
+        ));
+    }
+    let content = format!(
+        "<h1>Récapitulatif de votre commande n°{order_id}</h1><p>Bonjour {},</p><ul>{list}</ul><p><strong>Total : {total:.2} €</strong></p><h2>Modifier votre commande</h2><p>Utilisez le code <strong style=\"font-size:1.3em;letter-spacing:.12em\">{}</strong> jusqu’à la date limite de la vente.</p><p><a href=\"{}\">Consulter ou modifier ma commande</a></p><p>Après la date limite ou la clôture de la vente, le lien restera consultable mais les modifications seront bloquées.</p>",
+        escape_html(nom_client),
+        escape_html(code),
+        escape_html(&link)
+    );
+    let subject = format!("Votre commande n°{order_id} — récapitulatif et code");
+    let result = brevo_send(
+        &settings,
+        "email",
+        destinataire,
+        nom_client,
+        &subject,
+        &content,
+    )
+    .await;
+    sqlx::query("INSERT INTO messageventedirecte(commande_id,client_id,canal,type_message,destinataire,contenu,succes,detail) VALUES(?,?,'email','recap_commande',?,?,?,?)")
+        .bind(order_id)
+        .bind(client_id)
+        .bind(destinataire)
+        .bind(&content)
+        .bind(result.is_ok())
+        .bind(match &result { Ok(value) | Err(value) => value })
+        .execute(pool)
+        .await?;
+    match result {
+        Ok(_) => {
+            sqlx::query(
+                "UPDATE commandeventedirecte SET recap_envoye_le=CURRENT_TIMESTAMP WHERE id=?",
+            )
+            .bind(order_id)
+            .execute(pool)
+            .await?;
+            Ok(())
+        }
+        Err(error) => Err(AppError::Invalid(format!(
+            "Échec de l’envoi du récapitulatif : {error}"
+        ))),
+    }
+}
+
 pub(super) async fn communications(
     State(state): State<AppState>,
     Extension(session): Extension<SessionData>,

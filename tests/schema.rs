@@ -118,21 +118,45 @@ async fn schema_complet_et_ecritures_compatibles() -> anyhow::Result<()> {
     .fetch_one(&mut *tx)
     .await?;
     assert_eq!(preview_lines, 1);
-    let sale_session =
-        sqlx::query("INSERT INTO sessionventedirecte(nom,active) VALUES('Session test',1)")
+    let sale_session = sqlx::query(
+        "INSERT INTO sessionventedirecte(nom,active,date_limite_commandes) VALUES('Session test',1,'2026-08-31')",
+    )
             .execute(&mut *tx)
             .await?
             .last_insert_rowid();
-    sqlx::query("INSERT INTO coutelevageventedirecte(session_vente_id,semence) VALUES(?,10)")
+    sqlx::query("INSERT INTO coutelevageventedirecte(session_vente_id,semence,bande_id,nb_porcs_calcules,poids_moyen_kg,cout_par_porc,cout_par_kg,calcule_le) VALUES(?,10,?,10,90,1,0.011111,CURRENT_TIMESTAMP)")
         .bind(sale_session)
+        .bind(band)
         .execute(&mut *tx)
         .await?;
     sqlx::query("INSERT INTO chargeventedirecte(session_vente_id,categorie,libelle,montant) VALUES(?,'découpe','Découpe',25)")
         .bind(sale_session).execute(&mut *tx).await?;
     let product = sqlx::query("INSERT INTO produitventedirecte(nom,prix,unite,actif,ordre,quantite_disponible) VALUES('Colis test',12.5,'kg',1,1,10)")
         .execute(&mut *tx).await?.last_insert_rowid();
-    let order = sqlx::query("INSERT INTO commandeventedirecte(session_vente_id,nom_client,telephone,statut,total) VALUES(?,'Client test','0102030405','nouvelle',37.5)")
+    let order = sqlx::query("INSERT INTO commandeventedirecte(session_vente_id,nom_client,telephone,statut,total,token_modification,code_modification) VALUES(?,'Client test','0102030405','nouvelle',37.5,'token-client-test','ABC12345')")
         .bind(sale_session).execute(&mut *tx).await?.last_insert_rowid();
+    let client_access: (String, String, String) = sqlx::query_as(
+        "SELECT token_modification,code_modification,(SELECT date_limite_commandes FROM sessionventedirecte WHERE id=session_vente_id) FROM commandeventedirecte WHERE id=?",
+    )
+    .bind(order)
+    .fetch_one(&mut *tx)
+    .await?;
+    assert_eq!(
+        client_access,
+        (
+            "token-client-test".into(),
+            "ABC12345".into(),
+            "2026-08-31".into()
+        )
+    );
+    let unit_costs: (f64, f64) = sqlx::query_as(
+        "SELECT cout_par_porc,cout_par_kg FROM coutelevageventedirecte WHERE session_vente_id=?",
+    )
+    .bind(sale_session)
+    .fetch_one(&mut *tx)
+    .await?;
+    assert_eq!(unit_costs.0, 1.0);
+    assert!((unit_costs.1 - 0.011111).abs() < 0.000001);
     sqlx::query("INSERT INTO lignecommandeventedirecte(commande_id,produit_id,nom_produit,prix_unitaire,unite,quantite,total_ligne) VALUES(?,?,'Colis test',12.5,'kg',3,37.5)")
         .bind(order).bind(product).execute(&mut *tx).await?;
     sqlx::query(

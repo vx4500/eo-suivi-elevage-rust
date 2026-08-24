@@ -1,6 +1,6 @@
 # Notice utilisateur — EO‑Suivi Élevage
 
-Version de la notice : 2.2.26 — mise à jour le 24 août 2026.
+Version de la notice : 2.2.27 — mise à jour le 24 août 2026.
 
 Cette notice doit être relue à chaque livraison. Toute fonction ajoutée ou
 modifiée doit être inscrite dans la section « Nouveautés de la version » avant
@@ -43,6 +43,14 @@ doit donc pas compter deux fois la sortie.
   case.
 - Pour une délivrance NOK, consulter la fiche truie et traiter les lignes
   marquées **À suivre** selon le protocole de l'élevage.
+
+## Nouveautés de la version 2.2.27
+
+- Une session de vente calcule automatiquement le coût de production de la bande sélectionnée à partir des dépenses d’aliment, vétérinaires, de semence et de génétique qui lui sont rattachées.
+- Le nombre de porcs et le poids moyen produit donnent le coût total, le prix de revient par porc et le prix de revient par kilogramme.
+- Chaque nouvelle commande reçoit un lien sécurisé et un code personnel. Le client consulte son récapitulatif et peut modifier toutes les quantités jusqu’à la date limite de la session.
+- Après création ou modification, un nouveau récapitulatif est envoyé par courriel avec Brevo lorsque les communications sont configurées. L’échec d’envoi ne supprime jamais la commande.
+- La fermeture des commandes, la date limite et la clôture de la session sont également contrôlées par le serveur.
 
 ## Nouveautés de la version 2.2.26
 
