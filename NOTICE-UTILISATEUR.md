@@ -1,6 +1,6 @@
 # Notice utilisateur — EO‑Suivi Élevage
 
-Version de la notice : 2.2.20 — mise à jour le 24 août 2026.
+Version de la notice : 2.2.21 — mise à jour le 24 août 2026.
 
 Cette notice doit être relue à chaque livraison. Toute fonction ajoutée ou
 modifiée doit être inscrite dans la section « Nouveautés de la version » avant
@@ -43,6 +43,14 @@ doit donc pas compter deux fois la sortie.
   case.
 - Pour une délivrance NOK, consulter la fiche truie et traiter les lignes
   marquées **À suivre** selon le protocole de l'élevage.
+
+## Nouveautés de la version 2.2.21
+
+- Correction de la page Commandes clients pour les bases provenant d’anciennes versions.
+- Bouton « Fin de vente » clôturant la session active et fermant les commandes publiques.
+- Nouvelle page de bilan : commandes, quantités, kilogrammes, chiffre d’affaires, coûts, prix de revient total et au kg, marge.
+- Suivi en direct des étapes de mise à jour GitHub, y compris pendant le redémarrage.
+- Sauvegarde, restauration et mise à jour regroupées sur une seule page d’administration.
 
 ## Nouveautés de la version 2.2.20
 

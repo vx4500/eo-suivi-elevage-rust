@@ -788,7 +788,40 @@ pub(super) async fn maj(
     let mut ctx = context(&session);
     ctx.insert("version".into(), json!(env!("CARGO_PKG_VERSION")));
     ctx.insert("archive_octets".into(), json!(pending));
+    ctx.insert(
+        "base_nom".into(),
+        json!(state
+            .config
+            .db_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("elevage.db")),
+    );
     render(&state, "maj.html", Value::Object(ctx))
+}
+
+pub(super) async fn maj_statut(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+) -> AppResult<axum::Json<Value>> {
+    require_admin(&session)?;
+    let path = data_parent(&state).join("mise-a-jour-statut");
+    let content = tokio::fs::read_to_string(path).await.unwrap_or_default();
+    let mut lines = content.lines();
+    let status = lines.next().unwrap_or("repos");
+    let percent = lines
+        .next()
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(0)
+        .clamp(0, 100);
+    let version = lines.next().unwrap_or_default();
+    let message = lines.collect::<Vec<_>>().join(" ");
+    Ok(axum::Json(json!({
+        "statut":status,
+        "pourcentage":percent,
+        "version":version,
+        "message":message
+    })))
 }
 
 pub(super) async fn maj_lancer(
@@ -799,6 +832,13 @@ pub(super) async fn maj_lancer(
     require_admin(&session)?;
     verify_csrf(&session, &form)?;
     let request = data_parent(&state).join("mise-a-jour-demandee");
+    let status = data_parent(&state).join("mise-a-jour-statut");
+    tokio::fs::write(
+        status,
+        "demandee\n2\n\nDemande enregistrée, attente du service système.\n",
+    )
+    .await
+    .map_err(anyhow::Error::from)?;
     tokio::fs::write(&request, format!("{}\n", chrono::Local::now().to_rfc3339()))
         .await
         .map_err(anyhow::Error::from)?;

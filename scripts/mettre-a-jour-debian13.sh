@@ -11,8 +11,19 @@ SERVICE="${EO_SERVICE:-eo-suivi-rust}"
 SSH_KEY="${EO_GITHUB_SSH_KEY:-/root/.ssh/eo-suivi-rust-github}"
 LOGIN_URL="${EO_LOGIN_URL:-http://127.0.0.1:8080/login}"
 STYLE_URL="${EO_STYLE_URL:-http://127.0.0.1:8080/static/style.css}"
+STATUS_FILE="${EO_UPDATE_STATUS:-$(dirname "$DB_FILE")/mise-a-jour-statut}"
+
+status_update() {
+    local state="$1" percent="$2" release="$3" message="$4"
+    local status_tmp="${STATUS_FILE}.tmp"
+    mkdir -p "$(dirname "$STATUS_FILE")" || true
+    printf '%s\n%s\n%s\n%s\n' "$state" "$percent" "$release" "$message" >"$status_tmp" 2>/dev/null || true
+    mv -f "$status_tmp" "$STATUS_FILE" 2>/dev/null || true
+    chown eo-suivi:eo-suivi "$STATUS_FILE" 2>/dev/null || true
+}
 
 die() {
+    status_update "erreur" "100" "${version:-}" "$*"
     echo "Erreur : $*" >&2
     exit 1
 }
@@ -27,6 +38,7 @@ done
 
 exec 9>/run/lock/maj-eo-suivi-rust.lock
 flock -n 9 || die "une mise à jour EO-Suivi est déjà en cours."
+status_update "demarrage" "5" "" "Démarrage de la mise à jour."
 
 [[ -d "$SRC_DIR/.git" ]] || die "dépôt Git introuvable : $SRC_DIR"
 [[ -f "$DB_FILE" ]] || die "base SQLite introuvable : $DB_FILE"
@@ -47,6 +59,7 @@ if [[ -f "$SSH_KEY" ]]; then
 fi
 
 echo "Recherche de la dernière version sur GitHub..."
+status_update "telechargement" "12" "" "Recherche de la dernière version sur GitHub."
 git fetch origin main
 git merge --ff-only origin/main
 
@@ -58,15 +71,18 @@ if systemctl is-active --quiet "$SERVICE"; then
     current_style=$(curl -fsS "$STYLE_URL?v=$version" 2>/dev/null || true)
     if grep -Fq "Version Rust $version" <<<"$current_page" \
         && grep -Fq "v$version" <<<"$current_style"; then
+        status_update "terminee" "100" "$version" "La version $version est déjà installée."
         echo "EO-Suivi Rust $version et son interface sont déjà installés."
         exit 0
     fi
 fi
 
 echo "Contrôles et compilation de la version $version..."
+status_update "controles" "25" "$version" "Contrôles du code et des dépendances."
 cargo check
 cargo clippy --all-targets -- -D warnings
 cargo test
+status_update "compilation" "50" "$version" "Compilation de la version $version."
 cargo build --release
 
 stamp=$(date +%Y%m%d_%H%M%S)
@@ -77,6 +93,7 @@ static_backup="$BACKUP_DIR/static_${stamp}"
 new_binary="$APP_DIR/.eo-suivi-elevage.new-${stamp}"
 
 echo "Sauvegarde contrôlée de la base : $db_backup"
+status_update "sauvegarde" "70" "$version" "Sauvegarde et contrôle de la base SQLite."
 sqlite3 "$DB_FILE" ".backup '$db_backup'"
 [[ $(sqlite3 "$db_backup" "PRAGMA quick_check;") == "ok" ]] || die "la sauvegarde SQLite est invalide."
 
@@ -105,6 +122,7 @@ rollback_required=0
 restore_previous_release() {
     status=$?
     trap - EXIT
+    status_update "erreur" "100" "${version:-}" "Échec de la mise à jour ; restauration de la version précédente."
     if [[ "$rollback_required" -eq 1 ]]; then
         echo "Échec du déploiement : restauration de la version précédente." >&2
         systemctl stop "$SERVICE" >/dev/null 2>&1 || true
@@ -129,6 +147,7 @@ trap restore_previous_release EXIT
 
 rollback_required=1
 echo "Installation atomique de la version $version..."
+status_update "installation" "82" "$version" "Installation de la nouvelle version et redémarrage."
 systemctl stop "$SERVICE"
 mv "$new_binary" "$APP_DIR/eo-suivi-elevage"
 mkdir -p "$APP_DIR/static"
@@ -143,6 +162,7 @@ systemctl enable --now eo-suivi-rust-update.path >/dev/null
 systemctl start "$SERVICE"
 
 healthy=0
+status_update "verification" "94" "$version" "Vérification du redémarrage et de l'interface."
 for _ in {1..15}; do
     if current_page=$(curl -fsS "$LOGIN_URL" 2>/dev/null) \
         && current_style=$(curl -fsS "$STYLE_URL?v=$version" 2>/dev/null) \
@@ -157,6 +177,7 @@ done
 
 rollback_required=0
 trap - EXIT
+status_update "terminee" "100" "$version" "Mise à jour terminée avec succès."
 
 echo "Mise à jour terminée : EO-Suivi Rust $version"
 echo "Sauvegarde SQLite : $db_backup"

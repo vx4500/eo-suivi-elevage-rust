@@ -500,7 +500,8 @@ CREATE TABLE IF NOT EXISTS sessionventedirecte (
     nb_porcs INTEGER NOT NULL DEFAULT 0,
     bande_reference TEXT,
     active INTEGER NOT NULL DEFAULT 1,
-    notes TEXT
+    notes TEXT,
+    date_cloture TEXT
 );
 
 CREATE TABLE IF NOT EXISTS coutelevageventedirecte (

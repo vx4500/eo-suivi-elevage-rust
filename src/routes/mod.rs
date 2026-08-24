@@ -207,6 +207,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/vente-directe", get(vente_directe))
         .route("/vente-directe/commandes", get(vente_directe_commandes))
+        .route("/vente-directe/bilan", get(vente_directe_bilan))
         .route("/vente-directe/produit-ajouter", post(produit_ajouter))
         .route("/vente-directe/produit/{id}", post(produit_modifier))
         .route(
@@ -233,6 +234,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/vente-directe/session/{id}/activer",
             post(vente_session_activer),
+        )
+        .route(
+            "/vente-directe/session/{id}/cloturer",
+            post(vente_session_cloturer),
         )
         .route(
             "/vente-directe/session/{id}/modifier",
@@ -436,6 +441,7 @@ pub fn router(state: AppState) -> Router {
         .route("/logo", get(parity::logo))
         .route("/maj", get(parity::maj))
         .route("/maj/lancer", post(parity::maj_lancer))
+        .route("/maj/statut", get(parity::maj_statut))
         .route(
             "/maj/zip",
             post(parity::maj_zip).layer(DefaultBodyLimit::max(100 * 1024 * 1024)),
@@ -6427,6 +6433,32 @@ async fn vente_directe_commandes(
     ctx.insert("sessions_vente".into(), Value::Array(sessions));
     render(&state, "vente_directe_commandes.html", Value::Object(ctx))
 }
+
+async fn vente_directe_bilan(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+) -> AppResult<Html<String>> {
+    require_writer(&session)?;
+    let rows = generic_rows(
+        &state.pool,
+        "SELECT s.id,s.nom,s.date_creation,s.date_livraison,s.date_cloture,s.active,s.nb_porcs,
+        (SELECT COUNT(*) FROM commandeventedirecte c WHERE c.session_vente_id=s.id AND c.statut<>'annulee') AS commandes,
+        ROUND(COALESCE((SELECT SUM(c.total) FROM commandeventedirecte c WHERE c.session_vente_id=s.id AND c.statut<>'annulee'),0),2) AS chiffre_affaires,
+        ROUND(COALESCE((SELECT SUM(l.quantite) FROM lignecommandeventedirecte l JOIN commandeventedirecte c ON c.id=l.commande_id WHERE c.session_vente_id=s.id AND c.statut<>'annulee'),0),2) AS quantite_totale,
+        ROUND(COALESCE((SELECT SUM(l.quantite) FROM lignecommandeventedirecte l JOIN commandeventedirecte c ON c.id=l.commande_id WHERE c.session_vente_id=s.id AND c.statut<>'annulee' AND lower(l.unite)='kg'),0),2) AS kg_vendus,
+        ROUND(COALESCE((SELECT SUM(l.quantite) FROM lignecommandeventedirecte l JOIN commandeventedirecte c ON c.id=l.commande_id WHERE c.session_vente_id=s.id AND c.statut<>'annulee' AND lower(l.unite)<>'kg'),0),2) AS pieces_vendues,
+        ROUND(COALESCE((SELECT semence+gestation+maternite+post_sevrage+engraissement+veto_autres FROM coutelevageventedirecte WHERE session_vente_id=s.id),0),2) AS cout_elevage,
+        ROUND(COALESCE((SELECT SUM(montant) FROM chargeventedirecte WHERE session_vente_id=s.id),0),2) AS autres_charges,
+        ROUND(COALESCE((SELECT semence+gestation+maternite+post_sevrage+engraissement+veto_autres FROM coutelevageventedirecte WHERE session_vente_id=s.id),0)+COALESCE((SELECT SUM(montant) FROM chargeventedirecte WHERE session_vente_id=s.id),0),2) AS prix_revient_total,
+        ROUND((COALESCE((SELECT semence+gestation+maternite+post_sevrage+engraissement+veto_autres FROM coutelevageventedirecte WHERE session_vente_id=s.id),0)+COALESCE((SELECT SUM(montant) FROM chargeventedirecte WHERE session_vente_id=s.id),0))/NULLIF((SELECT SUM(l.quantite) FROM lignecommandeventedirecte l JOIN commandeventedirecte c ON c.id=l.commande_id WHERE c.session_vente_id=s.id AND c.statut<>'annulee' AND lower(l.unite)='kg'),0),2) AS prix_revient_kg,
+        ROUND(COALESCE((SELECT SUM(c.total) FROM commandeventedirecte c WHERE c.session_vente_id=s.id AND c.statut<>'annulee'),0)-COALESCE((SELECT semence+gestation+maternite+post_sevrage+engraissement+veto_autres FROM coutelevageventedirecte WHERE session_vente_id=s.id),0)-COALESCE((SELECT SUM(montant) FROM chargeventedirecte WHERE session_vente_id=s.id),0),2) AS marge
+        FROM sessionventedirecte s ORDER BY s.active DESC,COALESCE(s.date_livraison,s.date_creation) DESC,s.id DESC",
+    )
+    .await?;
+    let mut ctx = context(&session);
+    ctx.insert("bilans".into(), Value::Array(rows));
+    render(&state, "vente_directe_bilan.html", Value::Object(ctx))
+}
 async fn produit_ajouter(
     State(state): State<AppState>,
     Extension(session): Extension<SessionData>,
@@ -6836,7 +6868,7 @@ async fn vente_commande_modifier(
         }
     }
     let products = sqlx::query_as::<_, ProduitVenteDirecte>(
-        "SELECT id,nom,prix,unite,actif,ordre,quantite_disponible FROM produitventedirecte ORDER BY ordre,nom",
+        "SELECT id,nom,prix,unite,actif,ordre,quantite_disponible,image_mime FROM produitventedirecte ORDER BY ordre,nom",
     )
     .fetch_all(&mut *tx)
     .await?;
@@ -7179,24 +7211,11 @@ async fn utilisateur_mdp(
     Ok(Redirect::to("/utilisateurs").into_response())
 }
 
-async fn sauvegarde(
-    State(state): State<AppState>,
-    Extension(session): Extension<SessionData>,
-) -> AppResult<Html<String>> {
+async fn sauvegarde(Extension(session): Extension<SessionData>) -> AppResult<Response> {
     if !session.est_admin() {
         return Err(AppError::Forbidden);
     }
-    let mut ctx = context(&session);
-    ctx.insert(
-        "base_nom".into(),
-        json!(state
-            .config
-            .db_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("elevage.db")),
-    );
-    render(&state, "sauvegarde.html", Value::Object(ctx))
+    Ok(Redirect::to("/maj#sauvegardes").into_response())
 }
 
 async fn sauvegarde_telecharger(
@@ -8983,6 +9002,9 @@ async fn vente_session_creer(
         .execute(&mut *tx)
         .await?;
     sqlx::query("INSERT INTO reglageventedirecte(id,date_livraison) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET date_livraison=excluded.date_livraison").bind(delivery_date).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO reglageventedirecte(id,commandes_ouvertes) VALUES(1,1) ON CONFLICT(id) DO UPDATE SET commandes_ouvertes=1")
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await?;
     Ok(Redirect::to("/vente-directe/sessions").into_response())
 }
@@ -9009,8 +9031,48 @@ async fn vente_session_activer(
         .execute(&mut *tx)
         .await?;
     sqlx::query("INSERT INTO reglageventedirecte(id,date_livraison) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET date_livraison=excluded.date_livraison").bind(date).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO reglageventedirecte(id,commandes_ouvertes) VALUES(1,1) ON CONFLICT(id) DO UPDATE SET commandes_ouvertes=1")
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await?;
     Ok(Redirect::to("/vente-directe/sessions").into_response())
+}
+
+async fn vente_session_cloturer(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Path(id): Path<i64>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    verify_csrf(&session, &form)?;
+    let mut tx = state.pool.begin().await?;
+    let changed = sqlx::query(
+        "UPDATE sessionventedirecte SET active=0,date_cloture=CURRENT_TIMESTAMP WHERE id=? AND active=1",
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    if changed == 0 {
+        return Err(AppError::Invalid(
+            "Cette session est déjà clôturée ou introuvable".into(),
+        ));
+    }
+    sqlx::query("INSERT INTO reglageventedirecte(id,commandes_ouvertes,message_fermeture) VALUES(1,0,'Cette vente est terminée. Les commandes sont fermées.') ON CONFLICT(id) DO UPDATE SET commandes_ouvertes=0")
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    db::journal(
+        &state.pool,
+        &session.nom,
+        "clôturer",
+        "session_vente_directe",
+        &id.to_string(),
+        "/vente-directe/session/cloturer",
+    )
+    .await;
+    Ok(Redirect::to("/vente-directe/bilan").into_response())
 }
 
 async fn vente_session_modifier(

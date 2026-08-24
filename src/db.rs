@@ -52,6 +52,19 @@ pub async fn init(pool: &SqlitePool) -> anyhow::Result<()> {
         ("produitventedirecte", "quantite_disponible", "REAL"),
         ("produitventedirecte", "image_data", "BLOB"),
         ("produitventedirecte", "image_mime", "TEXT"),
+        ("commandeventedirecte", "client_id", "INTEGER"),
+        (
+            "commandeventedirecte",
+            "suivi_email",
+            "INTEGER NOT NULL DEFAULT 1",
+        ),
+        (
+            "commandeventedirecte",
+            "suivi_sms",
+            "INTEGER NOT NULL DEFAULT 0",
+        ),
+        ("commandeventedirecte", "session_vente_id", "INTEGER"),
+        ("sessionventedirecte", "date_cloture", "TEXT"),
         (
             "reglageventedirecte",
             "commandes_ouvertes",

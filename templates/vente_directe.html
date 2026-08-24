@@ -1,6 +1,6 @@
 {% extends "base.html" %}{% block content %}
 <h1>Vente directe</h1>
-<p class="rust-actions"><a class="button" href="/commande" target="_blank">Ouvrir la page client</a><a href="/vente-directe/sessions">Sessions et coûts</a><a href="/vente-directe/commandes">Commandes clients ({{ nb_commandes }})</a>{% for s in sessions_vente %}{% if s.active %}<a href="/vente-directe/preparation/imprimer?session_id={{ s.id }}" target="_blank">Imprimer la préparation</a>{% endif %}{% endfor %}</p>
+<p class="rust-actions"><a class="button" href="/commande" target="_blank">Ouvrir la page client</a><a href="/vente-directe/sessions">Sessions et coûts</a><a href="/vente-directe/bilan">Récapitulatif des ventes</a><a href="/vente-directe/commandes">Commandes clients ({{ nb_commandes }})</a>{% for s in sessions_vente %}{% if s.active %}<a href="/vente-directe/preparation/imprimer?session_id={{ s.id }}" target="_blank">Imprimer la préparation</a>{% endif %}{% endfor %}</p>
 <section id="commandes-client" class="card">
   <h2>Commandes sur la page client</h2>
   {% if reglage.commandes_ouvertes %}<p><span class="rust-badge">● Ouvertes</span> Les clients peuvent actuellement envoyer une commande.</p>{% else %}<p><span class="rust-badge danger">⏹ Fermées</span> Le formulaire client est masqué et un bandeau de fin de vente est affiché.</p>{% endif %}

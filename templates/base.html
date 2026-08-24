@@ -52,7 +52,7 @@
     <a href="/economique">Économie</a><a href="/aliment-previsions">Prévisions aliment</a><a href="/energie">Eau & électricité</a><a href="/stock">Stocks</a>
   </div></div>
   <div class="rust-menu"><span>Vente ▾</span><div class="rust-sub">
-    <a href="/vente-directe">Vente directe</a><a href="/vente-directe/commandes">Commandes clients</a><a href="/vente-directe/sessions">Sessions de vente</a><a href="/vente-directe/communications">Communications clients</a><a href="/commande">Page de commande</a>
+    <a href="/vente-directe">Vente directe</a><a href="/vente-directe/commandes">Commandes clients</a><a href="/vente-directe/bilan">Récapitulatif</a><a href="/vente-directe/sessions">Sessions de vente</a><a href="/vente-directe/communications">Communications clients</a><a href="/commande">Page de commande</a>
   </div></div>
   <div class="rust-menu"><span>Exploitation ▾</span><div class="rust-sub">
     <a href="/sanitaire">Sanitaire</a><a href="/resolution-problemes">Résolution de problèmes</a><a href="/pharmacie">Pharmacie</a><a href="/entretien">Entretien</a><a href="/imports">Importer un document</a>
@@ -61,7 +61,7 @@
   <form class="rust-search" action="/recherche" method="get"><input name="q" placeholder="Rechercher…"><button type="submit">OK</button></form>
   <div class="rust-menu"><span>Aide ▾</span><div class="rust-sub"><a href="/correctifs">Correctifs</a><a href="/apropos">À propos</a><a href="/contact">Diagnostic</a><a href="/etat-donnees">État des données</a></div></div>
   <span>{{ session.nom }}</span>
-  {% if session.role == 'admin' %}<div class="rust-menu"><span>Administration ▾</span><div class="rust-sub"><a href="/utilisateurs">Utilisateurs</a><a href="/parametres">Paramètres</a><a href="/reglages">Réglages</a><a href="/journal">Journal</a><a href="/maj">Mise à jour</a><a href="/sauvegarde">Sauvegarde</a></div></div>{% endif %}
+  {% if session.role == 'admin' %}<div class="rust-menu"><span>Administration ▾</span><div class="rust-sub"><a href="/utilisateurs">Utilisateurs</a><a href="/parametres">Paramètres</a><a href="/reglages">Réglages</a><a href="/journal">Journal</a><a href="/maj">Mise à jour et sauvegardes</a></div></div>{% endif %}
   <a href="/logout">Déconnexion</a>
 </nav>
 {% endif %}

@@ -77,7 +77,7 @@ fn accueil_visualise_le_cycle_et_saisie_rapide_propose_la_mise_bas() {
     assert!(dashboard.contains("Conduite des bandes"));
     assert!(dashboard.contains("class=\"band-stage-code\""));
     assert!(base.contains("/static/style.css?v={{ app_version }}"));
-    assert!(styles.contains("v2.2.20 — conduite en bandes"));
+    assert!(styles.contains("v2.2.21 — bilan des ventes"));
 }
 
 #[test]
@@ -130,7 +130,7 @@ fn sauvegarde_propose_telechargement_et_restauration_confirmee() {
     let router = include_str!("../src/routes/mod.rs");
     let restoration = include_str!("../src/routes/parity.rs");
     let templates = include_str!("../src/templates.rs");
-    let page = include_str!("../templates/sauvegarde.html");
+    let page = include_str!("../templates/maj.html");
 
     assert!(router.contains("/sauvegarde/telecharger"));
     assert!(router.contains("/sauvegarde/restaurer"));
@@ -139,4 +139,22 @@ fn sauvegarde_propose_telechargement_et_restauration_confirmee() {
     assert!(page.contains("enctype=\"multipart/form-data\""));
     assert!(restoration.contains("Some(\"RESTAURER\")"));
     assert!(restoration.contains("PRAGMA foreign_key_check"));
+}
+
+#[test]
+fn version_221_corrige_commandes_et_suit_la_mise_a_jour() {
+    let database = include_str!("../src/db.rs");
+    let routes = include_str!("../src/routes/mod.rs");
+    let update = include_str!("../scripts/mettre-a-jour-debian13.sh");
+    let update_page = include_str!("../templates/maj.html");
+    let report = include_str!("../templates/vente_directe_bilan.html");
+
+    assert!(database.contains("\"commandeventedirecte\", \"session_vente_id\""));
+    assert!(routes.contains("/vente-directe/session/{id}/cloturer"));
+    assert!(routes.contains("AS prix_revient_kg"));
+    assert!(report.contains("Prix de revient total"));
+    assert!(report.contains("⏹ Fin de vente"));
+    assert!(update.contains("status_update \"compilation\""));
+    assert!(update_page.contains("fetch('/maj/statut'"));
+    assert!(update_page.contains("id=\"sauvegardes\""));
 }
