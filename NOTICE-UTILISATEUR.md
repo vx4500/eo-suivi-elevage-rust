@@ -1,10 +1,18 @@
 # Notice utilisateur — EO‑Suivi Élevage
 
-Version de la notice : 2.2.32 — mise à jour le 25 août 2026.
+Version de la notice : 2.2.33 — mise à jour le 25 août 2026.
 
 Cette notice doit être relue à chaque livraison. Toute fonction ajoutée ou
 modifiée doit être inscrite dans la section « Nouveautés de la version » avant
 la publication, puis le numéro et la date ci-dessus doivent être actualisés.
+
+## Nouveautés de la version 2.2.33
+
+- La page **Reproduction → Maternité / Mise-bas** ouvre automatiquement la bande actuellement dans sa période de mise-bas et permet aussi de choisir une autre bande.
+- Toutes les truies du cycle sont regroupées et classées par état : à mettre bas, en cours, à surveiller ou terminée.
+- Chaque fiche permet de démarrer puis de compléter la mise-bas sans perdre les nombres déjà saisis : heures, nés vifs, mort-nés, momifiés, pertes de naissance, délivrance et observations.
+- Les pertes après la naissance sont ajoutées avec une cause configurée ; leur âge est calculé par le serveur et leur date est limitée de J0 à J+28.
+- Les totaux de la bande indiquent les mises-bas restantes, les alertes, les nés vifs, les pertes et l'effectif estimé de porcelets présents.
 
 ## Nouveautés de la version 2.2.32
 

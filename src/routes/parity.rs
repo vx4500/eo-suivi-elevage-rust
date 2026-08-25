@@ -168,7 +168,11 @@ pub(super) async fn truie_mise_bas(
         (weak, crushed, killed),
     )
     .await?;
-    Ok(Redirect::to(&format!("/truie/{id}")).into_response())
+    let fallback = format!("/truie/{id}");
+    let destination = form_text(&form, "retour")
+        .filter(|value| value.starts_with("/maternite") && !value.starts_with("//"))
+        .unwrap_or(fallback);
+    Ok(Redirect::to(&destination).into_response())
 }
 
 pub(super) async fn truie_sevrage(

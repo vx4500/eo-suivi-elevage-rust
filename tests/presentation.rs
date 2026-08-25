@@ -37,6 +37,29 @@ fn documentation_ne_renvoie_plus_vers_les_fichiers_supprimes() {
 }
 
 #[test]
+fn la_maternite_suit_chaque_truie_jusqua_j28() {
+    let template = include_str!("../templates/maternite.html");
+    let routes = include_str!("../src/routes/mod.rs");
+    let navigation = include_str!("../templates/base.html");
+    for marker in [
+        "À mettre bas",
+        "En cours",
+        "À surveiller",
+        "Terminées",
+        "Pertes jusqu’à J+28",
+        "porcelets présents estimés",
+    ] {
+        assert!(
+            template.contains(marker),
+            "élément maternité absent : {marker}"
+        );
+    }
+    assert!(routes.contains(".route(\"/maternite\", get(maternite))"));
+    assert!(routes.contains("(0..=28).contains(&age)"));
+    assert!(navigation.contains(">Maternité / Mise-bas<"));
+}
+
+#[test]
 fn saisie_rapide_prepare_le_sevrage_avant_lenvoi() {
     let template = include_str!("../templates/base.html");
     let submit = template

@@ -57,6 +57,15 @@ pub fn router(state: AppState) -> Router {
         .route("/bande/{id}/imprimer", get(bande_imprimer))
         .route("/export/mise-bas/{id}", get(export_mise_bas))
         .route("/bande/{id}/fiche-mise-bas", get(fiche_mise_bas))
+        .route("/maternite", get(maternite))
+        .route(
+            "/maternite/bande/{band_id}/truie/{sow_id}/perte",
+            post(maternite_perte),
+        )
+        .route(
+            "/maternite/bande/{band_id}/perte/{loss_id}/supprimer",
+            post(maternite_perte_supprimer),
+        )
         .route("/bande/{id}/archiver", post(bande_archiver))
         .route("/bande/{id}/desarchiver", post(bande_desarchiver))
         .route("/bande/{id}/supprimer", post(bande_supprimer))
@@ -2467,6 +2476,214 @@ async fn truie_perte(
     .execute(&state.pool)
     .await?;
     Ok(Redirect::to(&format!("/truie/{id}#pertes")).into_response())
+}
+
+/// Tableau opérationnel de maternité : la bande dont la mise-bas est la plus
+/// proche est proposée, tout en permettant de revenir sur n'importe quelle
+/// bande. Une truie reste dans ce tableau même si son affectation courante a
+/// changé, dès lors qu'une mise-bas a été enregistrée pour le cycle choisi.
+async fn maternite(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Query(query): Query<HashMap<String, String>>,
+) -> AppResult<Html<String>> {
+    let requested_band = query
+        .get("bande_id")
+        .and_then(|value| value.parse::<i64>().ok());
+    let bands = generic_rows(
+        &state.pool,
+        "SELECT id,code,date_mb,site,active FROM bande WHERE date_mb IS NOT NULL AND trim(date_mb)<>'' ORDER BY date(date_mb) DESC,id DESC LIMIT 40",
+    )
+    .await?;
+    let selected_id = if let Some(id) = requested_band {
+        sqlx::query_scalar::<_, i64>("SELECT id FROM bande WHERE id=?")
+            .bind(id)
+            .fetch_optional(&state.pool)
+            .await?
+    } else {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT id FROM bande WHERE date_mb IS NOT NULL AND trim(date_mb)<>'' ORDER BY CASE WHEN date('now') BETWEEN date(date_mb,'-10 day') AND date(date_mb,'+28 day') THEN 0 ELSE 1 END,ABS(julianday('now')-julianday(date_mb)),id DESC LIMIT 1",
+        )
+        .fetch_optional(&state.pool)
+        .await?
+    };
+    let mut ctx = context(&session);
+    ctx.insert("bandes".into(), Value::Array(bands));
+    ctx.insert("today".into(), json!(today_iso()));
+    let Some(band_id) = selected_id else {
+        ctx.insert("truies".into(), Value::Array(Vec::new()));
+        return render(&state, "maternite.html", Value::Object(ctx));
+    };
+    let band_row = sqlx::query(
+        "SELECT id,code,date_mb,site,active,CAST(julianday('now')-julianday(date_mb) AS INTEGER) AS jour_cycle,date(date_mb,'+28 day') AS fin_suivi FROM bande WHERE id=?",
+    )
+    .bind(band_id)
+    .fetch_all(&state.pool)
+    .await?;
+    let band = rows_to_json(band_row)?
+        .into_iter()
+        .next()
+        .ok_or(AppError::NotFound)?;
+    let sow_rows = sqlx::query(
+        "WITH sow_ids AS (SELECT id FROM truie WHERE bande_code=(SELECT code FROM bande WHERE id=?) UNION SELECT DISTINCT truie_id FROM evenement WHERE bande_id=? AND truie_id IS NOT NULL) SELECT t.id,t.num_travail,t.rfid,t.rang,t.race,e.id AS mise_bas_id,e.date AS date_mise_bas,COALESCE(e.nes_totaux,0) AS nes_totaux,COALESCE(e.nes_vifs,0) AS nes_vifs,COALESCE(e.mort_nes,0) AS mort_nes,COALESCE(e.momifies,0) AS momifies,COALESCE(e.chetifs,0) AS chetifs,COALESCE(e.ecrases,0) AS ecrases,COALESCE(e.tues_truie,0) AS tues_truie,e.heure_debut,e.heure_fin,COALESCE(e.suivi_actif,0) AS suivi_actif,e.delivrance_ok,e.note,CASE WHEN e.id IS NULL THEN 'a_mettre_bas' WHEN COALESCE(e.heure_debut,'')<>'' AND COALESCE(e.heure_fin,'')='' THEN 'en_cours' WHEN COALESCE(e.suivi_actif,0)=1 OR e.delivrance_ok=0 THEN 'a_surveiller' ELSE 'terminee' END AS statut_code,CASE WHEN e.id IS NULL THEN 'À mettre bas' WHEN COALESCE(e.heure_debut,'')<>'' AND COALESCE(e.heure_fin,'')='' THEN 'En cours' WHEN COALESCE(e.suivi_actif,0)=1 OR e.delivrance_ok=0 THEN 'À surveiller' ELSE 'Terminée' END AS statut_libelle,CASE WHEN e.date IS NOT NULL THEN CAST(julianday('now')-julianday(e.date) AS INTEGER) END AS jour_lactation,CASE WHEN e.date IS NOT NULL THEN date(e.date,'+28 day') END AS fin_suivi,CASE WHEN date('now')<date(e.date) THEN date(e.date) WHEN date('now')>date(e.date,'+28 day') THEN date(e.date,'+28 day') ELSE date('now') END AS date_perte_defaut,COALESCE((SELECT SUM(p.nb) FROM perteporcelet p WHERE p.truie_id=t.id AND p.bande_id=?),0) AS pertes,MAX(0,COALESCE(e.nes_vifs,0)-COALESCE((SELECT SUM(p.nb) FROM perteporcelet p WHERE p.truie_id=t.id AND p.bande_id=?),0)) AS porcelets_presents FROM sow_ids s JOIN truie t ON t.id=s.id LEFT JOIN evenement e ON e.id=(SELECT e2.id FROM evenement e2 WHERE e2.truie_id=t.id AND e2.bande_id=? AND e2.type='mise_bas' ORDER BY e2.date DESC,e2.id DESC LIMIT 1) ORDER BY CASE WHEN e.id IS NULL THEN 0 WHEN COALESCE(e.heure_debut,'')<>'' AND COALESCE(e.heure_fin,'')='' THEN 1 WHEN COALESCE(e.suivi_actif,0)=1 OR e.delivrance_ok=0 THEN 2 ELSE 3 END,t.num_travail COLLATE NOCASE",
+    )
+    .bind(band_id)
+    .bind(band_id)
+    .bind(band_id)
+    .bind(band_id)
+    .bind(band_id)
+    .fetch_all(&state.pool)
+    .await?;
+    let mut sows = rows_to_json(sow_rows)?;
+    let loss_rows = sqlx::query(
+        "SELECT id,truie_id,date,age_j,nb,cause,evenement_id FROM perteporcelet WHERE bande_id=? ORDER BY date DESC,id DESC",
+    )
+    .bind(band_id)
+    .fetch_all(&state.pool)
+    .await?;
+    let mut losses_by_sow: HashMap<i64, Vec<Value>> = HashMap::new();
+    for loss in rows_to_json(loss_rows)? {
+        if let Some(sow_id) = loss.get("truie_id").and_then(Value::as_i64) {
+            losses_by_sow.entry(sow_id).or_default().push(loss);
+        }
+    }
+    let mut totals = json!({"truies":sows.len(),"mises_bas":0,"restantes":0,"en_cours":0,"surveillance":0,"nes_vifs":0,"pertes":0,"presents":0});
+    for sow in &mut sows {
+        let object = json_object_mut(sow, "tableau de maternité")?;
+        let sow_id = object.get("id").and_then(Value::as_i64).unwrap_or_default();
+        object.insert(
+            "pertes_detail".into(),
+            Value::Array(losses_by_sow.remove(&sow_id).unwrap_or_default()),
+        );
+        let status = object
+            .get("statut_code")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let totals_object = totals.as_object_mut().expect("objet de totaux");
+        let increment = |map: &mut Map<String, Value>, key: &str, amount: i64| {
+            let old = map.get(key).and_then(Value::as_i64).unwrap_or_default();
+            map.insert(key.into(), json!(old + amount));
+        };
+        if status == "a_mettre_bas" {
+            increment(totals_object, "restantes", 1);
+        } else {
+            increment(totals_object, "mises_bas", 1);
+        }
+        if status == "en_cours" {
+            increment(totals_object, "en_cours", 1);
+        }
+        if status == "a_surveiller" {
+            increment(totals_object, "surveillance", 1);
+        }
+        increment(
+            totals_object,
+            "nes_vifs",
+            object
+                .get("nes_vifs")
+                .and_then(Value::as_i64)
+                .unwrap_or_default(),
+        );
+        increment(
+            totals_object,
+            "pertes",
+            object
+                .get("pertes")
+                .and_then(Value::as_i64)
+                .unwrap_or_default(),
+        );
+        increment(
+            totals_object,
+            "presents",
+            object
+                .get("porcelets_presents")
+                .and_then(Value::as_i64)
+                .unwrap_or_default(),
+        );
+    }
+    let causes = generic_rows(
+        &state.pool,
+        "SELECT libelle FROM causeperte ORDER BY libelle COLLATE NOCASE",
+    )
+    .await?;
+    ctx.insert("bande".into(), band);
+    ctx.insert("truies".into(), Value::Array(sows));
+    ctx.insert("causes".into(), Value::Array(causes));
+    ctx.insert("totaux".into(), totals);
+    render(&state, "maternite.html", Value::Object(ctx))
+}
+
+async fn maternite_perte(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Path((band_id, sow_id)): Path<(i64, i64)>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    verify_csrf(&session, &form)?;
+    let cause =
+        form_text(&form, "cause").ok_or_else(|| AppError::Invalid("Cause obligatoire".into()))?;
+    let cause_exists: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM causeperte WHERE lower(libelle)=lower(?)")
+            .bind(&cause)
+            .fetch_one(&state.pool)
+            .await?;
+    if cause_exists == 0 {
+        return Err(AppError::Invalid(
+            "Sélectionnez une cause configurée".into(),
+        ));
+    }
+    let farrowing: String = sqlx::query_scalar("SELECT date FROM evenement WHERE type='mise_bas' AND bande_id=? AND truie_id=? ORDER BY date DESC,id DESC LIMIT 1")
+        .bind(band_id).bind(sow_id).fetch_optional(&state.pool).await?.ok_or_else(|| AppError::Invalid("Enregistrez d'abord la mise-bas de cette truie".into()))?;
+    let farrowing_date = parse_stored_date(&farrowing)
+        .ok_or_else(|| AppError::Invalid("Date de mise-bas invalide".into()))?;
+    let loss_date_raw = form_date_or_today(&form, "date")?;
+    let loss_date = parse_stored_date(&loss_date_raw)
+        .ok_or_else(|| AppError::Invalid("Date de perte invalide".into()))?;
+    let age = (loss_date - farrowing_date).num_days();
+    if !(0..=28).contains(&age) {
+        return Err(AppError::Invalid(
+            "La perte doit être comprise entre la mise-bas et J+28".into(),
+        ));
+    }
+    sqlx::query(
+        "INSERT INTO perteporcelet(truie_id,bande_id,age_j,nb,cause,date) VALUES(?,?,?,?,?,?)",
+    )
+    .bind(sow_id)
+    .bind(band_id)
+    .bind(age)
+    .bind(form_i64(&form, "nb").unwrap_or(1).max(1))
+    .bind(cause)
+    .bind(loss_date_raw)
+    .execute(&state.pool)
+    .await?;
+    Ok(Redirect::to(&format!("/maternite?bande_id={band_id}#truie-{sow_id}")).into_response())
+}
+
+async fn maternite_perte_supprimer(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Path((band_id, loss_id)): Path<(i64, i64)>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    verify_csrf(&session, &form)?;
+    let sow_id: Option<i64> = sqlx::query_scalar(
+        "SELECT truie_id FROM perteporcelet WHERE id=? AND bande_id=? AND evenement_id IS NULL",
+    )
+    .bind(loss_id)
+    .bind(band_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .flatten();
+    let Some(sow_id) = sow_id else {
+        return Err(AppError::NotFound);
+    };
+    sqlx::query("DELETE FROM perteporcelet WHERE id=? AND bande_id=? AND evenement_id IS NULL")
+        .bind(loss_id)
+        .bind(band_id)
+        .execute(&state.pool)
+        .await?;
+    Ok(Redirect::to(&format!("/maternite?bande_id={band_id}#truie-{sow_id}")).into_response())
 }
 
 async fn perte_supprimer(

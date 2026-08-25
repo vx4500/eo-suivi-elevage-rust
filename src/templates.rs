@@ -105,6 +105,10 @@ pub fn build() -> anyhow::Result<Environment<'static>> {
         include_str!("../templates/fiche_mise_bas.html"),
     )?;
     env.add_template(
+        "maternite.html",
+        include_str!("../templates/maternite.html"),
+    )?;
+    env.add_template(
         "structure.html",
         include_str!("../templates/structure.html"),
     )?;
