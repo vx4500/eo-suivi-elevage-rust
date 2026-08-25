@@ -1,6 +1,6 @@
 # Notice utilisateur — EO‑Suivi Élevage
 
-Version de la notice : 2.2.28 — mise à jour le 25 août 2026.
+Version de la notice : 2.2.29 — mise à jour le 25 août 2026.
 
 Cette notice doit être relue à chaque livraison. Toute fonction ajoutée ou
 modifiée doit être inscrite dans la section « Nouveautés de la version » avant
@@ -44,13 +44,15 @@ doit donc pas compter deux fois la sortie.
 - Pour une délivrance NOK, consulter la fiche truie et traiter les lignes
   marquées **À suivre** selon le protocole de l'élevage.
 
-## Nouveautés de la version 2.2.28
+## Nouveautés de la version 2.2.29
 
-- Les résultats économiques utilisent exclusivement les montants HT des factures et des apports.
-- Une facture d'abattoir comportant plusieurs lots conserve le montant HT propre à chaque lot ; le net global n'est plus réparti pour calculer les prix moyens.
-- L'apport 226081270686 est ainsi traité en deux lots HT : 8 855,10 € et 9 607,76 €, soit 18 462,86 € HT au total.
-- Les formulaires, tableaux de bord, synthèses par bande et écrans abattoir affichent désormais clairement les montants et prix HT.
-- Le TTC ou le net reste une donnée de contrôle lorsqu'il est présent, sans entrer dans les calculs économiques.
+- Au démarrage, les anciennes ventes récupèrent automatiquement le montant HT fiable conservé dans le détail de leurs lots.
+- Les apports multi-lots sont affichés lot par lot avec leur référence, effectif, poids, TMP et montant HT.
+- L'apport 226081270686 retrouve ainsi ses deux lots de 8 855,10 € et 9 607,76 €, soit 18 462,86 € HT.
+- L'aperçu d'import permet d'affecter chaque ligne ou chaque lot à une bande différente avant une validation unique.
+- Le menu Économie propose des vues séparées pour la génétique, l'aliment, le vétérinaire, la semence et les ventes abattoir.
+- La page Imports regroupe le dépôt, l'historique, les documents à contrôler et l'accès direct à leur intégration.
+- Un montant HT absent reste signalé comme manquant : le net ou le TTC n'est jamais utilisé silencieusement à sa place.
 
 ## Nouveautés de la version 2.2.26
 

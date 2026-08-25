@@ -3271,7 +3271,13 @@ async fn imports_page(
     State(state): State<AppState>,
     Extension(session): Extension<SessionData>,
 ) -> AppResult<Html<String>> {
-    let ctx = context(&session);
+    let economic_imports = if matches!(session.role.as_str(), "admin" | "eleveur") {
+        generic_rows(&state.pool,"SELECT token,replace(type_import,'economique:','') AS type_import,nom_fichier,statut,cree_le,applique_le,resume FROM importjournal WHERE type_import LIKE 'economique:%' ORDER BY cree_le DESC LIMIT 100").await?
+    } else {
+        Vec::new()
+    };
+    let mut ctx = context(&session);
+    ctx.insert("imports_economiques".into(), Value::Array(economic_imports));
     render(&state, "imports.html", Value::Object(ctx))
 }
 
@@ -5708,14 +5714,19 @@ async fn economique(
         "WITH ventes AS (SELECT bande_id,SUM(COALESCE(nb_porcs,0)) AS porcs,SUM(COALESCE(poids_total,0)) AS poids,SUM(COALESCE(montant_ht,0)) AS recettes FROM venteapport GROUP BY bande_id),aliment AS (SELECT bande_id,SUM(COALESCE(montant_ht,0)) AS cout FROM livraisonaliment GROUP BY bande_id),veto AS (SELECT bande_id,SUM(COALESCE(montant_ht,0)) AS cout FROM achatveto GROUP BY bande_id),semence AS (SELECT bande_id,SUM(COALESCE(montant_ht,0)) AS cout FROM achatsemence GROUP BY bande_id),genetique AS (SELECT bande_code,SUM(COALESCE(montant_ht,0)) AS cout FROM achatgenetique GROUP BY bande_code) SELECT b.id,b.code,b.site,CAST(COALESCE(v.porcs,0) AS INTEGER) AS porcs,ROUND(COALESCE(v.poids,0),1) AS poids,ROUND(COALESCE(v.recettes,0),2) AS recettes,ROUND(COALESCE(a.cout,0),2) AS aliment,ROUND(COALESCE(vt.cout,0),2) AS veto,ROUND(COALESCE(se.cout,0),2) AS semence,ROUND(COALESCE(g.cout,0),2) AS genetique,ROUND(COALESCE(v.recettes,0)-COALESCE(a.cout,0)-COALESCE(vt.cout,0)-COALESCE(se.cout,0)-COALESCE(g.cout,0),2) AS marge,ROUND((COALESCE(a.cout,0)+COALESCE(vt.cout,0)+COALESCE(se.cout,0)+COALESCE(g.cout,0))/NULLIF(v.porcs,0),2) AS cout_par_porc,ROUND(COALESCE(v.recettes,0)/NULLIF(v.poids,0),3) AS prix_ht_kg FROM bande b LEFT JOIN ventes v ON v.bande_id=b.id LEFT JOIN aliment a ON a.bande_id=b.id LEFT JOIN veto vt ON vt.bande_id=b.id LEFT JOIN semence se ON se.bande_id=b.id LEFT JOIN genetique g ON g.bande_code=b.code WHERE v.porcs IS NOT NULL OR a.cout IS NOT NULL OR vt.cout IS NOT NULL OR se.cout IS NOT NULL OR g.cout IS NOT NULL ORDER BY b.date_mb IS NULL,b.date_mb,b.id",
     )
     .await?;
-    let ventes = generic_rows(&state.pool,"SELECT id,date,num_apport,nb_porcs,poids_total,ROUND(montant_ht/NULLIF(poids_total,0),3) AS prix_ht_kg,montant_ht,tmp,total_retenues,tx_qualification,nb_hors_poids,nb_tmp_bas FROM venteapport ORDER BY date DESC,id DESC LIMIT 50").await?;
+    let ventes = generic_rows(&state.pool,"WITH legacy AS (SELECT v.id,v.date,v.num_apport,CAST(json_extract(j.value,'$.nb_porcs') AS INTEGER) AS nb_porcs,CAST(json_extract(j.value,'$.poids') AS REAL) AS poids_total,CAST(json_extract(j.value,'$.montant_ht') AS REAL) AS montant_ht,CAST(json_extract(j.value,'$.muscle_lot') AS REAL) AS tmp,json_extract(j.value,'$.ref') AS lot_ref,1 AS is_legacy FROM venteapport v,json_each(v.lots_json) j WHERE json_valid(v.lots_json) AND json_type(v.lots_json)='array' AND json_array_length(v.lots_json)>1 AND v.nb_porcs=(SELECT SUM(CAST(json_extract(x.value,'$.nb_porcs') AS INTEGER)) FROM json_each(v.lots_json) x)), direct AS (SELECT id,date,num_apport,nb_porcs,poids_total,montant_ht,tmp,frappe AS lot_ref,0 AS is_legacy FROM venteapport v WHERE NOT (json_valid(v.lots_json) AND json_type(v.lots_json)='array' AND json_array_length(v.lots_json)>1 AND v.nb_porcs=(SELECT SUM(CAST(json_extract(x.value,'$.nb_porcs') AS INTEGER)) FROM json_each(v.lots_json) x))) SELECT id,date,num_apport,lot_ref,nb_porcs,poids_total,ROUND(montant_ht/NULLIF(poids_total,0),3) AS prix_ht_kg,montant_ht,tmp,is_legacy FROM (SELECT * FROM legacy UNION ALL SELECT * FROM direct) ORDER BY date DESC,id DESC LIMIT 100").await?;
     let achats = generic_rows(&state.pool,"SELECT id,date,'aliment' AS categorie,produit AS libelle,tonnage AS quantite,montant_ht FROM livraisonaliment UNION ALL SELECT id,date,'vétérinaire',produit,quantite,montant_ht FROM achatveto UNION ALL SELECT id,date,'semence',designation,nb_doses,montant_ht FROM achatsemence UNION ALL SELECT id,date,'génétique',designation,nb_animaux,montant_ht FROM achatgenetique ORDER BY date DESC,id DESC LIMIT 50").await?;
+    let genetiques = generic_rows(&state.pool,"SELECT a.id,a.date,a.num_facture,a.fournisseur,a.designation,a.nb_animaux,a.poids_total,a.montant_ht,a.bande_code,CASE WHEN a.montant_ht IS NULL THEN 1 ELSE 0 END AS ht_manquant FROM achatgenetique a ORDER BY a.date DESC,a.id DESC LIMIT 250").await?;
+    let aliments = generic_rows(&state.pool,"SELECT a.id,a.date,a.num_facture,a.fournisseur,a.produit,a.tonnage,a.montant_ht,b.code AS bande FROM livraisonaliment a LEFT JOIN bande b ON b.id=a.bande_id ORDER BY a.date DESC,a.id DESC LIMIT 250").await?;
+    let veterinaires = generic_rows(&state.pool,"SELECT a.id,a.date,a.num_facture,a.fournisseur,a.produit,a.quantite,a.montant_ht,b.code AS bande FROM achatveto a LEFT JOIN bande b ON b.id=a.bande_id ORDER BY a.date DESC,a.id DESC LIMIT 250").await?;
+    let semences = generic_rows(&state.pool,"SELECT a.id,a.date,a.num_facture,a.fournisseur,a.designation,a.nb_doses,a.montant_ht,b.code AS bande FROM achatsemence a LEFT JOIN bande b ON b.id=a.bande_id ORDER BY a.date DESC,a.id DESC LIMIT 250").await?;
     let valuations = generic_rows(&state.pool,"SELECT id,num_apport,date,libelle,montant,categorie,CASE WHEN lower(COALESCE(categorie,''))='retenue' THEN 1 ELSE 0 END AS est_retenue FROM valorisationapport ORDER BY date DESC,id DESC LIMIT 200").await?;
     let monthly = generic_rows(&state.pool,"WITH RECURSIVE mois(m) AS (SELECT date('now','start of month','-11 months') UNION ALL SELECT date(m,'+1 month') FROM mois WHERE m<date('now','start of month')),depenses AS (SELECT substr(date,1,7) AS m,SUM(COALESCE(montant_ht,0)) AS montant FROM livraisonaliment GROUP BY m UNION ALL SELECT substr(date,1,7),SUM(COALESCE(montant_ht,0)) FROM achatveto GROUP BY substr(date,1,7) UNION ALL SELECT substr(date,1,7),SUM(COALESCE(montant_ht,0)) FROM achatsemence GROUP BY substr(date,1,7) UNION ALL SELECT substr(date,1,7),SUM(COALESCE(montant_ht,0)) FROM achatgenetique GROUP BY substr(date,1,7)),revenus AS (SELECT substr(date,1,7) AS m,SUM(COALESCE(montant_ht,0)) AS montant,SUM(COALESCE(poids_total,0)) AS poids FROM venteapport GROUP BY m) SELECT substr(m.m,1,7) AS mois,ROUND(COALESCE((SELECT SUM(d.montant) FROM depenses d WHERE d.m=substr(m.m,1,7)),0),2) AS depenses,ROUND(COALESCE(r.montant,0),2) AS revenus,ROUND(r.montant/NULLIF(r.poids,0),3) AS prix_ht_kg FROM mois m LEFT JOIN revenus r ON r.m=substr(m.m,1,7) ORDER BY m.m").await?;
     let unallocated = generic_rows(&state.pool,"SELECT 'Aliment' AS categorie,ROUND(COALESCE(SUM(montant_ht),0),2) AS montant FROM livraisonaliment WHERE bande_id IS NULL UNION ALL SELECT 'Vétérinaire',ROUND(COALESCE(SUM(montant_ht),0),2) FROM achatveto WHERE bande_id IS NULL UNION ALL SELECT 'Semence',ROUND(COALESCE(SUM(montant_ht),0),2) FROM achatsemence WHERE bande_id IS NULL UNION ALL SELECT 'Génétique',ROUND(COALESCE(SUM(COALESCE(montant_ht,0)),0),2) FROM achatgenetique WHERE bande_code IS NULL OR trim(bande_code)=''").await?;
     let imports = generic_rows(&state.pool,"SELECT token,replace(type_import,'economique:','') AS type_import,nom_fichier,statut,cree_le,applique_le FROM importjournal WHERE type_import LIKE 'economique:%' ORDER BY cree_le DESC LIMIT 15").await?;
-    let total_weight: f64 =
-        sqlx::query_scalar("SELECT CAST(COALESCE(SUM(poids_total),0) AS REAL) FROM venteapport")
+    let total_weight: f64 = sqlx::query_scalar(
+        "SELECT CAST(COALESCE(SUM(poids_total),0) AS REAL) FROM venteapport WHERE montant_ht IS NOT NULL",
+    )
             .fetch_one(&state.pool)
             .await?;
     let total_pigs: i64 =
@@ -5742,6 +5753,17 @@ async fn economique(
     ctx.insert("resultats_bandes".into(), Value::Array(band_results));
     ctx.insert("ventes".into(), Value::Array(ventes));
     ctx.insert("achats".into(), Value::Array(achats));
+    ctx.insert("genetiques".into(), Value::Array(genetiques));
+    ctx.insert("aliments".into(), Value::Array(aliments));
+    ctx.insert("veterinaires".into(), Value::Array(veterinaires));
+    ctx.insert("semences".into(), Value::Array(semences));
+    ctx.insert(
+        "secteur".into(),
+        json!(query
+            .get("secteur")
+            .map(String::as_str)
+            .unwrap_or("synthese")),
+    );
     ctx.insert("valorisations".into(), Value::Array(valuations));
     ctx.insert("mensuel".into(), Value::Array(monthly));
     ctx.insert("non_affectes".into(), Value::Array(unallocated));
@@ -6223,28 +6245,33 @@ async fn economique_import_confirmer(
         ));
     }
     let band_id = form_i64(&form, "bande_id");
-    let band_code: Option<String> = if let Some(id) = band_id {
-        Some(
-            sqlx::query_scalar("SELECT code FROM bande WHERE id=?")
-                .bind(id)
-                .fetch_optional(&mut *transaction)
-                .await?
-                .ok_or_else(|| AppError::Invalid("Bande inconnue".into()))?,
-        )
-    } else {
-        None
-    };
     let stored = sqlx::query_as::<_,(i64,String)>("SELECT numero_ligne,donnees_json FROM importligne WHERE token=? AND action NOT IN ('erreur','ignorer') ORDER BY numero_ligne")
         .bind(&token).fetch_all(&mut *transaction).await?;
     let mut lines = Vec::new();
     for (number, raw) in stored {
         let line: ImportLine = serde_json::from_str(&raw)
             .map_err(|_| AppError::Invalid(format!("Données invalides à la ligne {number}")))?;
-        lines.push(line);
+        lines.push((number, line));
     }
     let mut cleared_apports = HashSet::new();
     let mut applied = 0_i64;
-    for line in &lines {
+    for (number, line) in &lines {
+        // La bande globale reste un raccourci, mais chaque ligne (et donc
+        // chaque lot d'un apport) peut être ventilée indépendamment.
+        let band_id = form_i64(&form, &format!("bande_ligne_{number}")).or(band_id);
+        let band_code: Option<String> = if let Some(id) = band_id {
+            Some(
+                sqlx::query_scalar("SELECT code FROM bande WHERE id=?")
+                    .bind(id)
+                    .fetch_optional(&mut *transaction)
+                    .await?
+                    .ok_or_else(|| {
+                        AppError::Invalid(format!("Bande inconnue à la ligne {number}"))
+                    })?,
+            )
+        } else {
+            None
+        };
         let reference = line
             .reference
             .as_deref()
@@ -9274,7 +9301,7 @@ async fn abattoir(
     }
     let ventes = generic_rows(
         &state.pool,
-        "SELECT v.id,v.date,v.num_apport,b.code AS bande,v.nb_porcs,v.poids_total,v.poids_moyen,v.tmp,v.tx_qualification,v.plus_value,v.montant_ht FROM venteapport v LEFT JOIN bande b ON b.id=v.bande_id ORDER BY v.date DESC,v.id DESC LIMIT 250",
+        "WITH legacy AS (SELECT v.id,v.date,v.num_apport,json_extract(j.value,'$.ref') AS lot_ref,b.code AS bande,CAST(json_extract(j.value,'$.nb_porcs') AS INTEGER) AS nb_porcs,CAST(json_extract(j.value,'$.poids') AS REAL) AS poids_total,ROUND(CAST(json_extract(j.value,'$.poids') AS REAL)/NULLIF(CAST(json_extract(j.value,'$.nb_porcs') AS INTEGER),0),2) AS poids_moyen,CAST(json_extract(j.value,'$.muscle_lot') AS REAL) AS tmp,v.tx_qualification,v.plus_value,CAST(json_extract(j.value,'$.montant_ht') AS REAL) AS montant_ht FROM venteapport v,json_each(v.lots_json) j LEFT JOIN bande b ON b.id=CAST(json_extract(j.value,'$.bande_id') AS INTEGER) WHERE json_valid(v.lots_json) AND json_type(v.lots_json)='array' AND json_array_length(v.lots_json)>1 AND v.nb_porcs=(SELECT SUM(CAST(json_extract(x.value,'$.nb_porcs') AS INTEGER)) FROM json_each(v.lots_json) x)), direct AS (SELECT v.id,v.date,v.num_apport,v.frappe AS lot_ref,b.code AS bande,v.nb_porcs,v.poids_total,v.poids_moyen,v.tmp,v.tx_qualification,v.plus_value,v.montant_ht FROM venteapport v LEFT JOIN bande b ON b.id=v.bande_id WHERE NOT (json_valid(v.lots_json) AND json_type(v.lots_json)='array' AND json_array_length(v.lots_json)>1 AND v.nb_porcs=(SELECT SUM(CAST(json_extract(x.value,'$.nb_porcs') AS INTEGER)) FROM json_each(v.lots_json) x))) SELECT * FROM legacy UNION ALL SELECT * FROM direct ORDER BY date DESC,id DESC LIMIT 250",
     )
     .await?;
     let saisies = generic_rows(

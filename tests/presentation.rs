@@ -77,7 +77,7 @@ fn accueil_visualise_le_cycle_et_saisie_rapide_propose_la_mise_bas() {
     assert!(dashboard.contains("Conduite des bandes"));
     assert!(dashboard.contains("class=\"band-stage-code\""));
     assert!(base.contains("/static/style.css?v={{ app_version }}"));
-    assert!(styles.contains("v2.2.28 — coûts d'élevage"));
+    assert!(styles.contains("v2.2.29 — coûts d'élevage"));
 }
 
 #[test]

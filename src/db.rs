@@ -135,6 +135,22 @@ pub async fn init(pool: &SqlitePool) -> anyhow::Result<()> {
         ensure_column(pool, table, column, definition).await?;
     }
 
+    // Reprise 2.2.29 : les anciennes bases ne possédaient pas la colonne
+    // `montant_ht` sur les ventes. Pour les apports Cooperl, le HT fiable est
+    // déjà conservé dans le JSON de chaque lot. On ne reconstitue jamais un HT
+    // depuis le net global : les lignes sans source HT restent volontairement
+    // à NULL et sont signalées dans l'interface.
+    sqlx::query(
+        "UPDATE venteapport SET montant_ht=ROUND((SELECT SUM(CAST(json_extract(j.value,'$.montant_ht') AS REAL)) FROM json_each(venteapport.lots_json) j),2) WHERE montant_ht IS NULL AND json_valid(lots_json) AND json_type(lots_json)='array' AND EXISTS(SELECT 1 FROM json_each(venteapport.lots_json) j WHERE json_extract(j.value,'$.montant_ht') IS NOT NULL)",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "UPDATE venteapport SET montant_ht=ROUND(CAST(json_extract(lots_json,'$.montant_ht') AS REAL),2) WHERE montant_ht IS NULL AND json_valid(lots_json) AND json_type(lots_json)='object' AND json_extract(lots_json,'$.montant_ht') IS NOT NULL",
+    )
+    .execute(pool)
+    .await?;
+
     sqlx::query("UPDATE commandeventedirecte SET token_modification=lower(hex(randomblob(32))) WHERE token_modification IS NULL OR trim(token_modification)=''")
         .execute(pool)
         .await?;
