@@ -197,8 +197,30 @@ fn version_224_corrige_effectifs_pertes_et_recherche() {
     assert!(migration.contains("evenement_id INTEGER REFERENCES evenement"));
     assert!(sow.contains("{% for c in causes %}"));
     assert!(sow.contains("name=\"tues_truie\""));
-    assert!(routes.contains("'/truie/'||id AS lien"));
+    assert!(routes.contains("'/truie/'||t.id AS lien"));
     assert!(list.contains("{% if row.lien %}"));
+}
+
+#[test]
+fn fiche_truie_234_est_modulaire_et_reliedonnees_reproduction() {
+    let routes = include_str!("../src/routes/mod.rs");
+    let parity = include_str!("../src/routes/parity.rs");
+    let sow = include_str!("../templates/truie.html");
+    let quick = include_str!("../templates/base.html");
+    let schema = include_str!("../migrations/0001_schema.sql");
+    for panel in ["resume", "historique", "mesures", "pertes", "soins-portee"] {
+        assert!(sow.contains(&format!("data-panel=\"{panel}\"")));
+    }
+    assert!(sow.contains("/mesure/{{ m.id }}/modifier"));
+    assert!(sow.contains("Produit administré"));
+    assert!(sow.contains("IA probablement fécondante"));
+    assert!(sow.contains("Performances par rang de portée"));
+    assert!(quick.contains("Numéro de la truie"));
+    assert!(quick.contains("name=\"ia_matin\""));
+    assert!(routes.contains("SOW_EXIT_REASONS"));
+    assert!(parity.contains("ia_slots(&form)"));
+    assert!(schema.contains("CREATE TABLE IF NOT EXISTS soinportee"));
+    assert!(schema.contains("creneaux_ia TEXT"));
 }
 
 #[test]

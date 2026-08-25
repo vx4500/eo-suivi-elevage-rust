@@ -1,10 +1,22 @@
 # Notice utilisateur — EO‑Suivi Élevage
 
-Version de la notice : 2.2.33 — mise à jour le 25 août 2026.
+Version de la notice : 2.2.34 — mise à jour le 25 août 2026.
 
 Cette notice doit être relue à chaque livraison. Toute fonction ajoutée ou
 modifiée doit être inscrite dans la section « Nouveautés de la version » avant
 la publication, puis le numéro et la date ci-dessus doivent être actualisés.
+
+## Nouveautés de la version 2.2.34
+
+- La fiche truie s'ouvre sur un résumé lisible (identification, dates clés et performances par portée) ; reproduction, historique, mesures, pertes, soins et sortie sont séparés en onglets.
+- Les mesures ELD, poids et NEC ainsi que les informations générales de l'historique peuvent être corrigées directement.
+- Une truie est reliée à sa case et à son numéro de vanne ; la mise-bas conserve cette liaison pour retrouver la portée même après un déplacement.
+- La saisie rapide d'une perte demande le numéro de la truie, accepte une recherche par numéro, RFID, bande ou vanne et calcule l'âge depuis la mise-bas.
+- Les actes du plan sanitaire ciblant les porcelets à partir de la mise-bas deviennent automatiquement des soins datés pour chaque portée, avec validation individuelle.
+- Les motifs de sortie et de mortalité sont sélectionnés dans une liste commune adaptée à la reproduction, aux aplombs, à la mise-bas, à la santé et aux accidents.
+- La liste des truies peut être imprimée selon les cases cochées ou selon une bande entière.
+- Le nombre libre de doses d'IA est remplacé par trois cases matin, midi et soir ; la fiche propose ensuite l'IA probablement fécondante selon la durée de gestation observée.
+- L'historique affiche explicitement le produit administré pour les traitements.
 
 ## Nouveautés de la version 2.2.33
 

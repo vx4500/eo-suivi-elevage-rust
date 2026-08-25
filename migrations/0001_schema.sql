@@ -157,7 +157,9 @@ CREATE TABLE IF NOT EXISTS evenement (
     delai_attente INTEGER,
     note TEXT,
     resultat TEXT,
-    nb_doses INTEGER
+    nb_doses INTEGER,
+    creneaux_ia TEXT,
+    case_id INTEGER REFERENCES casesalle(id)
 );
 
 CREATE INDEX IF NOT EXISTS ix_evenement_date ON evenement(date);
@@ -205,6 +207,20 @@ CREATE TABLE IF NOT EXISTS acterealiseverrat (
     verrat_id INTEGER NOT NULL REFERENCES verrat(id),
     date_realise TEXT NOT NULL,
     note TEXT
+);
+
+-- Soins réellement rattachés à une portée. Ils sont préparés à partir des
+-- actes « Porcelet » du plan sanitaire lors de l'enregistrement de la mise-bas.
+CREATE TABLE IF NOT EXISTS soinportee (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    protocole_id INTEGER NOT NULL REFERENCES acteprotocole(id),
+    evenement_id INTEGER NOT NULL REFERENCES evenement(id) ON DELETE CASCADE,
+    truie_id INTEGER NOT NULL REFERENCES truie(id),
+    bande_id INTEGER REFERENCES bande(id),
+    date_prevue TEXT NOT NULL,
+    date_realisee TEXT,
+    note TEXT,
+    UNIQUE(protocole_id, evenement_id)
 );
 
 CREATE TABLE IF NOT EXISTS reglage (

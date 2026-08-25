@@ -114,8 +114,8 @@
       <label>NEC (1 à 5)<input name="nec" inputmode="decimal"></label>
     </div>
     <div class="fab-f" data-for="ia" hidden>
-      <label>Nombre de doses<input name="nb_doses" inputmode="numeric" value="2" disabled></label>
       <label>Produit / verrat<input name="produit" disabled></label>
+      <fieldset><legend>Moment de l’insémination</legend><label><input type="checkbox" name="ia_matin" value="1" disabled> Matin</label><label><input type="checkbox" name="ia_midi" value="1" disabled> Midi</label><label><input type="checkbox" name="ia_soir" value="1" disabled> Soir</label></fieldset>
     </div>
     <div class="fab-f" data-for="echo" hidden>
       <label>Résultat
@@ -161,7 +161,7 @@
     </div>
     <div class="fab-f" data-for="sortie" hidden>
       <label>Motif de sortie
-        <select name="motif" disabled><option>Morte</option><option>Euthanasie</option><option>Vente / réforme</option><option>Boiterie / accident</option><option>Non fécondée / infertile</option><option>Âge / usure</option><option>Sanitaire</option><option>Autre</option></select>
+        <select name="motif" disabled><option>Réforme planifiée / âge ou rang</option><option>Performances insuffisantes</option><option>Infertilité / retours en chaleur</option><option>Avortement / problème de gestation</option><option>Prolapsus</option><option>Complication de mise-bas / hémorragie</option><option>Boiterie / appareil locomoteur</option><option>Mamelle / allaitement</option><option>État corporel insuffisant</option><option>Agressivité / comportement maternel</option><option>Maladie / cause sanitaire</option><option>Trouble digestif constaté</option><option>Trouble cardio-respiratoire constaté</option><option>Trouble urinaire constaté</option><option>Accident / traumatisme</option><option>Morte subitement</option><option>Mortalité de cause indéterminée</option><option>Euthanasie</option><option>Vente / transfert</option><option>Autre motif validé</option></select>
       </label>
     </div>
     <div class="fab-f" data-for="mouvement" hidden>
@@ -333,14 +333,14 @@
     }).catch(function(){});
   }).catch(function(){sow.replaceChildren(new Option('Liste indisponible',''));});
   function refreshMiseBasSows(){
-    if(typeInput.value!=='mise_bas') return;
+    if(typeInput.value!=='mise_bas'&&typeInput.value!=='perte') return;
     var query=(sowSearch.value||'').trim().toLowerCase();
     var rows=_truieRows.filter(function(row){
-      if(!query) return Number(row.dans_periode_mise_bas)===1;
-      return [row.num_travail,row.rfid,row.bande_code].some(function(v){return String(v||'').toLowerCase().includes(query);});
+      if(!query) return typeInput.value==='perte'||Number(row.dans_periode_mise_bas)===1;
+      return [row.num_travail,row.rfid,row.bande_code,row.num_vanne].some(function(v){return String(v||'').toLowerCase().includes(query);});
     });
     var previous=sow.value;
-    fillSelect(sow,rows,function(row){return text(row.num_travail)+(row.bande_code?' · '+text(row.bande_code):'')+(row.mise_bas_prevue?' · prévue '+text(row.mise_bas_prevue):'');});
+    fillSelect(sow,rows,function(row){return text(row.num_travail)+(row.bande_code?' · '+text(row.bande_code):'')+(row.num_vanne?' · vanne '+text(row.num_vanne):'')+(row.mise_bas_prevue?' · prévue '+text(row.mise_bas_prevue):'');});
     if(rows.some(function(row){return String(row.id)===previous;})) sow.value=previous;
     if(!rows.length) sow.options[0].text=query?'Aucune truie trouvée':'Aucune truie dans la période de mise-bas';
   }
@@ -406,11 +406,12 @@
     });
     var loss=type==='perte', movement=type==='mouvement', sevrage=type==='sevrage';
     form.action=movement?'/transferts/porcs':'/saisie-rapide';
-    sow.disabled=movement||sevrage; sow.required=!loss&&!movement&&!sevrage; document.getElementById('fab-truie-wrap').hidden=movement||sevrage;
-    sowLabel.textContent=loss?'Truie sous la mère (facultatif)':'Truie';
-    sowSearch.hidden=type!=='mise_bas';
-    if(type==='mise_bas') refreshMiseBasSows(); else if(_truieRows.length) fillSelect(sow,_truieRows,function(row){return text(row.num_travail)+(row.bande_code?' · '+text(row.bande_code):'');});
-    band.disabled=!loss; band.required=loss; noteWrap.hidden=type==='sortie'; note.disabled=type==='sortie';
+    sow.disabled=movement||sevrage; sow.required=!movement&&!sevrage; document.getElementById('fab-truie-wrap').hidden=movement||sevrage;
+    sowLabel.textContent=loss?'Numéro de la truie':'Truie';
+    sowSearch.hidden=type!=='mise_bas'&&!loss;
+    sowSearch.placeholder=loss?'Écrire le numéro de la truie, son RFID ou sa bande':'Rechercher par numéro, RFID ou bande';
+    if(type==='mise_bas'||loss) refreshMiseBasSows(); else if(_truieRows.length) fillSelect(sow,_truieRows,function(row){return text(row.num_travail)+(row.bande_code?' · '+text(row.bande_code):'');});
+    band.disabled=!loss; band.required=false; noteWrap.hidden=type==='sortie'; note.disabled=type==='sortie';
 
     // Sevrage: initialisation spécifique
     if(type==='sevrage'){

@@ -80,20 +80,25 @@ pub fn router(state: AppState) -> Router {
         .route("/truie/{id}", get(truie_detail))
         .route("/truie/{id}/imprimer", get(truie_imprimer))
         .route("/truie/{id}/bande", post(truie_bande))
+        .route("/truie/{id}/emplacement", post(truie_emplacement))
         .route("/truie/{id}/reformer", post(truie_reformer))
         .route("/truie/{id}/annuler-sortie", post(truie_annuler_sortie))
         .route("/truie/{id}/mesure", post(truie_mesure))
+        .route("/mesure/{id}/modifier", post(mesure_modifier))
         .route("/mesure/{id}/supprimer", post(mesure_supprimer))
         .route("/truie/{id}/perte", post(truie_perte))
         .route("/perte/{id}/supprimer", post(perte_supprimer))
         .route("/truie/{id}/cochette", post(truie_cochette))
         .route("/evenement/ajouter", post(evenement_ajouter))
         .route("/evenement/{id}/supprimer", post(evenement_supprimer))
+        .route("/evenement/{id}/modifier", post(evenement_modifier))
         .route("/inseminations", get(inseminations))
         .route(
             "/inseminations/enregistrer",
             post(inseminations_enregistrer),
         )
+        .route("/truies/imprimer", post(truies_imprimer))
+        .route("/soin-portee/{id}/realiser", post(soin_portee_realiser))
         .route("/recherche", get(recherche))
         .route("/gttt", get(gttt))
         .route("/productivite", get(productivite))
@@ -598,6 +603,17 @@ fn form_i64(form: &HashMap<String, String>, key: &str) -> Option<i64> {
     form_text(form, key)?.parse().ok()
 }
 
+fn ia_slots(form: &HashMap<String, String>) -> Vec<&'static str> {
+    [
+        ("ia_matin", "matin"),
+        ("ia_midi", "midi"),
+        ("ia_soir", "soir"),
+    ]
+    .into_iter()
+    .filter_map(|(key, label)| form.contains_key(key).then_some(label))
+    .collect()
+}
+
 fn form_f64(form: &HashMap<String, String>, key: &str) -> Option<f64> {
     parse_french_number(&form_text(form, key)?)
 }
@@ -637,6 +653,35 @@ async fn synchroniser_pertes_mise_bas(
         }
     }
     tx.commit().await?;
+    Ok(())
+}
+
+async fn synchroniser_soins_portee(
+    pool: &SqlitePool,
+    evenement_id: i64,
+    truie_id: i64,
+    bande_id: Option<i64>,
+    date_mise_bas: &str,
+) -> AppResult<()> {
+    sqlx::query(
+        "INSERT INTO soinportee(protocole_id,evenement_id,truie_id,bande_id,date_prevue) SELECT a.id,?,?,?,date(?,printf('%+d day',a.jour)) FROM acteprotocole a WHERE a.actif=1 AND lower(trim(a.cible)) IN ('porcelet','porcelets') AND lower(trim(a.reference))='mise_bas' ON CONFLICT(protocole_id,evenement_id) DO UPDATE SET date_prevue=excluded.date_prevue,bande_id=excluded.bande_id WHERE soinportee.date_realisee IS NULL",
+    )
+    .bind(evenement_id)
+    .bind(truie_id)
+    .bind(bande_id)
+    .bind(date_mise_bas)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+async fn synchroniser_protocole_portees(pool: &SqlitePool, protocole_id: i64) -> AppResult<()> {
+    sqlx::query("DELETE FROM soinportee WHERE protocole_id=? AND date_realisee IS NULL")
+        .bind(protocole_id)
+        .execute(pool)
+        .await?;
+    sqlx::query("INSERT OR IGNORE INTO soinportee(protocole_id,evenement_id,truie_id,bande_id,date_prevue) SELECT a.id,e.id,e.truie_id,e.bande_id,date(e.date,printf('%+d day',a.jour)) FROM acteprotocole a JOIN evenement e ON e.type='mise_bas' AND e.truie_id IS NOT NULL WHERE a.id=? AND a.actif=1 AND lower(trim(a.cible)) IN ('porcelet','porcelets') AND lower(trim(a.reference))='mise_bas'")
+        .bind(protocole_id).execute(pool).await?;
     Ok(())
 }
 
@@ -2175,7 +2220,7 @@ async fn truies(
     let sql = if q.is_empty() {
         format!("SELECT {TRUIE_FIELDS} FROM truie WHERE reformee=0 ORDER BY num_travail")
     } else {
-        format!("SELECT {TRUIE_FIELDS} FROM truie WHERE reformee=0 AND (num_travail LIKE ? OR num_national LIKE ? OR rfid LIKE ?) ORDER BY num_travail")
+        format!("SELECT {TRUIE_FIELDS} FROM truie WHERE reformee=0 AND (num_travail LIKE ? OR num_national LIKE ? OR rfid LIKE ? OR case_id IN (SELECT id FROM casesalle WHERE COALESCE(num_vanne,'') LIKE ?)) ORDER BY num_travail")
     };
     let sows = if q.is_empty() {
         sqlx::query_as::<_, Truie>(&sql)
@@ -2184,6 +2229,7 @@ async fn truies(
     } else {
         let pattern = format!("%{q}%");
         sqlx::query_as::<_, Truie>(&sql)
+            .bind(&pattern)
             .bind(&pattern)
             .bind(&pattern)
             .bind(&pattern)
@@ -2306,9 +2352,24 @@ async fn truie_detail(
         .await?;
     let cases = generic_rows(
         &state.pool,
-        "SELECT c.id,s.nom||' · '||c.nom AS label FROM casesalle c JOIN salle s ON s.id=c.salle_id ORDER BY s.ordre,s.nom,c.nom",
+        "SELECT c.id,s.nom||' · '||c.nom||CASE WHEN COALESCE(c.num_vanne,'')<>'' THEN ' · vanne '||c.num_vanne ELSE '' END AS label,c.num_vanne FROM casesalle c JOIN salle s ON s.id=c.salle_id ORDER BY s.ordre,s.nom,c.nom",
     )
     .await?;
+    let emplacement = sqlx::query("SELECT c.id,c.nom AS case_nom,c.num_vanne,s.nom AS salle,COALESCE(si.nom,si.code) AS site FROM truie t LEFT JOIN casesalle c ON c.id=t.case_id LEFT JOIN salle s ON s.id=c.salle_id LEFT JOIN site si ON si.id=s.site_id WHERE t.id=?")
+        .bind(id).fetch_all(&state.pool).await?;
+    let emplacement = rows_to_json(emplacement)?
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| json!({}));
+    let performances = sqlx::query("SELECT e.date,e.nes_totaux,e.nes_vifs,e.mort_nes,e.momifies,(SELECT s.nb_sevres FROM evenement s WHERE s.truie_id=e.truie_id AND s.bande_id=e.bande_id AND s.type='sevrage' ORDER BY s.date DESC,s.id DESC LIMIT 1) AS nb_sevres,COALESCE((SELECT SUM(p.nb) FROM perteporcelet p WHERE p.truie_id=e.truie_id AND p.bande_id=e.bande_id),0) AS pertes,b.code AS bande FROM evenement e LEFT JOIN bande b ON b.id=e.bande_id WHERE e.truie_id=? AND e.type='mise_bas' ORDER BY e.date DESC,e.id DESC")
+        .bind(id).fetch_all(&state.pool).await?;
+    let performances = rows_to_json(performances)?;
+    let probable_ia = sqlx::query("WITH mb AS (SELECT date FROM evenement WHERE truie_id=? AND type='mise_bas' ORDER BY date DESC,id DESC LIMIT 1) SELECT ia.date,ia.produit,ia.nb_doses,ia.creneaux_ia,CAST(julianday((SELECT date FROM mb))-julianday(ia.date) AS INTEGER) AS gestation_j,CASE WHEN ABS((julianday((SELECT date FROM mb))-julianday(ia.date))-115)<=2 THEN 'Correspondance forte' ELSE 'Correspondance plausible' END AS confiance FROM evenement ia WHERE ia.truie_id=? AND ia.type='ia' AND (SELECT date FROM mb) IS NOT NULL AND julianday((SELECT date FROM mb))-julianday(ia.date) BETWEEN 105 AND 125 ORDER BY ABS((julianday((SELECT date FROM mb))-julianday(ia.date))-115),ia.id DESC LIMIT 1")
+        .bind(id).bind(id).fetch_all(&state.pool).await?;
+    let probable_ia = rows_to_json(probable_ia)?.into_iter().next();
+    let soins_portee = sqlx::query("SELECT sp.id,sp.date_prevue,sp.date_realisee,sp.note,a.libelle,a.produit,a.dose,a.unite,a.voie,c.num_vanne FROM soinportee sp JOIN acteprotocole a ON a.id=sp.protocole_id JOIN evenement e ON e.id=sp.evenement_id LEFT JOIN casesalle c ON c.id=e.case_id WHERE sp.truie_id=? ORDER BY sp.date_realisee IS NOT NULL,sp.date_prevue,sp.id")
+        .bind(id).fetch_all(&state.pool).await?;
+    let soins_portee = rows_to_json(soins_portee)?;
     let date_mb: Option<String> = if let Some(code) = sow.bande_code.as_deref() {
         sqlx::query_scalar(
             "SELECT date_mb FROM bande WHERE code=? ORDER BY active DESC,id DESC LIMIT 1",
@@ -2337,6 +2398,11 @@ async fn truie_detail(
         serde_json::to_value(bands).unwrap_or_default(),
     );
     ctx.insert("cases".into(), Value::Array(cases));
+    ctx.insert("emplacement".into(), emplacement);
+    ctx.insert("performances_rang".into(), Value::Array(performances));
+    ctx.insert("ia_probable".into(), probable_ia.unwrap_or(Value::Null));
+    ctx.insert("soins_portee".into(), Value::Array(soins_portee));
+    ctx.insert("motifs_sortie".into(), json!(SOW_EXIT_REASONS));
     let schedule = load_band_schedule(&state.pool).await?;
     ctx.insert(
         "dates".into(),
@@ -2365,6 +2431,58 @@ async fn truie_bande(
     Ok(Redirect::to(&format!("/truie/{id}")).into_response())
 }
 
+async fn truie_emplacement(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Path(id): Path<i64>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    verify_csrf(&session, &form)?;
+    let case_id = form_i64(&form, "case_id");
+    let salle_id: Option<i64> = if let Some(case_id) = case_id {
+        Some(
+            sqlx::query_scalar("SELECT salle_id FROM casesalle WHERE id=?")
+                .bind(case_id)
+                .fetch_optional(&state.pool)
+                .await?
+                .ok_or(AppError::NotFound)?,
+        )
+    } else {
+        None
+    };
+    sqlx::query("UPDATE truie SET case_id=?,salle_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=?")
+        .bind(case_id)
+        .bind(salle_id)
+        .bind(id)
+        .execute(&state.pool)
+        .await?;
+    Ok(Redirect::to(&format!("/truie/{id}#identification")).into_response())
+}
+
+const SOW_EXIT_REASONS: &[&str] = &[
+    "Réforme planifiée / âge ou rang",
+    "Performances insuffisantes",
+    "Infertilité / retours en chaleur",
+    "Avortement / problème de gestation",
+    "Prolapsus",
+    "Complication de mise-bas / hémorragie",
+    "Boiterie / appareil locomoteur",
+    "Mamelle / allaitement",
+    "État corporel insuffisant",
+    "Agressivité / comportement maternel",
+    "Maladie / cause sanitaire",
+    "Trouble digestif constaté",
+    "Trouble cardio-respiratoire constaté",
+    "Trouble urinaire constaté",
+    "Accident / traumatisme",
+    "Morte subitement",
+    "Mortalité de cause indéterminée",
+    "Euthanasie",
+    "Vente / transfert",
+    "Autre motif validé",
+];
+
 async fn truie_reformer(
     State(state): State<AppState>,
     Extension(session): Extension<SessionData>,
@@ -2374,7 +2492,14 @@ async fn truie_reformer(
     require_writer(&session)?;
     verify_csrf(&session, &form)?;
     let date = form_date_or_today(&form, "date")?;
-    sqlx::query("UPDATE truie SET reformee=1,statut='reformee',date_reforme=?,motif_sortie=?,updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(date).bind(form_text(&form,"motif")).bind(id).execute(&state.pool).await?;
+    let reason =
+        form_text(&form, "motif").ok_or_else(|| AppError::Invalid("Motif obligatoire".into()))?;
+    if !SOW_EXIT_REASONS.contains(&reason.as_str()) {
+        return Err(AppError::Invalid(
+            "Sélectionnez un motif de sortie proposé".into(),
+        ));
+    }
+    sqlx::query("UPDATE truie SET reformee=1,statut='reformee',date_reforme=?,motif_sortie=?,updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(date).bind(reason).bind(id).execute(&state.pool).await?;
     Ok(Redirect::to("/truies").into_response())
 }
 
@@ -2412,6 +2537,38 @@ async fn truie_mesure(
     .execute(&state.pool)
     .await?;
     Ok(Redirect::to(&format!("/truie/{id}#mesures")).into_response())
+}
+
+async fn mesure_modifier(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Path(id): Path<i64>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    verify_csrf(&session, &form)?;
+    let sow_id: i64 = sqlx::query_scalar("SELECT truie_id FROM mesuretruie WHERE id=?")
+        .bind(id)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let eld = form_f64(&form, "eld").filter(|value| *value >= 0.0);
+    let poids = form_f64(&form, "poids").filter(|value| *value >= 0.0);
+    let nec = form_f64(&form, "nec").filter(|value| (1.0..=5.0).contains(value));
+    if eld.is_none() && poids.is_none() && nec.is_none() {
+        return Err(AppError::Invalid("Saisissez au moins une mesure".into()));
+    }
+    sqlx::query("UPDATE mesuretruie SET date=?,periode=?,eld=?,poids=?,nec=?,note=? WHERE id=?")
+        .bind(form_date_or_today(&form, "date")?)
+        .bind(form_text(&form, "periode"))
+        .bind(eld)
+        .bind(poids)
+        .bind(nec)
+        .bind(form_text(&form, "note"))
+        .bind(id)
+        .execute(&state.pool)
+        .await?;
+    Ok(Redirect::to(&format!("/truie/{sow_id}#mesures")).into_response())
 }
 
 async fn mesure_supprimer(
@@ -2525,7 +2682,7 @@ async fn maternite(
         .next()
         .ok_or(AppError::NotFound)?;
     let sow_rows = sqlx::query(
-        "WITH sow_ids AS (SELECT id FROM truie WHERE bande_code=(SELECT code FROM bande WHERE id=?) UNION SELECT DISTINCT truie_id FROM evenement WHERE bande_id=? AND truie_id IS NOT NULL) SELECT t.id,t.num_travail,t.rfid,t.rang,t.race,e.id AS mise_bas_id,e.date AS date_mise_bas,COALESCE(e.nes_totaux,0) AS nes_totaux,COALESCE(e.nes_vifs,0) AS nes_vifs,COALESCE(e.mort_nes,0) AS mort_nes,COALESCE(e.momifies,0) AS momifies,COALESCE(e.chetifs,0) AS chetifs,COALESCE(e.ecrases,0) AS ecrases,COALESCE(e.tues_truie,0) AS tues_truie,e.heure_debut,e.heure_fin,COALESCE(e.suivi_actif,0) AS suivi_actif,e.delivrance_ok,e.note,CASE WHEN e.id IS NULL THEN 'a_mettre_bas' WHEN COALESCE(e.heure_debut,'')<>'' AND COALESCE(e.heure_fin,'')='' THEN 'en_cours' WHEN COALESCE(e.suivi_actif,0)=1 OR e.delivrance_ok=0 THEN 'a_surveiller' ELSE 'terminee' END AS statut_code,CASE WHEN e.id IS NULL THEN 'À mettre bas' WHEN COALESCE(e.heure_debut,'')<>'' AND COALESCE(e.heure_fin,'')='' THEN 'En cours' WHEN COALESCE(e.suivi_actif,0)=1 OR e.delivrance_ok=0 THEN 'À surveiller' ELSE 'Terminée' END AS statut_libelle,CASE WHEN e.date IS NOT NULL THEN CAST(julianday('now')-julianday(e.date) AS INTEGER) END AS jour_lactation,CASE WHEN e.date IS NOT NULL THEN date(e.date,'+28 day') END AS fin_suivi,CASE WHEN date('now')<date(e.date) THEN date(e.date) WHEN date('now')>date(e.date,'+28 day') THEN date(e.date,'+28 day') ELSE date('now') END AS date_perte_defaut,COALESCE((SELECT SUM(p.nb) FROM perteporcelet p WHERE p.truie_id=t.id AND p.bande_id=?),0) AS pertes,MAX(0,COALESCE(e.nes_vifs,0)-COALESCE((SELECT SUM(p.nb) FROM perteporcelet p WHERE p.truie_id=t.id AND p.bande_id=?),0)) AS porcelets_presents FROM sow_ids s JOIN truie t ON t.id=s.id LEFT JOIN evenement e ON e.id=(SELECT e2.id FROM evenement e2 WHERE e2.truie_id=t.id AND e2.bande_id=? AND e2.type='mise_bas' ORDER BY e2.date DESC,e2.id DESC LIMIT 1) ORDER BY CASE WHEN e.id IS NULL THEN 0 WHEN COALESCE(e.heure_debut,'')<>'' AND COALESCE(e.heure_fin,'')='' THEN 1 WHEN COALESCE(e.suivi_actif,0)=1 OR e.delivrance_ok=0 THEN 2 ELSE 3 END,t.num_travail COLLATE NOCASE",
+        "WITH sow_ids AS (SELECT id FROM truie WHERE bande_code=(SELECT code FROM bande WHERE id=?) UNION SELECT DISTINCT truie_id FROM evenement WHERE bande_id=? AND truie_id IS NOT NULL) SELECT t.id,t.num_travail,t.rfid,t.rang,t.race,e.id AS mise_bas_id,e.date AS date_mise_bas,COALESCE(e.nes_totaux,0) AS nes_totaux,COALESCE(e.nes_vifs,0) AS nes_vifs,COALESCE(e.mort_nes,0) AS mort_nes,COALESCE(e.momifies,0) AS momifies,COALESCE(e.chetifs,0) AS chetifs,COALESCE(e.ecrases,0) AS ecrases,COALESCE(e.tues_truie,0) AS tues_truie,e.heure_debut,e.heure_fin,COALESCE(e.suivi_actif,0) AS suivi_actif,e.delivrance_ok,e.note,c.num_vanne,c.nom AS case_nom,COALESCE((SELECT COUNT(*) FROM soinportee sp WHERE sp.evenement_id=e.id AND sp.date_realisee IS NULL),0) AS soins_attendus,(SELECT MIN(sp.date_prevue) FROM soinportee sp WHERE sp.evenement_id=e.id AND sp.date_realisee IS NULL) AS prochain_soin,CASE WHEN e.id IS NULL THEN 'a_mettre_bas' WHEN COALESCE(e.heure_debut,'')<>'' AND COALESCE(e.heure_fin,'')='' THEN 'en_cours' WHEN COALESCE(e.suivi_actif,0)=1 OR e.delivrance_ok=0 THEN 'a_surveiller' ELSE 'terminee' END AS statut_code,CASE WHEN e.id IS NULL THEN 'À mettre bas' WHEN COALESCE(e.heure_debut,'')<>'' AND COALESCE(e.heure_fin,'')='' THEN 'En cours' WHEN COALESCE(e.suivi_actif,0)=1 OR e.delivrance_ok=0 THEN 'À surveiller' ELSE 'Terminée' END AS statut_libelle,CASE WHEN e.date IS NOT NULL THEN CAST(julianday('now')-julianday(e.date) AS INTEGER) END AS jour_lactation,CASE WHEN e.date IS NOT NULL THEN date(e.date,'+28 day') END AS fin_suivi,CASE WHEN date('now')<date(e.date) THEN date(e.date) WHEN date('now')>date(e.date,'+28 day') THEN date(e.date,'+28 day') ELSE date('now') END AS date_perte_defaut,COALESCE((SELECT SUM(p.nb) FROM perteporcelet p WHERE p.truie_id=t.id AND p.bande_id=?),0) AS pertes,MAX(0,COALESCE(e.nes_vifs,0)-COALESCE((SELECT SUM(p.nb) FROM perteporcelet p WHERE p.truie_id=t.id AND p.bande_id=?),0)) AS porcelets_presents FROM sow_ids s JOIN truie t ON t.id=s.id LEFT JOIN evenement e ON e.id=(SELECT e2.id FROM evenement e2 WHERE e2.truie_id=t.id AND e2.bande_id=? AND e2.type='mise_bas' ORDER BY e2.date DESC,e2.id DESC LIMIT 1) LEFT JOIN casesalle c ON c.id=COALESCE(e.case_id,t.case_id) ORDER BY CASE WHEN e.id IS NULL THEN 0 WHEN COALESCE(e.heure_debut,'')<>'' AND COALESCE(e.heure_fin,'')='' THEN 1 WHEN COALESCE(e.suivi_actif,0)=1 OR e.delivrance_ok=0 THEN 2 ELSE 3 END,t.num_travail COLLATE NOCASE",
     )
     .bind(band_id)
     .bind(band_id)
@@ -2725,8 +2882,8 @@ async fn truie_cochette(
     Ok(Redirect::to(&format!("/truie/{id}")).into_response())
 }
 
-const EVENT_SELECT_BY_SOW: &str = "SELECT id,type,date,truie_id,bande_id,nes_totaux,nes_vifs,mort_nes,momifies,nb_sevres,poids_moyen,adoptes,retires,produit,motif,resultat,suivi_actif,delivrance_ok,note FROM evenement WHERE truie_id=? ORDER BY date DESC,id DESC";
-const EVENT_SELECT_BY_BAND: &str = "SELECT id,type,date,truie_id,bande_id,nes_totaux,nes_vifs,mort_nes,momifies,nb_sevres,poids_moyen,adoptes,retires,produit,motif,resultat,suivi_actif,delivrance_ok,note FROM evenement WHERE bande_id=? ORDER BY date DESC,id DESC";
+const EVENT_SELECT_BY_SOW: &str = "SELECT id,type,date,truie_id,bande_id,nes_totaux,nes_vifs,mort_nes,momifies,nb_sevres,poids_moyen,adoptes,retires,produit,motif,resultat,nb_doses,creneaux_ia,case_id,suivi_actif,delivrance_ok,note FROM evenement WHERE truie_id=? ORDER BY date DESC,id DESC";
+const EVENT_SELECT_BY_BAND: &str = "SELECT id,type,date,truie_id,bande_id,nes_totaux,nes_vifs,mort_nes,momifies,nb_sevres,poids_moyen,adoptes,retires,produit,motif,resultat,nb_doses,creneaux_ia,case_id,suivi_actif,delivrance_ok,note FROM evenement WHERE bande_id=? ORDER BY date DESC,id DESC";
 
 async fn evenement_ajouter(
     State(state): State<AppState>,
@@ -2767,7 +2924,22 @@ async fn evenement_ajouter(
     } else {
         form_text(&form, "note")
     };
-    let result = sqlx::query("INSERT INTO evenement(type,date,truie_id,bande_id,nes_totaux,nes_vifs,mort_nes,momifies,chetifs,ecrases,tues_truie,nb_sevres,poids_moyen,adoptes,retires,produit,motif,delai_attente,resultat,nb_doses,heure_debut,heure_fin,note,suivi_actif,delivrance_ok) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+    let slots = ia_slots(&form);
+    if kind == "ia" && slots.is_empty() {
+        return Err(AppError::Invalid(
+            "Cochez matin, midi ou soir pour l'insémination".into(),
+        ));
+    }
+    let case_id: Option<i64> = if let Some(sow_id) = sow_id {
+        sqlx::query_scalar("SELECT case_id FROM truie WHERE id=?")
+            .bind(sow_id)
+            .fetch_optional(&state.pool)
+            .await?
+            .flatten()
+    } else {
+        None
+    };
+    let result = sqlx::query("INSERT INTO evenement(type,date,truie_id,bande_id,nes_totaux,nes_vifs,mort_nes,momifies,chetifs,ecrases,tues_truie,nb_sevres,poids_moyen,adoptes,retires,produit,motif,delai_attente,resultat,nb_doses,creneaux_ia,case_id,heure_debut,heure_fin,note,suivi_actif,delivrance_ok) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
         .bind(&kind)
         .bind(&date)
         .bind(sow_id)
@@ -2787,7 +2959,9 @@ async fn evenement_ajouter(
         .bind(form_text(&form,"motif"))
         .bind(form_i64(&form,"delai_attente"))
         .bind(form_text(&form,"resultat"))
-        .bind(form_i64(&form,"nb_doses"))
+        .bind((kind=="ia").then_some(slots.len() as i64).or_else(||form_i64(&form,"nb_doses")))
+        .bind((!slots.is_empty()).then(||slots.join(",")))
+        .bind(case_id)
         .bind(form_text(&form,"heure_debut"))
         .bind(form_text(&form,"heure_fin"))
         .bind(note)
@@ -2811,6 +2985,14 @@ async fn evenement_ajouter(
                     form_i64(&form, "ecrases").unwrap_or(0).max(0),
                     form_i64(&form, "tues_truie").unwrap_or(0).max(0),
                 ),
+            )
+            .await?;
+            synchroniser_soins_portee(
+                &state.pool,
+                result.last_insert_rowid(),
+                sow_id,
+                band_id,
+                &date,
             )
             .await?;
         }
@@ -2864,6 +3046,41 @@ async fn evenement_supprimer(
     .into_response())
 }
 
+async fn evenement_modifier(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Path(id): Path<i64>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    verify_csrf(&session, &form)?;
+    let event: (Option<i64>, String) =
+        sqlx::query_as("SELECT truie_id,type FROM evenement WHERE id=?")
+            .bind(id)
+            .fetch_optional(&state.pool)
+            .await?
+            .ok_or(AppError::NotFound)?;
+    let slots = ia_slots(&form);
+    if event.1 == "ia" && slots.is_empty() {
+        return Err(AppError::Invalid(
+            "Cochez au moins un créneau d'insémination".into(),
+        ));
+    }
+    sqlx::query("UPDATE evenement SET date=?,resultat=?,produit=?,motif=?,delai_attente=CASE WHEN ? THEN ? ELSE delai_attente END,note=?,nb_doses=CASE WHEN type='ia' THEN ? ELSE nb_doses END,creneaux_ia=CASE WHEN type='ia' THEN ? ELSE creneaux_ia END WHERE id=?")
+        .bind(form_date_or_today(&form,"date")?).bind(form_text(&form,"resultat"))
+        .bind(form_text(&form,"produit")).bind(form_text(&form,"motif"))
+        .bind(form.contains_key("delai_attente")).bind(form_i64(&form,"delai_attente")).bind(form_text(&form,"note"))
+        .bind(slots.len() as i64).bind((!slots.is_empty()).then(||slots.join(","))).bind(id)
+        .execute(&state.pool).await?;
+    Ok(Redirect::to(
+        &event
+            .0
+            .map(|sow_id| format!("/truie/{sow_id}#historique"))
+            .unwrap_or_else(|| "/".into()),
+    )
+    .into_response())
+}
+
 async fn inseminations(
     State(state): State<AppState>,
     Extension(session): Extension<SessionData>,
@@ -2901,6 +3118,13 @@ async fn inseminations_enregistrer(
         return Err(AppError::Invalid("Sélectionne au moins une truie".into()));
     }
     let date = form_date_or_today(&form, "date")?;
+    let slots = ia_slots(&form);
+    if slots.is_empty() {
+        return Err(AppError::Invalid(
+            "Cochez au moins un créneau d'insémination : matin, midi ou soir".into(),
+        ));
+    }
+    let slot_text = slots.join(",");
     let mut tx = state.pool.begin().await?;
     for id in ids {
         let band_id: Option<i64> = sqlx::query_scalar(
@@ -2909,12 +3133,13 @@ async fn inseminations_enregistrer(
         .bind(id)
         .fetch_optional(&mut *tx)
         .await?;
-        sqlx::query("INSERT INTO evenement(type,date,truie_id,bande_id,produit,nb_doses,note,suivi_actif) VALUES('ia',?,?,?,?,?,?,0)")
+        sqlx::query("INSERT INTO evenement(type,date,truie_id,bande_id,produit,nb_doses,creneaux_ia,note,suivi_actif) VALUES('ia',?,?,?,?,?,?,?,0)")
             .bind(&date)
             .bind(id)
             .bind(band_id)
             .bind(form_text(&form, "produit"))
-            .bind(form_i64(&form, "nb_doses").unwrap_or(1).max(1))
+            .bind(slots.len() as i64)
+            .bind(&slot_text)
             .bind(form_text(&form, "note"))
             .execute(&mut *tx)
             .await?;
@@ -3406,6 +3631,56 @@ async fn truie_imprimer(
     render(&state, "impression.html", Value::Object(ctx))
 }
 
+async fn truies_imprimer(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Html<String>> {
+    verify_csrf(&session, &form)?;
+    let ids = form_selected_ids(&form, "truie_");
+    let rows = if ids.is_empty() {
+        let code = form_text(&form, "bande_code").ok_or_else(|| {
+            AppError::Invalid("Cochez des truies ou sélectionnez une bande".into())
+        })?;
+        let result = sqlx::query("SELECT num_travail,num_national,rfid,race,rang,bande_code,statut FROM truie WHERE reformee=0 AND bande_code=? ORDER BY num_travail")
+            .bind(&code).fetch_all(&state.pool).await?;
+        rows_to_json(result)?
+    } else {
+        let safe_ids = ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
+        generic_rows(&state.pool,&format!("SELECT num_travail,num_national,rfid,race,rang,bande_code,statut FROM truie WHERE id IN ({safe_ids}) ORDER BY bande_code,num_travail")).await?
+    };
+    let mut ctx = context(&session);
+    ctx.insert("title".into(), json!("Liste des truies"));
+    ctx.insert(
+        "infos".into(),
+        json!({"nombre":rows.len(),"selection":if ids.is_empty(){"bande"}else{"truies cochées"}}),
+    );
+    ctx.insert("lignes".into(), Value::Array(rows));
+    render(&state, "impression.html", Value::Object(ctx))
+}
+
+async fn soin_portee_realiser(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Path(id): Path<i64>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    verify_csrf(&session, &form)?;
+    let sow_id: i64 = sqlx::query_scalar("SELECT truie_id FROM soinportee WHERE id=?")
+        .bind(id)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    sqlx::query("UPDATE soinportee SET date_realisee=?,note=? WHERE id=?")
+        .bind(form_date_or_today(&form, "date_realisee")?)
+        .bind(form_text(&form, "note"))
+        .bind(id)
+        .execute(&state.pool)
+        .await?;
+    Ok(Redirect::to(&format!("/truie/{sow_id}#soins-portee")).into_response())
+}
+
 async fn bande_imprimer(
     State(state): State<AppState>,
     Extension(session): Extension<SessionData>,
@@ -3514,7 +3789,7 @@ async fn api_bandes_actives(State(state): State<AppState>) -> AppResult<axum::Js
 async fn api_truies(State(state): State<AppState>) -> AppResult<axum::Json<Value>> {
     let rows = generic_rows(
         &state.pool,
-        "SELECT t.id,t.num_travail,t.bande_code,t.rfid,b.date_mb AS mise_bas_prevue,CASE WHEN b.date_mb IS NOT NULL AND date(b.date_mb) BETWEEN date('now','-10 day') AND date('now','+10 day') AND NOT EXISTS(SELECT 1 FROM evenement e WHERE e.truie_id=t.id AND e.type='mise_bas' AND e.bande_id=b.id) THEN 1 ELSE 0 END AS dans_periode_mise_bas FROM truie t LEFT JOIN bande b ON b.code=t.bande_code AND b.active=1 WHERE t.reformee=0 ORDER BY t.num_travail",
+        "SELECT t.id,t.num_travail,t.bande_code,t.rfid,c.num_vanne,b.date_mb AS mise_bas_prevue,CASE WHEN b.date_mb IS NOT NULL AND date(b.date_mb) BETWEEN date('now','-10 day') AND date('now','+10 day') AND NOT EXISTS(SELECT 1 FROM evenement e WHERE e.truie_id=t.id AND e.type='mise_bas' AND e.bande_id=b.id) THEN 1 ELSE 0 END AS dans_periode_mise_bas FROM truie t LEFT JOIN bande b ON b.code=t.bande_code AND b.active=1 LEFT JOIN casesalle c ON c.id=t.case_id WHERE t.reformee=0 ORDER BY t.num_travail",
     )
     .await?;
     Ok(axum::Json(Value::Array(rows)))
@@ -3556,8 +3831,9 @@ async fn recherche(
     }
     let pattern = format!("%{q}%");
     let rows = sqlx::query(
-        "SELECT 'Truie' AS type,CAST(id AS TEXT) AS reference,COALESCE(num_travail,'')||CASE WHEN bande_code IS NOT NULL THEN ' · bande '||bande_code ELSE '' END AS detail,'/truie/'||id AS lien FROM truie WHERE num_travail LIKE ? OR COALESCE(num_national,'') LIKE ? OR COALESCE(rfid,'') LIKE ? UNION ALL SELECT 'Bande',CAST(id AS TEXT),code||COALESCE(' · '||site,''),'/bande/'||id FROM bande WHERE code LIKE ? OR COALESCE(num_officiel,'') LIKE ? UNION ALL SELECT 'Apport',CAST(id AS TEXT),COALESCE(num_apport,'')||' · '||COALESCE(CAST(nb_porcs AS TEXT),'0')||' porcs','/economique' FROM venteapport WHERE COALESCE(num_apport,'') LIKE ? UNION ALL SELECT 'Commande',CAST(id AS TEXT),nom_client||' · '||COALESCE(telephone,''),'/vente-directe/commande/'||id FROM commandeventedirecte WHERE nom_client LIKE ? OR COALESCE(telephone,'') LIKE ? OR COALESCE(email,'') LIKE ? LIMIT 200",
+        "SELECT 'Truie' AS type,CAST(t.id AS TEXT) AS reference,COALESCE(t.num_travail,'')||CASE WHEN t.bande_code IS NOT NULL THEN ' · bande '||t.bande_code ELSE '' END||CASE WHEN c.num_vanne IS NOT NULL THEN ' · vanne '||c.num_vanne ELSE '' END AS detail,'/truie/'||t.id AS lien FROM truie t LEFT JOIN casesalle c ON c.id=t.case_id WHERE t.num_travail LIKE ? OR COALESCE(t.num_national,'') LIKE ? OR COALESCE(t.rfid,'') LIKE ? OR COALESCE(c.num_vanne,'') LIKE ? UNION ALL SELECT 'Bande',CAST(id AS TEXT),code||COALESCE(' · '||site,''),'/bande/'||id FROM bande WHERE code LIKE ? OR COALESCE(num_officiel,'') LIKE ? UNION ALL SELECT 'Apport',CAST(id AS TEXT),COALESCE(num_apport,'')||' · '||COALESCE(CAST(nb_porcs AS TEXT),'0')||' porcs','/economique' FROM venteapport WHERE COALESCE(num_apport,'') LIKE ? UNION ALL SELECT 'Commande',CAST(id AS TEXT),nom_client||' · '||COALESCE(telephone,''),'/vente-directe/commande/'||id FROM commandeventedirecte WHERE nom_client LIKE ? OR COALESCE(telephone,'') LIKE ? OR COALESCE(email,'') LIKE ? LIMIT 200",
     )
+    .bind(&pattern)
     .bind(&pattern)
     .bind(&pattern)
     .bind(&pattern)
@@ -8379,13 +8655,14 @@ async fn sanitaire_acte_ajouter(
     let reference = form_text(&form, "reference").unwrap_or_else(|| "mise_bas".into());
     let day = form_i64(&form, "jour").unwrap_or(0);
     let rappel = form.contains_key("rappel");
-    sqlx::query("INSERT INTO acteprotocole(libelle,cible,reference,jour,produit,dose,unite,voie,duree_j,delai_attente,aiguille,preconisations,note,actif,rappel) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,1,?)")
+    let result=sqlx::query("INSERT INTO acteprotocole(libelle,cible,reference,jour,produit,dose,unite,voie,duree_j,delai_attente,aiguille,preconisations,note,actif,rappel) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,1,?)")
         .bind(label).bind(target).bind(reference).bind(day)
         .bind(form_text(&form,"produit")).bind(form_text(&form,"dose")).bind(form_text(&form,"unite"))
         .bind(form_text(&form,"voie")).bind(form_i64(&form,"duree_j")).bind(form_i64(&form,"delai_attente"))
         .bind(form_text(&form,"aiguille")).bind(form_text(&form,"preconisations")).bind(form_text(&form,"note"))
         .bind(rappel)
         .execute(&state.pool).await?;
+    synchroniser_protocole_portees(&state.pool, result.last_insert_rowid()).await?;
     Ok(Redirect::to("/sanitaire").into_response())
 }
 
@@ -8404,6 +8681,7 @@ async fn sanitaire_acte_modifier(
         .bind(form_text(&form,"produit")).bind(form_text(&form,"dose")).bind(form_text(&form,"unite")).bind(form_text(&form,"voie"))
         .bind(form_i64(&form,"duree_j")).bind(form_i64(&form,"delai_attente")).bind(form_text(&form,"aiguille"))
         .bind(form_text(&form,"preconisations")).bind(form_text(&form,"note")).bind(id).execute(&state.pool).await?;
+    synchroniser_protocole_portees(&state.pool, id).await?;
     Ok(Redirect::to("/sanitaire").into_response())
 }
 
@@ -8419,6 +8697,7 @@ async fn sanitaire_acte_supprimer(
         .bind(id)
         .execute(&state.pool)
         .await?;
+    synchroniser_protocole_portees(&state.pool, id).await?;
     Ok(Redirect::to("/sanitaire").into_response())
 }
 

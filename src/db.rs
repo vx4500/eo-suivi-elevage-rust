@@ -131,9 +131,17 @@ pub async fn init(pool: &SqlitePool) -> anyhow::Result<()> {
         ),
         ("releve_compteur", "prix_unitaire", "REAL"),
         ("venteapport", "montant_ht", "REAL"),
+        ("evenement", "creneaux_ia", "TEXT"),
+        ("evenement", "case_id", "INTEGER"),
     ] {
         ensure_column(pool, table, column, definition).await?;
     }
+
+    // Prépare également les soins des portées déjà présentes lors d'une mise
+    // à jour depuis une ancienne version. L'unicité évite tout doublon.
+    sqlx::query("INSERT OR IGNORE INTO soinportee(protocole_id,evenement_id,truie_id,bande_id,date_prevue) SELECT a.id,e.id,e.truie_id,e.bande_id,date(e.date,printf('%+d day',a.jour)) FROM evenement e JOIN acteprotocole a ON a.actif=1 AND lower(trim(a.cible)) IN ('porcelet','porcelets') AND lower(trim(a.reference))='mise_bas' WHERE e.type='mise_bas' AND e.truie_id IS NOT NULL")
+        .execute(pool)
+        .await?;
 
     // Reprise 2.2.29 : les anciennes bases ne possédaient pas la colonne
     // `montant_ht` sur les ventes. Pour les apports Cooperl, le HT fiable est

@@ -42,11 +42,18 @@ async fn add_sow_event(
     if exists == 0 {
         return Err(AppError::NotFound);
     }
-    sqlx::query("INSERT INTO evenement(type,date,truie_id,bande_id,verrat_id,produit,motif,delai_attente,resultat,nb_doses,note,suivi_actif) VALUES(?,?,?,?,?,?,?,?,?,?,?,0)")
+    let slots = ia_slots(form);
+    let slot_text = (!slots.is_empty()).then(|| slots.join(","));
+    let dose_count = if kind == "ia" {
+        Some(slots.len().max(1) as i64)
+    } else {
+        form_i64(form, "nb_doses")
+    };
+    sqlx::query("INSERT INTO evenement(type,date,truie_id,bande_id,verrat_id,produit,motif,delai_attente,resultat,nb_doses,creneaux_ia,note,suivi_actif) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,0)")
         .bind(kind).bind(date).bind(sow_id).bind(band_id)
         .bind(form_i64(form,"verrat_id")).bind(form_text(form,"produit"))
         .bind(form_text(form,"motif")).bind(form_i64(form,"delai_attente"))
-        .bind(form_text(form,"resultat")).bind(form_i64(form,"nb_doses"))
+        .bind(form_text(form,"resultat")).bind(dose_count).bind(slot_text)
         .bind(form_text(form,"note")).execute(&state.pool).await?;
     db::journal(
         &state.pool,
@@ -125,6 +132,11 @@ pub(super) async fn truie_mise_bas(
     verify_csrf(&session, &form)?;
     let date = required_date(&form)?;
     let band_id = form_i64(&form, "bande_id").or(sow_band(&state.pool, id).await?);
+    let case_id: Option<i64> = sqlx::query_scalar("SELECT case_id FROM truie WHERE id=?")
+        .bind(id)
+        .fetch_optional(&state.pool)
+        .await?
+        .flatten();
     let live = form_i64(&form, "nes_vifs").unwrap_or(0).max(0);
     let still = form_i64(&form, "mort_nes").unwrap_or(0).max(0);
     let mummies = form_i64(&form, "momifies").unwrap_or(0).max(0);
@@ -136,16 +148,16 @@ pub(super) async fn truie_mise_bas(
         .bind(id).bind(band_id).fetch_optional(&state.pool).await?;
     let mut tx = state.pool.begin().await?;
     let event_id = if let Some(event_id) = existing {
-        sqlx::query("UPDATE evenement SET date=?,nes_totaux=?,nes_vifs=?,mort_nes=?,momifies=?,chetifs=?,ecrases=?,tues_truie=?,heure_debut=?,heure_fin=?,suivi_actif=?,delivrance_ok=?,note=? WHERE id=?")
+        sqlx::query("UPDATE evenement SET date=?,nes_totaux=?,nes_vifs=?,mort_nes=?,momifies=?,chetifs=?,ecrases=?,tues_truie=?,heure_debut=?,heure_fin=?,suivi_actif=?,delivrance_ok=?,note=?,case_id=COALESCE(case_id,?) WHERE id=?")
             .bind(&date).bind(total).bind(live).bind(still).bind(mummies).bind(weak)
             .bind(crushed).bind(killed).bind(form_text(&form,"heure_debut"))
-            .bind(form_text(&form,"heure_fin")).bind(form.contains_key("suivi_actif") as i64).bind(form_i64(&form,"delivrance_ok")).bind(form_text(&form,"note")).bind(event_id).execute(&mut *tx).await?;
+            .bind(form_text(&form,"heure_fin")).bind(form.contains_key("suivi_actif") as i64).bind(form_i64(&form,"delivrance_ok")).bind(form_text(&form,"note")).bind(case_id).bind(event_id).execute(&mut *tx).await?;
         event_id
     } else {
-        let result = sqlx::query("INSERT INTO evenement(type,date,truie_id,bande_id,nes_totaux,nes_vifs,mort_nes,momifies,chetifs,ecrases,tues_truie,heure_debut,heure_fin,suivi_actif,delivrance_ok,note) VALUES('mise_bas',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+        let result = sqlx::query("INSERT INTO evenement(type,date,truie_id,bande_id,nes_totaux,nes_vifs,mort_nes,momifies,chetifs,ecrases,tues_truie,heure_debut,heure_fin,suivi_actif,delivrance_ok,note,case_id) VALUES('mise_bas',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
             .bind(&date).bind(id).bind(band_id).bind(total).bind(live).bind(still).bind(mummies).bind(weak)
             .bind(crushed).bind(killed).bind(form_text(&form,"heure_debut"))
-            .bind(form_text(&form,"heure_fin")).bind(form.contains_key("suivi_actif") as i64).bind(form_i64(&form,"delivrance_ok")).bind(form_text(&form,"note")).execute(&mut *tx).await?;
+            .bind(form_text(&form,"heure_fin")).bind(form.contains_key("suivi_actif") as i64).bind(form_i64(&form,"delivrance_ok")).bind(form_text(&form,"note")).bind(case_id).execute(&mut *tx).await?;
         if parse_stored_date(&date).is_some_and(|d| d <= Local::now().date_naive()) {
             sqlx::query("UPDATE truie SET rang=rang+1,updated_at=CURRENT_TIMESTAMP WHERE id=?")
                 .bind(id)
@@ -168,6 +180,7 @@ pub(super) async fn truie_mise_bas(
         (weak, crushed, killed),
     )
     .await?;
+    synchroniser_soins_portee(&state.pool, event_id, id, band_id, &date).await?;
     let fallback = format!("/truie/{id}");
     let destination = form_text(&form, "retour")
         .filter(|value| value.starts_with("/maternite") && !value.starts_with("//"))
@@ -252,8 +265,16 @@ pub(super) async fn truie_sortie(
     require_writer(&session)?;
     verify_csrf(&session, &form)?;
     let date = required_date(&form)?;
+    let reason = form_text(&form, "motif_sortie")
+        .or_else(|| form_text(&form, "motif"))
+        .ok_or_else(|| AppError::Invalid("Motif obligatoire".into()))?;
+    if !SOW_EXIT_REASONS.contains(&reason.as_str()) {
+        return Err(AppError::Invalid(
+            "Sélectionnez un motif de sortie proposé".into(),
+        ));
+    }
     sqlx::query("UPDATE truie SET reformee=1,statut='sortie',date_reforme=?,motif_sortie=?,prix_sortie=?,num_apport_sortie=?,updated_at=CURRENT_TIMESTAMP WHERE id=?")
-        .bind(date).bind(form_text(&form,"motif_sortie").or_else(||form_text(&form,"motif"))).bind(form_f64(&form,"prix_sortie")).bind(form_text(&form,"num_apport_sortie")).bind(id).execute(&state.pool).await?;
+        .bind(date).bind(reason).bind(form_f64(&form,"prix_sortie")).bind(form_text(&form,"num_apport_sortie")).bind(id).execute(&state.pool).await?;
     Ok(Redirect::to(&format!("/truie/{id}")).into_response())
 }
 
@@ -1305,13 +1326,28 @@ pub(super) async fn saisie_rapide(
     let mut updated_cases: Vec<i64> = Vec::new();
     match kind.as_str() {
         "perte" => {
-            let band_id = form_i64(&form, "bande_id")
-                .ok_or_else(|| AppError::Invalid("Bande obligatoire".into()))?;
+            let sow_id = form_i64(&form, "truie_id").ok_or_else(|| {
+                AppError::Invalid("Écrivez puis sélectionnez le numéro de la truie".into())
+            })?;
+            let band_id = if let Some(id) = form_i64(&form, "bande_id") {
+                id
+            } else {
+                sqlx::query_scalar("SELECT COALESCE((SELECT e.bande_id FROM evenement e WHERE e.truie_id=? AND e.type='mise_bas' AND e.bande_id IS NOT NULL ORDER BY e.date DESC,e.id DESC LIMIT 1),(SELECT b.id FROM truie t JOIN bande b ON b.code=t.bande_code WHERE t.id=? ORDER BY b.active DESC,b.id DESC LIMIT 1))")
+                    .bind(sow_id).bind(sow_id).fetch_optional(&state.pool).await?.flatten()
+                    .ok_or_else(|| AppError::Invalid("Aucune bande trouvée pour cette truie".into()))?
+            };
             let band: String = sqlx::query_scalar("SELECT code FROM bande WHERE id=?")
                 .bind(band_id)
                 .fetch_optional(&state.pool)
                 .await?
                 .ok_or(AppError::NotFound)?;
+            let coherent:i64=sqlx::query_scalar("SELECT COUNT(*) FROM truie t WHERE t.id=? AND (t.bande_code=? OR EXISTS(SELECT 1 FROM evenement e WHERE e.truie_id=t.id AND e.bande_id=? AND e.type='mise_bas'))")
+                .bind(sow_id).bind(&band).bind(band_id).fetch_one(&state.pool).await?;
+            if coherent == 0 {
+                return Err(AppError::Invalid(
+                    "La truie ne correspond pas à la bande sélectionnée".into(),
+                ));
+            }
             let number = form_i64(&form, "nombre").unwrap_or(1).max(1);
             let case_id = form_i64(&form, "case_id");
             let mut stade = form_text(&form, "stade");
@@ -1326,15 +1362,38 @@ pub(super) async fn saisie_rapide(
                     stade = Some(deduced);
                 }
             }
-            sqlx::query("INSERT INTO declarationmort(bande_code,date,stade,case_id,cause,poids,nombre,declare_par,note) VALUES(?,?,?,?,?,?,?,?,?)").bind(band).bind(&date).bind(stade).bind(case_id).bind(form_text(&form,"cause")).bind(form_f64(&form,"poids")).bind(number).bind(&session.nom).bind(form_text(&form,"note")).execute(&state.pool).await?;
-            if let Some(sow_id) = form_i64(&form, "truie_id") {
-                sqlx::query("INSERT INTO perteporcelet(truie_id,bande_id,age_j,nb,cause,date) VALUES(?,?,?,?,?,?)").bind(sow_id).bind(band_id).bind(form_i64(&form,"age_j")).bind(number).bind(form_text(&form,"cause")).bind(&date).execute(&state.pool).await?;
+            let cause = form_text(&form, "cause")
+                .ok_or_else(|| AppError::Invalid("Cause obligatoire".into()))?;
+            let cause_exists: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM causeperte WHERE lower(libelle)=lower(?)")
+                    .bind(&cause)
+                    .fetch_one(&state.pool)
+                    .await?;
+            if cause_exists == 0 {
+                return Err(AppError::Invalid(
+                    "Sélectionnez une cause configurée".into(),
+                ));
             }
+            sqlx::query("INSERT INTO declarationmort(bande_code,date,stade,case_id,cause,poids,nombre,declare_par,note) VALUES(?,?,?,?,?,?,?,?,?)").bind(band).bind(&date).bind(stade).bind(case_id).bind(&cause).bind(form_f64(&form,"poids")).bind(number).bind(&session.nom).bind(form_text(&form,"note")).execute(&state.pool).await?;
+            let farrowing:Option<String>=sqlx::query_scalar("SELECT date FROM evenement WHERE truie_id=? AND bande_id=? AND type='mise_bas' ORDER BY date DESC,id DESC LIMIT 1").bind(sow_id).bind(band_id).fetch_optional(&state.pool).await?;
+            let age = farrowing
+                .as_deref()
+                .and_then(parse_stored_date)
+                .and_then(|start| parse_stored_date(&date).map(|end| (end - start).num_days()))
+                .filter(|value| *value >= 0);
+            sqlx::query("INSERT INTO perteporcelet(truie_id,bande_id,age_j,nb,cause,date) VALUES(?,?,?,?,?,?)").bind(sow_id).bind(band_id).bind(age.or_else(||form_i64(&form,"age_j"))).bind(number).bind(cause).bind(&date).execute(&state.pool).await?;
         }
         "sortie" => {
             let sow_id = form_i64(&form, "truie_id")
                 .ok_or_else(|| AppError::Invalid("Truie obligatoire".into()))?;
-            sqlx::query("UPDATE truie SET reformee=1,statut='sortie',date_reforme=?,motif_sortie=?,updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(date).bind(form_text(&form,"motif")).bind(sow_id).execute(&state.pool).await?;
+            let reason = form_text(&form, "motif")
+                .ok_or_else(|| AppError::Invalid("Motif obligatoire".into()))?;
+            if !SOW_EXIT_REASONS.contains(&reason.as_str()) {
+                return Err(AppError::Invalid(
+                    "Sélectionnez un motif de sortie proposé".into(),
+                ));
+            }
+            sqlx::query("UPDATE truie SET reformee=1,statut='sortie',date_reforme=?,motif_sortie=?,updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(date).bind(reason).bind(sow_id).execute(&state.pool).await?;
         }
         "eld" => {
             let sow_id = form_i64(&form, "truie_id")
@@ -1353,6 +1412,11 @@ pub(super) async fn saisie_rapide(
             let sow_id = form_i64(&form, "truie_id")
                 .ok_or_else(|| AppError::Invalid("Truie obligatoire".into()))?;
             let band_id = sow_band(&state.pool, sow_id).await?;
+            let case_id: Option<i64> = sqlx::query_scalar("SELECT case_id FROM truie WHERE id=?")
+                .bind(sow_id)
+                .fetch_optional(&state.pool)
+                .await?
+                .flatten();
             let live = form_i64(&form, "nes_vifs").unwrap_or(0).max(0);
             let still = form_i64(&form, "mort_nes").unwrap_or(0).max(0);
             let mummies = form_i64(&form, "momifies").unwrap_or(0).max(0);
@@ -1369,15 +1433,15 @@ pub(super) async fn saisie_rapide(
             .await?;
             let mut tx = state.pool.begin().await?;
             let event_id = if let Some(event_id) = existing {
-                sqlx::query("UPDATE evenement SET date=?,nes_totaux=?,nes_vifs=?,mort_nes=?,momifies=?,chetifs=?,ecrases=?,tues_truie=?,heure_debut=?,heure_fin=?,suivi_actif=?,delivrance_ok=?,note=? WHERE id=?")
+                sqlx::query("UPDATE evenement SET date=?,nes_totaux=?,nes_vifs=?,mort_nes=?,momifies=?,chetifs=?,ecrases=?,tues_truie=?,heure_debut=?,heure_fin=?,suivi_actif=?,delivrance_ok=?,note=?,case_id=COALESCE(case_id,?) WHERE id=?")
                     .bind(&date).bind(total).bind(live).bind(still).bind(mummies).bind(weak).bind(crushed).bind(killed)
-                    .bind(form_text(&form,"heure_debut")).bind(form_text(&form,"heure_fin")).bind(form.contains_key("suivi_actif") as i64).bind(form_i64(&form,"delivrance_ok")).bind(form_text(&form,"note"))
+                    .bind(form_text(&form,"heure_debut")).bind(form_text(&form,"heure_fin")).bind(form.contains_key("suivi_actif") as i64).bind(form_i64(&form,"delivrance_ok")).bind(form_text(&form,"note")).bind(case_id)
                     .bind(event_id).execute(&mut *tx).await?;
                 event_id
             } else {
-                let result = sqlx::query("INSERT INTO evenement(type,date,truie_id,bande_id,nes_totaux,nes_vifs,mort_nes,momifies,chetifs,ecrases,tues_truie,heure_debut,heure_fin,suivi_actif,delivrance_ok,note) VALUES('mise_bas',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+                let result = sqlx::query("INSERT INTO evenement(type,date,truie_id,bande_id,nes_totaux,nes_vifs,mort_nes,momifies,chetifs,ecrases,tues_truie,heure_debut,heure_fin,suivi_actif,delivrance_ok,note,case_id) VALUES('mise_bas',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
                     .bind(&date).bind(sow_id).bind(band_id).bind(total).bind(live).bind(still).bind(mummies).bind(weak).bind(crushed).bind(killed)
-                    .bind(form_text(&form,"heure_debut")).bind(form_text(&form,"heure_fin")).bind(form.contains_key("suivi_actif") as i64).bind(form_i64(&form,"delivrance_ok")).bind(form_text(&form,"note"))
+                    .bind(form_text(&form,"heure_debut")).bind(form_text(&form,"heure_fin")).bind(form.contains_key("suivi_actif") as i64).bind(form_i64(&form,"delivrance_ok")).bind(form_text(&form,"note")).bind(case_id)
                     .execute(&mut *tx).await?;
                 if parse_stored_date(&date).is_some_and(|day| day <= Local::now().date_naive()) {
                     sqlx::query(
@@ -1405,12 +1469,21 @@ pub(super) async fn saisie_rapide(
                 (weak, crushed, killed),
             )
             .await?;
+            synchroniser_soins_portee(&state.pool, event_id, sow_id, band_id, &date).await?;
         }
         "ia" | "echo" | "chaleur" => {
             let sow_id = form_i64(&form, "truie_id")
                 .ok_or_else(|| AppError::Invalid("Truie obligatoire".into()))?;
             let band_id = sow_band(&state.pool, sow_id).await?;
-            sqlx::query("INSERT INTO evenement(type,date,truie_id,bande_id,resultat,produit,nb_doses,note) VALUES(?,?,?,?,?,?,?,?)").bind(&kind).bind(date).bind(sow_id).bind(band_id).bind(form_text(&form,"resultat")).bind(form_text(&form,"produit")).bind(form_i64(&form,"nb_doses")).bind(form_text(&form,"note")).execute(&state.pool).await?;
+            let slots = ia_slots(&form);
+            if kind == "ia" && slots.is_empty() {
+                return Err(AppError::Invalid(
+                    "Cochez matin, midi ou soir pour l'insémination".into(),
+                ));
+            }
+            let dose_count = (kind == "ia").then_some(slots.len() as i64);
+            let slot_text = (!slots.is_empty()).then(|| slots.join(","));
+            sqlx::query("INSERT INTO evenement(type,date,truie_id,bande_id,resultat,produit,nb_doses,creneaux_ia,note) VALUES(?,?,?,?,?,?,?,?,?)").bind(&kind).bind(date).bind(sow_id).bind(band_id).bind(form_text(&form,"resultat")).bind(form_text(&form,"produit")).bind(dose_count).bind(slot_text).bind(form_text(&form,"note")).execute(&state.pool).await?;
         }
         "sevrage" => {
             // traitement batch de sevrage depuis la saisie rapide
