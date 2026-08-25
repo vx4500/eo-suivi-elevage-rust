@@ -1,6 +1,6 @@
 # Notice utilisateur — EO‑Suivi Élevage
 
-Version de la notice : 2.2.29 — mise à jour le 25 août 2026.
+Version de la notice : 2.2.30 — mise à jour le 25 août 2026.
 
 Cette notice doit être relue à chaque livraison. Toute fonction ajoutée ou
 modifiée doit être inscrite dans la section « Nouveautés de la version » avant
@@ -43,6 +43,14 @@ doit donc pas compter deux fois la sortie.
   case.
 - Pour une délivrance NOK, consulter la fiche truie et traiter les lignes
   marquées **À suivre** selon le protocole de l'élevage.
+
+## Nouveautés de la version 2.2.30
+
+- Les duplicatas Cooperl sont reconnus même lorsque le mot « Apport » n'est pas présent dans le texte interne du PDF.
+- Les apports de réformes et les documents composés de plusieurs pages sont analysés avec leur numéro, leur bon, leur frappe et leur montant HT.
+- Les pages répétant le même bon sont regroupées ; les bons différents d'un même apport restent ventilables séparément.
+- Les participations, pénalités et avoirs sans animaux modifient uniquement le résultat HT et ne créent aucune sortie de porcs.
+- Un avoir conserve son numéro de document et le numéro de l'apport corrigé, sans écraser la vente initiale.
 
 ## Nouveautés de la version 2.2.29
 

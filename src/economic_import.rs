@@ -141,7 +141,13 @@ pub fn parse_document(text: &str) -> Result<ImportDocument, String> {
     {
         return parse_genetique(&normalized);
     }
-    if upper.contains("APPORT") && upper.contains("CHARCUTIERS") {
+    // Les duplicatas Cooperl les plus récents perdent le libellé « APPORT
+    // DE » lors de l'extraction lopdf : restent toutefois PORCS
+    // CHARCUTIERS, le numéro de bon et la semaine. Ne pas exiger un mot qui
+    // n'existe visuellement que dans le fond de page du PDF.
+    if upper.contains("CHARCUTIERS")
+        && (upper.contains("APPORT") || (upper.contains("BON N") && upper.contains("SEMAINE N")))
+    {
         return parse_apport(&normalized);
     }
     if upper.contains("PRODUITS VETERINAIRES") || upper.contains("PRODUITS VÉTÉRINAIRES") {
@@ -611,13 +617,14 @@ struct ApportLot {
 }
 
 fn parse_apport(text: &str) -> Result<ImportDocument, String> {
-    let reference = capture(text, r"(?i)APPORT\s*N[°ºo]?\s*([0-9]{6,})", 1);
+    let reference = apport_document_reference(text);
+    let linked_apport = capture(text, r"(?i)AVOIR\s+SUR\s+APPORT\s+N[Oo°º]?\s*([0-9.]+)", 1)
+        .map(|value| value.replace('.', ""));
     let date = capture(
         text,
         r"(?i)ENLEVEMENT\s*DU\s*([0-9]{2}/[0-9]{2}/[0-9]{2,4})",
         1,
     )
-    .or_else(|| capture(text, r"(?i)D\s*U\s+([0-9]{2}/[0-9]{2}/[0-9]{2,4})", 1))
     // Sur le modèle Cooperl réellement utilisé (« duplicata » comme
     // « bordereau simplifié »), le libellé « ENLEVEMENT DU » fait partie du
     // fond de page (image), pas du texte extrait : seule la date reste,
@@ -665,7 +672,16 @@ fn parse_apport(text: &str) -> Result<ImportDocument, String> {
         lots
     };
     let gross_total: f64 = lots.iter().filter_map(|lot| lot.gross).sum();
-    let economic_lines = parse_economic_lines(text, reference.as_deref(), date.as_deref());
+    // Une pièce sans animaux est une régularisation financière autonome
+    // (participation oubliée, pénalité ou avoir). Son Total bon HT suffit :
+    // recréer en plus le détail comme valorisation/retenue doublerait la
+    // correction dans les écrans économiques.
+    let financial_adjustment = lots.iter().all(|lot| lot.pigs.is_none());
+    let economic_lines = if financial_adjustment {
+        Vec::new()
+    } else {
+        parse_economic_lines(text, reference.as_deref(), date.as_deref())
+    };
     let retention_total: f64 = economic_lines
         .iter()
         .filter(|line| line.kind == "retenue")
@@ -704,7 +720,14 @@ fn parse_apport(text: &str) -> Result<ImportDocument, String> {
             }
             _ => None,
         };
+        let is_avoir = is_apport_avoir(text);
         let label = match (&lot.reference, &lot.bon) {
+            _ if linked_apport.is_some() => format!(
+                "Avoir sur apport {}",
+                linked_apport.as_deref().unwrap_or_default()
+            ),
+            (Some(reference), _) if is_avoir => format!("Avoir - lot {reference}"),
+            (None, Some(bon)) if is_avoir => format!("Avoir - bon {bon}"),
             (Some(reference), _) => format!("Lot {reference}"),
             (None, Some(bon)) => format!("Bon {bon}"),
             _ => "Vente de porcs".into(),
@@ -737,11 +760,49 @@ fn parse_apport(text: &str) -> Result<ImportDocument, String> {
                 "muscle_lot": lot.muscle_lot,
                 "total_retenues": (index == 0 && retention_total > 0.0).then_some(retention_total),
                 "lots_json": lots_json,
+                "avoir": is_avoir,
+                "regularisation": financial_adjustment,
+                "apport_lie": linked_apport,
             }),
         });
     }
     lines.extend(economic_lines);
     finish_document("apport", lines, reference, date)
+}
+
+fn is_apport_avoir(text: &str) -> bool {
+    let compact: String = text
+        .to_uppercase()
+        .chars()
+        .filter(|character| character.is_alphabetic())
+        .collect();
+    compact.contains("AVOIR")
+}
+
+/// Numéro propre du document. Sur un avoir, « AVOIR SUR APPORT N° ... » est
+/// la référence corrigée et non celle du nouveau document : elle ne doit
+/// jamais servir de clé d'import, sinon l'avoir écraserait la vente initiale.
+fn apport_document_reference(text: &str) -> Option<String> {
+    let linked = capture(text, r"(?i)AVOIR\s+SUR\s+APPORT\s+N[Oo°º]?\s*([0-9.]+)", 1)
+        .map(|value| value.replace('.', ""));
+    if let Some(value) = captures_all(text, r"(?i)APPORT\s*N[°ºo]?\s*([0-9.]{6,})", 1)
+        .into_iter()
+        .map(|value| value.replace('.', ""))
+        .find(|value| Some(value.as_str()) != linked.as_deref())
+    {
+        return Some(value);
+    }
+    // Dans les duplicatas, le numéro est soit seul juste après DUPLICATA,
+    // soit sur la ligne « Semaine N° » (anciens documents 12.46644).
+    capture(text, r"(?im)^\s*([0-9]{6,}|[0-9]{1,3}\.[0-9]{4,})\s*$", 1)
+        .or_else(|| {
+            capture(
+                text,
+                r"(?im)^\s*Semaine\s+N[°ºo]?\s+[0-9./]+\s+([0-9.]{6,})\s*$",
+                1,
+            )
+        })
+        .map(|value| value.replace('.', ""))
 }
 
 fn split_lots(text: &str) -> Vec<(Option<String>, String)> {
@@ -752,39 +813,53 @@ fn split_lots(text: &str) -> Vec<(Option<String>, String)> {
     if matches.is_empty() {
         return vec![(None, text.to_string())];
     }
-    matches
-        .iter()
-        .enumerate()
-        .filter_map(|(index, captures)| {
-            let body_start = captures.get(0)?.end();
-            let body_end = matches
-                .get(index + 1)
-                .and_then(|next| next.get(0))
-                .map_or(text.len(), |value| value.start());
-            Some((
-                captures.get(1).map(|value| value.as_str().to_string()),
-                text[body_start..body_end].to_string(),
-            ))
-        })
-        .collect()
+    let mut lots = Vec::<(Option<String>, String)>::new();
+    for (index, captures) in matches.iter().enumerate() {
+        let Some(whole_match) = captures.get(0) else {
+            continue;
+        };
+        let body_start = whole_match.end();
+        let body_end = matches
+            .get(index + 1)
+            .and_then(|next| next.get(0))
+            .map_or(text.len(), |value| value.start());
+        let bon = captures.get(1).map(|value| value.as_str().to_string());
+        let body = text[body_start..body_end].to_string();
+        if let Some((_, known_body)) = lots.iter_mut().find(|(known, _)| known == &bon) {
+            known_body.push('\n');
+            known_body.push_str(&body);
+        } else {
+            lots.push((bon, body));
+        }
+    }
+    lots
 }
 
 fn parse_lot(bon: Option<String>, body: &str) -> Option<ApportLot> {
     let reference = lot_reference(body);
-    let total = Regex::new(r"(?i)Total\s*Bon\.+\s*([0-9.,]+)\s+([0-9.,]+)")
-        .ok()?
-        .captures(body);
-    let weight = total
-        .as_ref()
-        .and_then(|row| row.get(1))
-        .and_then(|value| number(value.as_str()));
-    let gross = total
-        .as_ref()
-        .and_then(|row| row.get(2))
-        .and_then(|value| number(value.as_str()));
-    let animal_regex =
-        Regex::new(r"(?im)^\s*([0-9]+)\s+(SAISI|CREVE|CREVÉ|CREVEE|PORC|LEGER|LÉGER|LOURD|COEUR)")
-            .ok()?;
+    let total_line = body
+        .lines()
+        .rev()
+        .find(|line| line.to_uppercase().contains("TOTAL BON"));
+    let amounts = total_line
+        .map(|line| {
+            Regex::new(r"[0-9]+(?:[.,][0-9]+)*(?:-)?")
+                .ok()
+                .map(|regex| {
+                    regex
+                        .find_iter(line)
+                        .filter_map(|value| number(value.as_str()))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        })
+        .unwrap_or_default();
+    let gross = amounts.last().copied();
+    let weight = (amounts.len() >= 2).then(|| amounts[amounts.len() - 2].abs());
+    let animal_regex = Regex::new(
+        r"(?im)^\s*([0-9]+)\s+(SAISI|CREVE|CREVÉ|CREVEE|PORC|LEGER|LÉGER|LOURD|COEUR|TRUIE)",
+    )
+    .ok()?;
     let pigs: i64 = animal_regex
         .captures_iter(body)
         .filter_map(|row| row.get(1))
@@ -820,12 +895,13 @@ fn parse_lot(bon: Option<String>, body: &str) -> Option<ApportLot> {
 }
 
 fn lot_reference(text: &str) -> Option<String> {
-    let regex = Regex::new(r"\b[A-Z0-9]{4,5}\b").ok()?;
+    let regex = Regex::new(r"\b[A-Z0-9]{3,5}\b").ok()?;
     let mut occurrences: HashMap<String, usize> = HashMap::new();
     for value in regex.find_iter(text).map(|value| value.as_str()) {
-        if value
-            .chars()
-            .any(|character| character.is_ascii_alphabetic())
+        if !value.ends_with("KG")
+            && value
+                .chars()
+                .any(|character| character.is_ascii_alphabetic())
             && value.chars().any(|character| character.is_ascii_digit())
         {
             *occurrences.entry(value.to_string()).or_default() += 1;
@@ -843,15 +919,18 @@ fn parse_economic_lines(
     date: Option<&str>,
 ) -> Vec<ImportLine> {
     let Ok(keyword) = Regex::new(
-        r"(?i)(\+\s*VALUE|PRIME\s+SOLIDARITE|COMPLEMENT|PARTICIPATION|FRAIS\s+DE\s+GROUPEMENT|SERVICE\s+PUBLIC|EQUARRISSAGE|ÉQUARRISSAGE|CVEE|CONTRIBUTION\s+SANITAIRE|COTISATION)",
+        r"(?i)(\+\s*VALUE|PRIME\s+SOLIDARITE|COMPLEMENT|PARTICIPATION|FRAIS\s+DE\s+(?:GROUPEMENT|RAMASSAGE)|SERVICE\s+PUBLIC|EQUARRISSAGE|ÉQUARRISSAGE|CVEE|CONTRIBUTION\s+SANITAIRE|COTISATION)",
     ) else {
         return Vec::new();
     };
+    let apport_credit =
+        Regex::new(r"(?i)AVOIR\s+SUR\s+APPORT").is_ok_and(|regex| regex.is_match(text));
     let mut ordered = Vec::<(String, String, f64)>::new();
     for raw in text.lines() {
         if !keyword.is_match(raw)
             || raw.to_uppercase().contains("VALUE TECHNIQUE")
             || raw.to_uppercase().contains("PLUS VALUE")
+            || (raw.to_uppercase().contains("SOIT") && raw.to_uppercase().contains("CUMUL"))
         {
             continue;
         }
@@ -859,8 +938,8 @@ fn parse_economic_lines(
             continue;
         };
         let label = canonical_label(raw);
-        let forced = is_forced_retention(&label);
-        let kind = if forced || signed < 0.0 || document_sign(text) < 0.0 {
+        let forced = is_forced_retention(&label) && !apport_credit;
+        let kind = if forced || signed < 0.0 || (document_sign(text) < 0.0 && !apport_credit) {
             "retenue"
         } else {
             "valorisation"
@@ -940,6 +1019,7 @@ fn canonical_label(raw: &str) -> String {
         ("COCHONDUDIMANC", "Complément Cochon du Dimanche"),
         ("COUTRFID", "Participation coût RFID"),
         ("PARTICIPATIONPSA", "Participation PSA"),
+        ("FRAISDERAMASSAGE", "Frais de ramassage"),
         ("FRAISDEGROUPEMENT", "Frais de groupement"),
         ("SERVICEPUBLICEQUARRISSAGE", "Service public équarrissage"),
         ("EQUARRISSAGE", "Service public équarrissage"),
@@ -1338,6 +1418,52 @@ mod tests {
             .find(|line| line.kind == "vente")
             .expect("une ligne de vente");
         assert_eq!(vente.date.as_deref(), Some("2026-07-03"));
+    }
+
+    #[test]
+    fn apport_duplicata_sans_libelle_apport_est_reconnu() {
+        let text = "D U P L I C A T A\n226071267848\nSemaine N° 26.27\nPORCS CHARCUTIERS\n16961 LE 11/07/26\n3/07/26\nNAISSEUR/ENGRAISSEUR\nBon n° 10831\n67 PORC 2 DA915 6334,700\nTotal bon..... 6334,700 10.569,44";
+        let parsed = parse_document(text).expect("duplicata Cooperl reconnu");
+        let vente = parsed
+            .lines
+            .iter()
+            .find(|line| line.kind == "vente")
+            .expect("vente extraite");
+        assert_eq!(vente.reference.as_deref(), Some("226071267848"));
+        assert_eq!(vente.date.as_deref(), Some("2026-07-03"));
+        assert_eq!(vente.quantity, Some(67.0));
+        assert_eq!(vente.amount, Some(10_569.44));
+    }
+
+    #[test]
+    fn apport_reforme_ancien_numero_et_frappe_courte() {
+        let text = "D U P L I C A T A\nSemaine N° 26.06 12.46644\nPORCS CHARCUTIERS\n3/02/26\nNAISSEUR/ENGRAISSEUR\nBon n° 25809\n3 TRUIE VIANDE 0-125KG 2 DA9 308,000 0,698 214,98\nTotal bon..... 308,000 212,38";
+        let parsed = parse_document(text).expect("réformes reconnues");
+        let vente = &parsed.lines[0];
+        assert_eq!(vente.reference.as_deref(), Some("1246644"));
+        assert_eq!(vente.quantity, Some(3.0));
+        assert_eq!(import_test_detail(vente, "frappe"), Some("DA9"));
+        assert_eq!(vente.amount, Some(212.38));
+    }
+
+    #[test]
+    fn apport_avoir_garde_son_numero_et_ne_sort_aucun_porc() {
+        let text = "D U P L I C A T A\n226081272085\nSemaine N° 26.32\n**** A V O I R ****\nAPPORT DE PORCS CHARCUTIERS\n3/08/26\nAVOIR SUR APPORT NO 1230826\nBon n° 36190\nFRAIS DE RAMASSAGE CHARCUTIERS 4908,800- 0,010- 49,08\nTotal bon..... 49,08";
+        let parsed = parse_document(text).expect("avoir d'apport reconnu");
+        assert_eq!(parsed.lines.len(), 1);
+        let avoir = &parsed.lines[0];
+        assert_eq!(avoir.reference.as_deref(), Some("226081272085"));
+        assert_eq!(avoir.quantity, None);
+        assert_eq!(avoir.amount, Some(49.08));
+        assert_eq!(import_test_detail(avoir, "apport_lie"), Some("1230826"));
+        assert_eq!(
+            avoir.details.get("regularisation").and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    fn import_test_detail<'a>(line: &'a ImportLine, key: &str) -> Option<&'a str> {
+        line.details.get(key).and_then(Value::as_str)
     }
 
     #[test]
