@@ -65,12 +65,13 @@ git merge --ff-only origin/main
 
 version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)
 [[ -n "$version" ]] || die "version Cargo introuvable."
+expected_style=$(<static/style.css)
 
 if systemctl is-active --quiet "$SERVICE"; then
     current_page=$(curl -fsS "$LOGIN_URL" 2>/dev/null || true)
     current_style=$(curl -fsS "$STYLE_URL?v=$version" 2>/dev/null || true)
     if grep -Fq "Version Rust $version" <<<"$current_page" \
-        && grep -Fq "v$version" <<<"$current_style"; then
+        && [[ "$current_style" == "$expected_style" ]]; then
         status_update "terminee" "100" "$version" "La version $version est déjà installée."
         echo "EO-Suivi Rust $version et son interface sont déjà installés."
         exit 0
@@ -162,18 +163,28 @@ systemctl enable --now eo-suivi-rust-update.path >/dev/null
 systemctl start "$SERVICE"
 
 healthy=0
+health_detail="le service ne répond pas encore"
 status_update "verification" "94" "$version" "Vérification du redémarrage et de l'interface."
 for _ in {1..15}; do
-    if current_page=$(curl -fsS "$LOGIN_URL" 2>/dev/null) \
-        && current_style=$(curl -fsS "$STYLE_URL?v=$version" 2>/dev/null) \
-        && grep -Fq "Version Rust $version" <<<"$current_page" \
-        && grep -Fq "v$version" <<<"$current_style"; then
+    if ! current_page=$(curl -fsS "$LOGIN_URL" 2>/dev/null); then
+        health_detail="la page de connexion ne répond pas"
+    elif ! grep -Fq "Version Rust $version" <<<"$current_page"; then
+        health_detail="la page de connexion ne présente pas la version $version"
+    elif ! current_style=$(curl -fsS "$STYLE_URL?v=$version" 2>/dev/null); then
+        health_detail="la feuille de style ne répond pas"
+    elif [[ "$current_style" != "$expected_style" ]]; then
+        health_detail="la feuille de style servie ne correspond pas au fichier installé"
+    else
         healthy=1
         break
     fi
     sleep 1
 done
-[[ "$healthy" -eq 1 ]] || die "le contrôle HTTP de la version ou de l'interface a échoué."
+if [[ "$healthy" -ne 1 ]]; then
+    systemctl --no-pager --full status "$SERVICE" >&2 || true
+    journalctl -u "$SERVICE" -n 40 --no-pager -o cat >&2 || true
+    die "le contrôle HTTP a échoué : $health_detail."
+fi
 
 rollback_required=0
 trap - EXIT

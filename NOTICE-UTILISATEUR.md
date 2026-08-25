@@ -1,10 +1,15 @@
 # Notice utilisateur — EO‑Suivi Élevage
 
-Version de la notice : 2.2.30 — mise à jour le 25 août 2026.
+Version de la notice : 2.2.31 — mise à jour le 25 août 2026.
 
 Cette notice doit être relue à chaque livraison. Toute fonction ajoutée ou
 modifiée doit être inscrite dans la section « Nouveautés de la version » avant
 la publication, puis le numéro et la date ci-dessus doivent être actualisés.
+
+## Nouveautés de la version 2.2.31
+
+- Le contrôle de mise à jour compare maintenant la feuille de style réellement servie au fichier installé, sans exiger un numéro de version écrit dans le CSS.
+- En cas de véritable échec, le script indique si la page de connexion, le numéro de version ou la feuille de style pose problème et affiche l’état et le journal du service avant le retour arrière.
 
 ## Mise-bas
 
