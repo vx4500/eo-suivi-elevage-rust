@@ -15,7 +15,7 @@
   <div class="dashboard-kpi"><span class="kpi-symbol">B</span><div><b>{{ stats.band_active }}</b><small>Bandes actives</small></div></div>
   <div class="dashboard-kpi"><span class="kpi-symbol">T</span><div><b>{{ stats.truies }}</b><small>Truies actives</small></div></div>
   <div class="dashboard-kpi"><span class="kpi-symbol">PV</span><div><b>{{ stats.porcs_vendus_annee }}</b><small>Porcs vendus {{ annee }}</small></div></div>
-  <div class="dashboard-kpi"><span class="kpi-symbol">€/kg</span><div><b>{% if stats.prix_net_kg is not none %}{{ stats.prix_net_kg|decimal3 }} €{% else %}—{% endif %}</b><small>Prix net {{ annee }}</small></div></div>
+  <div class="dashboard-kpi"><span class="kpi-symbol">€/kg</span><div><b>{% if stats.prix_ht_kg is not none %}{{ stats.prix_ht_kg|decimal3 }} €{% else %}—{% endif %}</b><small>Prix HT {{ annee }}</small></div></div>
   <div class="dashboard-kpi"><span class="kpi-symbol">M5</span><div><b>{% if stats.prix_dernieres_ventes is not none %}{{ stats.prix_dernieres_ventes|decimal3 }} €{% else %}—{% endif %}</b><small>Moyenne 5 ventes</small></div></div>
   <div class="dashboard-kpi alert-kpi"><span class="kpi-symbol">P</span><div><b>{{ stats.morts_annee }}</b><small>Pertes déclarées {{ annee }}</small></div></div>
   <div class="dashboard-kpi"><span class="kpi-symbol">€</span><div><b>{{ stats.marge|euro }}</b><small>Marge partielle</small></div></div>
@@ -88,7 +88,7 @@
 <div class="dashboard-lower-grid">
   <section class="dashboard-panel sales-panel">
     <div class="dashboard-section-head compact"><div><span class="section-code">€/KG</span><div><h2>Dernières ventes</h2><p>Évolution du prix net au kilogramme.</p></div></div><a href="/economique">Suivi économique</a></div>
-    {% if dernieres_ventes %}<div class="sale-chart" aria-label="Prix net au kilo des dix dernières ventes">{% for p in dernieres_ventes %}<div class="sale-chart-point"><b>{{ p.prix_net_kg|decimal3 }}</b><div class="sale-chart-bar" style="height:{{ p.hauteur }}px"></div><small>{{ p.date|date_fr }}</small></div>{% endfor %}</div>{% else %}<p class="rust-empty">Aucune vente avec poids et montant.</p>{% endif %}
+    {% if dernieres_ventes %}<div class="sale-chart" aria-label="Prix HT au kilo des dix dernières ventes">{% for p in dernieres_ventes %}<div class="sale-chart-point"><b>{{ p.prix_ht_kg|decimal3 }}</b><div class="sale-chart-bar" style="height:{{ p.hauteur }}px"></div><small>{{ p.date|date_fr }}</small></div>{% endfor %}</div>{% else %}<p class="rust-empty">Aucune vente avec poids et montant.</p>{% endif %}
   </section>
 
   <section class="dashboard-panel action-panel">
@@ -102,8 +102,8 @@
   </section>
 
   <section class="dashboard-panel monthly-panel">
-    <div class="dashboard-section-head compact"><div><span class="section-code">MOIS</span><div><h2>Prix net mensuel</h2><p>Synthèse des apports.</p></div></div></div>
-    <div class="rust-scroll"><table><thead><tr><th>Mois</th><th>Porcs</th><th>€/kg net</th></tr></thead><tbody>{% for p in prix_tendance %}<tr><td>{{ p.mois }}</td><td>{{ p.porcs }}</td><td>{% if p.prix_net_kg is not none %}<b>{{ p.prix_net_kg|decimal3 }}</b>{% else %}—{% endif %}</td></tr>{% else %}<tr><td colspan="3" class="rust-empty">Aucune vente</td></tr>{% endfor %}</tbody></table></div>
+    <div class="dashboard-section-head compact"><div><span class="section-code">MOIS</span><div><h2>Prix HT mensuel</h2><p>Synthèse des apports.</p></div></div></div>
+    <div class="rust-scroll"><table><thead><tr><th>Mois</th><th>Porcs</th><th>€/kg HT</th></tr></thead><tbody>{% for p in prix_tendance %}<tr><td>{{ p.mois }}</td><td>{{ p.porcs }}</td><td>{% if p.prix_ht_kg is not none %}<b>{{ p.prix_ht_kg|decimal3 }}</b>{% else %}—{% endif %}</td></tr>{% else %}<tr><td colspan="3" class="rust-empty">Aucune vente</td></tr>{% endfor %}</tbody></table></div>
   </section>
 </div>
 {% endblock %}

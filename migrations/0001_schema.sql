@@ -323,6 +323,7 @@ CREATE TABLE IF NOT EXISTS venteapport (
     poids_moyen REAL,
     prix_moyen REAL,
     plus_value REAL,
+    montant_ht REAL,
     montant_net REAL,
     tmp REAL,
     tx_qualification REAL,

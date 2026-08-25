@@ -411,6 +411,16 @@ fn parse_semence(text: &str) -> Result<ImportDocument, String> {
                 .and_then(|value| number(&value));
         }
     }
+    // Exception autorisée uniquement lorsque la facture indique elle-même
+    // l'absence de TVA (micro-entreprise / franchise en base).
+    if ht.is_none()
+        && (upper.contains("MICRO-ENTREPRISE")
+            || upper.contains("MICRO ENTREPRISE")
+            || upper.contains("TVA NON APPLICABLE")
+            || upper.contains("293 B"))
+    {
+        ht = ttc;
+    }
     let mut doses = 0_i64;
     for line in text.lines() {
         let line_upper = line.to_uppercase();
@@ -544,7 +554,16 @@ fn parse_genetique(text: &str) -> Result<ImportDocument, String> {
         || document_sign(text) < 0.0
         || avoir_facture.is_some();
     let sign = if is_avoir { -1.0 } else { 1.0 };
-    let amount = ttc.or(ht).map(|value| value.abs() * sign);
+    // Les calculs économiques utilisent exclusivement la base HT. Le TTC
+    // reste conservé dans les détails pour contrôle de facture, jamais comme
+    // solution de repli silencieuse.
+    let micro_tva_non_applicable = text.to_uppercase().contains("MICRO-ENTREPRISE")
+        || text.to_uppercase().contains("MICRO ENTREPRISE")
+        || text.to_uppercase().contains("TVA NON APPLICABLE")
+        || text.to_uppercase().contains("293 B");
+    let amount = ht
+        .or_else(|| micro_tva_non_applicable.then_some(ttc).flatten())
+        .map(|value| value.abs() * sign);
     let base_label = if count > 0 {
         format!("{count} cochettes")
     } else {
@@ -635,7 +654,9 @@ fn parse_apport(text: &str) -> Result<ImportDocument, String> {
                 .and_then(|value| integer(&value)),
             weight: capture(text, r"(?i)POIDS\s*TOTAL\s*:\s*([0-9.,]+)", 1)
                 .and_then(|value| number(&value)),
-            gross: total_net,
+            // Sans total de lot explicitement identifié, le net global ne
+            // doit jamais être promu silencieusement en montant HT.
+            gross: None,
             muscle_range: None,
             muscle_lot: None,
             technical_value: None,
@@ -668,12 +689,15 @@ fn parse_apport(text: &str) -> Result<ImportDocument, String> {
         .collect::<Vec<_>>();
     let mut lines = Vec::new();
     for (index, lot) in lots.iter().enumerate() {
-        let amount = match (total_net, lot.gross) {
+        let net_amount = match (total_net, lot.gross) {
             (Some(net), Some(gross)) if gross_total.abs() > f64::EPSILON => {
                 Some((net * gross / gross_total * 100.0).round() / 100.0)
             }
             (_, gross) => gross,
         };
+        // `gross` est le montant HT explicite du lot. C'est l'unique montant
+        // autorisé pour les prix moyens et résultats économiques.
+        let amount = lot.gross;
         let average_weight = match (lot.weight, lot.pigs) {
             (Some(weight), Some(pigs)) if pigs > 0 => {
                 Some((weight / pigs as f64 * 100.0).round() / 100.0)
@@ -706,7 +730,8 @@ fn parse_apport(text: &str) -> Result<ImportDocument, String> {
                 "poids_moyen": average_weight,
                 "prix_moyen": global_price,
                 "plus_value": global_value,
-                "montant_net": amount,
+                "montant_ht": amount,
+                "montant_net": net_amount,
                 "tmp": lot.muscle_lot,
                 "muscle_gamme": lot.muscle_range,
                 "muscle_lot": lot.muscle_lot,
@@ -1274,10 +1299,18 @@ mod tests {
             Some(5760.0)
         );
 
-        // Le net à payer global (19 465,50) se répartit au prorata du
-        // montant brut de chaque lot (8 855,10 / 9 607,76).
-        assert_eq!(ventes[0].amount, Some(9335.98));
-        assert_eq!(ventes[1].amount, Some(10129.52));
+        // Le montant de calcul reste le HT explicite de chaque lot. Le net
+        // global est seulement conservé dans les détails pour contrôle.
+        assert_eq!(ventes[0].amount, Some(8855.10));
+        assert_eq!(ventes[1].amount, Some(9607.76));
+        assert_eq!(
+            ventes[0].details.get("montant_net").and_then(Value::as_f64),
+            Some(9335.98)
+        );
+        assert_eq!(
+            ventes[1].details.get("montant_net").and_then(Value::as_f64),
+            Some(10129.52)
+        );
 
         assert_eq!(
             ventes[0].details.get("muscle_lot").and_then(Value::as_f64),
@@ -1330,7 +1363,7 @@ mod tests {
         assert_eq!(line.reference.as_deref(), Some("1441649"));
         assert_eq!(line.date.as_deref(), Some("2025-07-29"));
         assert_eq!(line.quantity, Some(28.0));
-        assert_eq!(line.amount, Some(10972.69));
+        assert_eq!(line.amount, Some(10400.65));
         assert_eq!(
             line.details.get("montant_ht").and_then(Value::as_f64),
             Some(10400.65)
@@ -1356,7 +1389,7 @@ mod tests {
         let line = &parsed.lines[0];
         assert_eq!(line.reference.as_deref(), Some("1441836"));
         assert_eq!(line.quantity, Some(-28.0));
-        assert_eq!(line.amount, Some(-11153.72));
+        assert_eq!(line.amount, Some(-10572.25));
         assert_eq!(
             line.details.get("montant_ht").and_then(Value::as_f64),
             Some(-10572.25)

@@ -130,6 +130,7 @@ pub async fn init(pool: &SqlitePool) -> anyhow::Result<()> {
             "INTEGER NOT NULL DEFAULT 0",
         ),
         ("releve_compteur", "prix_unitaire", "REAL"),
+        ("venteapport", "montant_ht", "REAL"),
     ] {
         ensure_column(pool, table, column, definition).await?;
     }

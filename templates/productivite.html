@@ -31,8 +31,8 @@
 
 <h2>Résultats techniques d’abattage par bande</h2>
 <p>Les moyennes TMP, muscle et plus-value sont pondérées par le nombre de porcs.</p>
-<div class="rust-scroll"><table><thead><tr><th>Bande</th><th>Porcs</th><th>Poids moyen</th><th>TMP</th><th>Muscle lot</th><th>Plus-value</th><th>Prix net/kg</th><th>Montant net</th></tr></thead><tbody>
-{% for t in technique %}<tr><td><a href="/bande/{{ t.id }}"><b>{{ t.code }}</b></a></td><td>{{ t.porcs }}</td><td>{{ t.poids_moyen or '—' }}{% if t.poids_moyen is not none %} kg{% endif %}</td><td>{{ t.tmp or '—' }}</td><td>{{ t.muscle_lot or '—' }}</td><td>{{ t.plus_value or '—' }}</td><td>{{ t.prix_net_kg or '—' }}{% if t.prix_net_kg is not none %} €/kg{% endif %}</td><td>{{ t.montant_net|euro }}</td></tr>
+<div class="rust-scroll"><table><thead><tr><th>Bande</th><th>Porcs</th><th>Poids moyen</th><th>TMP</th><th>Muscle lot</th><th>Plus-value</th><th>Prix HT/kg</th><th>Montant HT</th></tr></thead><tbody>
+{% for t in technique %}<tr><td><a href="/bande/{{ t.id }}"><b>{{ t.code }}</b></a></td><td>{{ t.porcs }}</td><td>{{ t.poids_moyen or '—' }}{% if t.poids_moyen is not none %} kg{% endif %}</td><td>{{ t.tmp or '—' }}</td><td>{{ t.muscle_lot or '—' }}</td><td>{{ t.plus_value or '—' }}</td><td>{{ t.prix_ht_kg or '—' }}{% if t.prix_ht_kg is not none %} €/kg{% endif %}</td><td>{{ t.montant_ht|euro }}</td></tr>
 {% else %}<tr><td colspan="8" class="rust-empty">Aucun apport relié à une bande sur cette période</td></tr>{% endfor %}
 </tbody></table></div>
 

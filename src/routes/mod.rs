@@ -1685,7 +1685,7 @@ async fn dashboard(
             .fetch_one(&state.pool)
             .await?;
     let vente: f64 =
-        sqlx::query_scalar("SELECT CAST(COALESCE(SUM(montant_net),0) AS REAL) FROM venteapport")
+        sqlx::query_scalar("SELECT CAST(COALESCE(SUM(montant_ht),0) AS REAL) FROM venteapport")
             .fetch_one(&state.pool)
             .await?;
     let aliment: f64 = sqlx::query_scalar(
@@ -1701,12 +1701,13 @@ async fn dashboard(
         sqlx::query_scalar("SELECT CAST(COALESCE(SUM(montant_ht),0) AS REAL) FROM achatsemence")
             .fetch_one(&state.pool)
             .await?;
-    let genetique: f64 = sqlx::query_scalar("SELECT CAST(COALESCE(SUM(COALESCE(montant_net,montant_ht)),0) AS REAL) FROM achatgenetique")
-        .fetch_one(&state.pool)
-        .await?;
+    let genetique: f64 =
+        sqlx::query_scalar("SELECT CAST(COALESCE(SUM(montant_ht),0) AS REAL) FROM achatgenetique")
+            .fetch_one(&state.pool)
+            .await?;
     let year = Local::now().format("%Y").to_string();
     let year_sales = sqlx::query_as::<_, (i64, f64, f64)>(
-        "SELECT CAST(COALESCE(SUM(nb_porcs),0) AS INTEGER),CAST(COALESCE(SUM(poids_total),0) AS REAL),CAST(COALESCE(SUM(montant_net),0) AS REAL) FROM venteapport WHERE substr(date,1,4)=?",
+        "SELECT CAST(COALESCE(SUM(nb_porcs),0) AS INTEGER),CAST(COALESCE(SUM(poids_total),0) AS REAL),CAST(COALESCE(SUM(montant_ht),0) AS REAL) FROM venteapport WHERE substr(date,1,4)=?",
     )
     .bind(&year)
     .fetch_one(&state.pool)
@@ -1719,16 +1720,16 @@ async fn dashboard(
     .await?;
     let price_trend = generic_rows(
         &state.pool,
-        "SELECT substr(date,1,7) AS mois,CAST(SUM(COALESCE(nb_porcs,0)) AS INTEGER) AS porcs,ROUND(SUM(COALESCE(montant_net,0))/NULLIF(SUM(COALESCE(poids_total,0)),0),3) AS prix_net_kg FROM venteapport WHERE date IS NOT NULL GROUP BY substr(date,1,7) ORDER BY mois DESC LIMIT 12",
+        "SELECT substr(date,1,7) AS mois,CAST(SUM(COALESCE(nb_porcs,0)) AS INTEGER) AS porcs,ROUND(SUM(COALESCE(montant_ht,0))/NULLIF(SUM(COALESCE(poids_total,0)),0),3) AS prix_ht_kg FROM venteapport WHERE date IS NOT NULL GROUP BY substr(date,1,7) ORDER BY mois DESC LIMIT 12",
     )
     .await?;
     let latest_sales = generic_rows(
         &state.pool,
-        "WITH recent AS (SELECT id,date,num_apport,nb_porcs,poids_total,montant_net,ROUND(montant_net/NULLIF(poids_total,0),3) AS prix_net_kg FROM venteapport WHERE poids_total>0 AND montant_net IS NOT NULL ORDER BY date DESC,id DESC LIMIT 10), bounds AS (SELECT MIN(prix_net_kg) AS mini,MAX(prix_net_kg) AS maxi FROM recent) SELECT recent.*,ROUND(CASE WHEN bounds.maxi=bounds.mini THEN 70 ELSE 30+90*(recent.prix_net_kg-bounds.mini)/(bounds.maxi-bounds.mini) END,0) AS hauteur FROM recent CROSS JOIN bounds ORDER BY recent.date,recent.id",
+        "WITH recent AS (SELECT id,date,num_apport,nb_porcs,poids_total,montant_ht,ROUND(montant_ht/NULLIF(poids_total,0),3) AS prix_ht_kg FROM venteapport WHERE poids_total>0 AND montant_ht IS NOT NULL ORDER BY date DESC,id DESC LIMIT 10), bounds AS (SELECT MIN(prix_ht_kg) AS mini,MAX(prix_ht_kg) AS maxi FROM recent) SELECT recent.*,ROUND(CASE WHEN bounds.maxi=bounds.mini THEN 70 ELSE 30+90*(recent.prix_ht_kg-bounds.mini)/(bounds.maxi-bounds.mini) END,0) AS hauteur FROM recent CROSS JOIN bounds ORDER BY recent.date,recent.id",
     )
     .await?;
     let latest_average = sqlx::query_as::<_, (f64, f64)>(
-        "SELECT CAST(COALESCE(SUM(montant_net),0) AS REAL),CAST(COALESCE(SUM(poids_total),0) AS REAL) FROM (SELECT montant_net,poids_total FROM venteapport WHERE poids_total>0 AND montant_net IS NOT NULL ORDER BY date DESC,id DESC LIMIT 5)",
+        "SELECT CAST(COALESCE(SUM(montant_ht),0) AS REAL),CAST(COALESCE(SUM(poids_total),0) AS REAL) FROM (SELECT montant_ht,poids_total FROM venteapport WHERE poids_total>0 AND montant_ht IS NOT NULL ORDER BY date DESC,id DESC LIMIT 5)",
     )
     .fetch_one(&state.pool)
     .await?;
@@ -1757,7 +1758,7 @@ async fn dashboard(
     ctx.insert("capacites".into(), Value::Array(capacites));
     ctx.insert(
         "stats".into(),
-        json!({"band_active": bands.len(), "truies": truies, "sevres": sevres, "marge": vente-aliment-veto-semence-genetique,"porcs_vendus_annee":year_sales.0,"prix_net_kg":if year_sales.1>0.0{Some(year_sales.2/year_sales.1)}else{None},"prix_dernieres_ventes":if latest_average.1>0.0{Some(latest_average.0/latest_average.1)}else{None},"morts_annee":year_deaths}),
+        json!({"band_active": bands.len(), "truies": truies, "sevres": sevres, "marge": vente-aliment-veto-semence-genetique,"porcs_vendus_annee":year_sales.0,"prix_ht_kg":if year_sales.1>0.0{Some(year_sales.2/year_sales.1)}else{None},"prix_dernieres_ventes":if latest_average.1>0.0{Some(latest_average.0/latest_average.1)}else{None},"morts_annee":year_deaths}),
     );
     Ok(render(&state, "dashboard.html", Value::Object(ctx))?.into_response())
 }
@@ -3996,7 +3997,7 @@ async fn productivite(
         .bind(&cutoff)
         .fetch_all(&state.pool)
         .await?;
-    let technical = sqlx::query("SELECT b.id,b.code,b.date_mb,CAST(SUM(COALESCE(v.nb_porcs,0)) AS INTEGER) AS porcs,ROUND(SUM(COALESCE(v.poids_total,0))/NULLIF(SUM(COALESCE(v.nb_porcs,0)),0),1) AS poids_moyen,ROUND(SUM(CASE WHEN v.tmp IS NOT NULL THEN v.tmp*COALESCE(v.nb_porcs,0) ELSE 0 END)/NULLIF(SUM(CASE WHEN v.tmp IS NOT NULL THEN COALESCE(v.nb_porcs,0) ELSE 0 END),0),2) AS tmp,ROUND(SUM(CASE WHEN v.muscle_lot IS NOT NULL THEN v.muscle_lot*COALESCE(v.nb_porcs,0) ELSE 0 END)/NULLIF(SUM(CASE WHEN v.muscle_lot IS NOT NULL THEN COALESCE(v.nb_porcs,0) ELSE 0 END),0),2) AS muscle_lot,ROUND(SUM(COALESCE(v.montant_net,0))/NULLIF(SUM(COALESCE(v.poids_total,0)),0),3) AS prix_net_kg,ROUND(SUM(CASE WHEN v.plus_value IS NOT NULL THEN v.plus_value*COALESCE(v.nb_porcs,0) ELSE 0 END)/NULLIF(SUM(CASE WHEN v.plus_value IS NOT NULL THEN COALESCE(v.nb_porcs,0) ELSE 0 END),0),2) AS plus_value,CAST(ROUND(SUM(COALESCE(v.montant_net,0)),2) AS REAL) AS montant_net FROM venteapport v JOIN bande b ON b.id=v.bande_id WHERE v.date IS NULL OR v.date>=date('now',?) GROUP BY b.id,b.code,b.date_mb ORDER BY b.date_mb DESC,b.id DESC")
+    let technical = sqlx::query("SELECT b.id,b.code,b.date_mb,CAST(SUM(COALESCE(v.nb_porcs,0)) AS INTEGER) AS porcs,ROUND(SUM(COALESCE(v.poids_total,0))/NULLIF(SUM(COALESCE(v.nb_porcs,0)),0),1) AS poids_moyen,ROUND(SUM(CASE WHEN v.tmp IS NOT NULL THEN v.tmp*COALESCE(v.nb_porcs,0) ELSE 0 END)/NULLIF(SUM(CASE WHEN v.tmp IS NOT NULL THEN COALESCE(v.nb_porcs,0) ELSE 0 END),0),2) AS tmp,ROUND(SUM(CASE WHEN v.muscle_lot IS NOT NULL THEN v.muscle_lot*COALESCE(v.nb_porcs,0) ELSE 0 END)/NULLIF(SUM(CASE WHEN v.muscle_lot IS NOT NULL THEN COALESCE(v.nb_porcs,0) ELSE 0 END),0),2) AS muscle_lot,ROUND(SUM(COALESCE(v.montant_ht,0))/NULLIF(SUM(COALESCE(v.poids_total,0)),0),3) AS prix_ht_kg,ROUND(SUM(CASE WHEN v.plus_value IS NOT NULL THEN v.plus_value*COALESCE(v.nb_porcs,0) ELSE 0 END)/NULLIF(SUM(CASE WHEN v.plus_value IS NOT NULL THEN COALESCE(v.nb_porcs,0) ELSE 0 END),0),2) AS plus_value,CAST(ROUND(SUM(COALESCE(v.montant_ht,0)),2) AS REAL) AS montant_ht FROM venteapport v JOIN bande b ON b.id=v.bande_id WHERE v.date IS NULL OR v.date>=date('now',?) GROUP BY b.id,b.code,b.date_mb ORDER BY b.date_mb DESC,b.id DESC")
         .bind(&cutoff)
         .fetch_all(&state.pool)
         .await?;
@@ -5677,7 +5678,7 @@ async fn economique(
     Query(query): Query<HashMap<String, String>>,
 ) -> AppResult<Html<String>> {
     let ventes_total: f64 =
-        sqlx::query_scalar("SELECT CAST(COALESCE(SUM(montant_net),0) AS REAL) FROM venteapport")
+        sqlx::query_scalar("SELECT CAST(COALESCE(SUM(montant_ht),0) AS REAL) FROM venteapport")
             .fetch_one(&state.pool)
             .await?;
     let aliment: f64 = sqlx::query_scalar(
@@ -5693,7 +5694,10 @@ async fn economique(
         sqlx::query_scalar("SELECT CAST(COALESCE(SUM(montant_ht),0) AS REAL) FROM achatsemence")
             .fetch_one(&state.pool)
             .await?;
-    let genetique: f64 = sqlx::query_scalar("SELECT CAST(COALESCE(SUM(COALESCE(montant_net,montant_ht)),0) AS REAL) FROM achatgenetique").fetch_one(&state.pool).await?;
+    let genetique: f64 =
+        sqlx::query_scalar("SELECT CAST(COALESCE(SUM(montant_ht),0) AS REAL) FROM achatgenetique")
+            .fetch_one(&state.pool)
+            .await?;
     let bands = generic_rows(
         &state.pool,
         "SELECT id,code,date_mb,site FROM bande ORDER BY active DESC,date_mb IS NULL,date_mb,id",
@@ -5701,14 +5705,14 @@ async fn economique(
     .await?;
     let band_results = generic_rows(
         &state.pool,
-        "WITH ventes AS (SELECT bande_id,SUM(COALESCE(nb_porcs,0)) AS porcs,SUM(COALESCE(poids_total,0)) AS poids,SUM(COALESCE(montant_net,0)) AS recettes FROM venteapport GROUP BY bande_id),aliment AS (SELECT bande_id,SUM(COALESCE(montant_ht,0)) AS cout FROM livraisonaliment GROUP BY bande_id),veto AS (SELECT bande_id,SUM(COALESCE(montant_ht,0)) AS cout FROM achatveto GROUP BY bande_id),semence AS (SELECT bande_id,SUM(COALESCE(montant_ht,0)) AS cout FROM achatsemence GROUP BY bande_id),genetique AS (SELECT bande_code,SUM(COALESCE(montant_net,montant_ht,0)) AS cout FROM achatgenetique GROUP BY bande_code) SELECT b.id,b.code,b.site,CAST(COALESCE(v.porcs,0) AS INTEGER) AS porcs,ROUND(COALESCE(v.poids,0),1) AS poids,ROUND(COALESCE(v.recettes,0),2) AS recettes,ROUND(COALESCE(a.cout,0),2) AS aliment,ROUND(COALESCE(vt.cout,0),2) AS veto,ROUND(COALESCE(se.cout,0),2) AS semence,ROUND(COALESCE(g.cout,0),2) AS genetique,ROUND(COALESCE(v.recettes,0)-COALESCE(a.cout,0)-COALESCE(vt.cout,0)-COALESCE(se.cout,0)-COALESCE(g.cout,0),2) AS marge,ROUND((COALESCE(a.cout,0)+COALESCE(vt.cout,0)+COALESCE(se.cout,0)+COALESCE(g.cout,0))/NULLIF(v.porcs,0),2) AS cout_par_porc,ROUND(COALESCE(v.recettes,0)/NULLIF(v.poids,0),3) AS prix_net_kg FROM bande b LEFT JOIN ventes v ON v.bande_id=b.id LEFT JOIN aliment a ON a.bande_id=b.id LEFT JOIN veto vt ON vt.bande_id=b.id LEFT JOIN semence se ON se.bande_id=b.id LEFT JOIN genetique g ON g.bande_code=b.code WHERE v.porcs IS NOT NULL OR a.cout IS NOT NULL OR vt.cout IS NOT NULL OR se.cout IS NOT NULL OR g.cout IS NOT NULL ORDER BY b.date_mb IS NULL,b.date_mb,b.id",
+        "WITH ventes AS (SELECT bande_id,SUM(COALESCE(nb_porcs,0)) AS porcs,SUM(COALESCE(poids_total,0)) AS poids,SUM(COALESCE(montant_ht,0)) AS recettes FROM venteapport GROUP BY bande_id),aliment AS (SELECT bande_id,SUM(COALESCE(montant_ht,0)) AS cout FROM livraisonaliment GROUP BY bande_id),veto AS (SELECT bande_id,SUM(COALESCE(montant_ht,0)) AS cout FROM achatveto GROUP BY bande_id),semence AS (SELECT bande_id,SUM(COALESCE(montant_ht,0)) AS cout FROM achatsemence GROUP BY bande_id),genetique AS (SELECT bande_code,SUM(COALESCE(montant_ht,0)) AS cout FROM achatgenetique GROUP BY bande_code) SELECT b.id,b.code,b.site,CAST(COALESCE(v.porcs,0) AS INTEGER) AS porcs,ROUND(COALESCE(v.poids,0),1) AS poids,ROUND(COALESCE(v.recettes,0),2) AS recettes,ROUND(COALESCE(a.cout,0),2) AS aliment,ROUND(COALESCE(vt.cout,0),2) AS veto,ROUND(COALESCE(se.cout,0),2) AS semence,ROUND(COALESCE(g.cout,0),2) AS genetique,ROUND(COALESCE(v.recettes,0)-COALESCE(a.cout,0)-COALESCE(vt.cout,0)-COALESCE(se.cout,0)-COALESCE(g.cout,0),2) AS marge,ROUND((COALESCE(a.cout,0)+COALESCE(vt.cout,0)+COALESCE(se.cout,0)+COALESCE(g.cout,0))/NULLIF(v.porcs,0),2) AS cout_par_porc,ROUND(COALESCE(v.recettes,0)/NULLIF(v.poids,0),3) AS prix_ht_kg FROM bande b LEFT JOIN ventes v ON v.bande_id=b.id LEFT JOIN aliment a ON a.bande_id=b.id LEFT JOIN veto vt ON vt.bande_id=b.id LEFT JOIN semence se ON se.bande_id=b.id LEFT JOIN genetique g ON g.bande_code=b.code WHERE v.porcs IS NOT NULL OR a.cout IS NOT NULL OR vt.cout IS NOT NULL OR se.cout IS NOT NULL OR g.cout IS NOT NULL ORDER BY b.date_mb IS NULL,b.date_mb,b.id",
     )
     .await?;
-    let ventes = generic_rows(&state.pool,"SELECT id,date,num_apport,nb_porcs,poids_total,ROUND(montant_net/NULLIF(poids_total,0),3) AS prix_net_kg,montant_net,tmp,total_retenues,tx_qualification,nb_hors_poids,nb_tmp_bas FROM venteapport ORDER BY date DESC,id DESC LIMIT 50").await?;
-    let achats = generic_rows(&state.pool,"SELECT id,date,'aliment' AS categorie,produit AS libelle,tonnage AS quantite,montant_ht FROM livraisonaliment UNION ALL SELECT id,date,'vétérinaire',produit,quantite,montant_ht FROM achatveto UNION ALL SELECT id,date,'semence',designation,nb_doses,montant_ht FROM achatsemence UNION ALL SELECT id,date,'génétique',designation,nb_animaux,COALESCE(montant_net,montant_ht) FROM achatgenetique ORDER BY date DESC,id DESC LIMIT 50").await?;
+    let ventes = generic_rows(&state.pool,"SELECT id,date,num_apport,nb_porcs,poids_total,ROUND(montant_ht/NULLIF(poids_total,0),3) AS prix_ht_kg,montant_ht,tmp,total_retenues,tx_qualification,nb_hors_poids,nb_tmp_bas FROM venteapport ORDER BY date DESC,id DESC LIMIT 50").await?;
+    let achats = generic_rows(&state.pool,"SELECT id,date,'aliment' AS categorie,produit AS libelle,tonnage AS quantite,montant_ht FROM livraisonaliment UNION ALL SELECT id,date,'vétérinaire',produit,quantite,montant_ht FROM achatveto UNION ALL SELECT id,date,'semence',designation,nb_doses,montant_ht FROM achatsemence UNION ALL SELECT id,date,'génétique',designation,nb_animaux,montant_ht FROM achatgenetique ORDER BY date DESC,id DESC LIMIT 50").await?;
     let valuations = generic_rows(&state.pool,"SELECT id,num_apport,date,libelle,montant,categorie,CASE WHEN lower(COALESCE(categorie,''))='retenue' THEN 1 ELSE 0 END AS est_retenue FROM valorisationapport ORDER BY date DESC,id DESC LIMIT 200").await?;
-    let monthly = generic_rows(&state.pool,"WITH RECURSIVE mois(m) AS (SELECT date('now','start of month','-11 months') UNION ALL SELECT date(m,'+1 month') FROM mois WHERE m<date('now','start of month')),depenses AS (SELECT substr(date,1,7) AS m,SUM(COALESCE(montant_ht,0)) AS montant FROM livraisonaliment GROUP BY m UNION ALL SELECT substr(date,1,7),SUM(COALESCE(montant_ht,0)) FROM achatveto GROUP BY substr(date,1,7) UNION ALL SELECT substr(date,1,7),SUM(COALESCE(montant_ht,0)) FROM achatsemence GROUP BY substr(date,1,7) UNION ALL SELECT substr(date,1,7),SUM(COALESCE(montant_net,montant_ht,0)) FROM achatgenetique GROUP BY substr(date,1,7)),revenus AS (SELECT substr(date,1,7) AS m,SUM(COALESCE(montant_net,0)) AS montant,SUM(COALESCE(poids_total,0)) AS poids FROM venteapport GROUP BY m) SELECT substr(m.m,1,7) AS mois,ROUND(COALESCE((SELECT SUM(d.montant) FROM depenses d WHERE d.m=substr(m.m,1,7)),0),2) AS depenses,ROUND(COALESCE(r.montant,0),2) AS revenus,ROUND(r.montant/NULLIF(r.poids,0),3) AS prix_net_kg FROM mois m LEFT JOIN revenus r ON r.m=substr(m.m,1,7) ORDER BY m.m").await?;
-    let unallocated = generic_rows(&state.pool,"SELECT 'Aliment' AS categorie,ROUND(COALESCE(SUM(montant_ht),0),2) AS montant FROM livraisonaliment WHERE bande_id IS NULL UNION ALL SELECT 'Vétérinaire',ROUND(COALESCE(SUM(montant_ht),0),2) FROM achatveto WHERE bande_id IS NULL UNION ALL SELECT 'Semence',ROUND(COALESCE(SUM(montant_ht),0),2) FROM achatsemence WHERE bande_id IS NULL UNION ALL SELECT 'Génétique',ROUND(COALESCE(SUM(COALESCE(montant_net,montant_ht)),0),2) FROM achatgenetique WHERE bande_code IS NULL OR trim(bande_code)=''").await?;
+    let monthly = generic_rows(&state.pool,"WITH RECURSIVE mois(m) AS (SELECT date('now','start of month','-11 months') UNION ALL SELECT date(m,'+1 month') FROM mois WHERE m<date('now','start of month')),depenses AS (SELECT substr(date,1,7) AS m,SUM(COALESCE(montant_ht,0)) AS montant FROM livraisonaliment GROUP BY m UNION ALL SELECT substr(date,1,7),SUM(COALESCE(montant_ht,0)) FROM achatveto GROUP BY substr(date,1,7) UNION ALL SELECT substr(date,1,7),SUM(COALESCE(montant_ht,0)) FROM achatsemence GROUP BY substr(date,1,7) UNION ALL SELECT substr(date,1,7),SUM(COALESCE(montant_ht,0)) FROM achatgenetique GROUP BY substr(date,1,7)),revenus AS (SELECT substr(date,1,7) AS m,SUM(COALESCE(montant_ht,0)) AS montant,SUM(COALESCE(poids_total,0)) AS poids FROM venteapport GROUP BY m) SELECT substr(m.m,1,7) AS mois,ROUND(COALESCE((SELECT SUM(d.montant) FROM depenses d WHERE d.m=substr(m.m,1,7)),0),2) AS depenses,ROUND(COALESCE(r.montant,0),2) AS revenus,ROUND(r.montant/NULLIF(r.poids,0),3) AS prix_ht_kg FROM mois m LEFT JOIN revenus r ON r.m=substr(m.m,1,7) ORDER BY m.m").await?;
+    let unallocated = generic_rows(&state.pool,"SELECT 'Aliment' AS categorie,ROUND(COALESCE(SUM(montant_ht),0),2) AS montant FROM livraisonaliment WHERE bande_id IS NULL UNION ALL SELECT 'Vétérinaire',ROUND(COALESCE(SUM(montant_ht),0),2) FROM achatveto WHERE bande_id IS NULL UNION ALL SELECT 'Semence',ROUND(COALESCE(SUM(montant_ht),0),2) FROM achatsemence WHERE bande_id IS NULL UNION ALL SELECT 'Génétique',ROUND(COALESCE(SUM(COALESCE(montant_ht,0)),0),2) FROM achatgenetique WHERE bande_code IS NULL OR trim(bande_code)=''").await?;
     let imports = generic_rows(&state.pool,"SELECT token,replace(type_import,'economique:','') AS type_import,nom_fichier,statut,cree_le,applique_le FROM importjournal WHERE type_import LIKE 'economique:%' ORDER BY cree_le DESC LIMIT 15").await?;
     let total_weight: f64 =
         sqlx::query_scalar("SELECT CAST(COALESCE(SUM(poids_total),0) AS REAL) FROM venteapport")
@@ -5733,7 +5737,7 @@ async fn economique(
     let mut ctx = context(&session);
     ctx.insert("cahiers".into(), Value::Array(cahiers));
     ctx.insert("cahiers_reels".into(), Value::Array(cahiers_reels));
-    ctx.insert("totaux".into(),json!({"ventes":ventes_total,"aliment":aliment,"veto":veto,"semence":semence,"genetique":genetique,"marge":ventes_total-aliment-veto-semence-genetique,"porcs":total_pigs,"prix_net_kg":if total_weight>0.0{Some(ventes_total/total_weight)}else{None}}));
+    ctx.insert("totaux".into(),json!({"ventes":ventes_total,"aliment":aliment,"veto":veto,"semence":semence,"genetique":genetique,"marge":ventes_total-aliment-veto-semence-genetique,"porcs":total_pigs,"prix_ht_kg":if total_weight>0.0{Some(ventes_total/total_weight)}else{None}}));
     ctx.insert("bandes".into(), Value::Array(bands));
     ctx.insert("resultats_bandes".into(), Value::Array(band_results));
     ctx.insert("ventes".into(), Value::Array(ventes));
@@ -5798,7 +5802,7 @@ async fn gte(
          CAST(COALESCE(a.tonnes,0) AS REAL),CAST(COALESCE(a.cout,0) AS REAL),\
          CAST(COALESCE(t.truies,0) AS INTEGER) \
          FROM bande b \
-         LEFT JOIN (SELECT bande_id,SUM(COALESCE(nb_porcs,0)) AS porcs,SUM(COALESCE(poids_total,0)) AS poids,SUM(COALESCE(montant_net,0)) AS recettes FROM venteapport GROUP BY bande_id) v ON v.bande_id=b.id \
+         LEFT JOIN (SELECT bande_id,SUM(COALESCE(nb_porcs,0)) AS porcs,SUM(COALESCE(poids_total,0)) AS poids,SUM(COALESCE(montant_ht,0)) AS recettes FROM venteapport GROUP BY bande_id) v ON v.bande_id=b.id \
          LEFT JOIN (SELECT bande_id,SUM(COALESCE(tonnage,0)) AS tonnes,SUM(COALESCE(montant_ht,0)) AS cout FROM livraisonaliment GROUP BY bande_id) a ON a.bande_id=b.id \
          LEFT JOIN (SELECT bande_code,COUNT(*) AS truies FROM truie WHERE reformee=0 GROUP BY bande_code) t ON t.bande_code=b.code \
          WHERE b.active=1 AND (v.porcs IS NOT NULL OR a.cout IS NOT NULL OR t.truies IS NOT NULL) \
@@ -6301,11 +6305,11 @@ async fn economique_import_confirmer(
                 let id: Option<i64> = sqlx::query_scalar("SELECT id FROM venteapport WHERE COALESCE(num_apport,'')=? AND COALESCE(frappe,'')=COALESCE(?, '') ORDER BY id LIMIT 1").bind(reference).bind(frappe).fetch_optional(&mut *transaction).await?;
                 let lots_json = line.details.get("lots_json").map(Value::to_string);
                 if let Some(id) = id {
-                    sqlx::query("UPDATE venteapport SET date=?,bande_id=COALESCE(?,bande_id),frappe=?,nb_porcs=?,poids_total=?,poids_moyen=?,prix_moyen=?,plus_value=?,montant_net=?,tmp=?,muscle_gamme=?,muscle_lot=?,total_retenues=?,semaine=?,lots_json=? WHERE id=?")
-                        .bind(line.date.as_deref()).bind(band_id).bind(frappe).bind(import_detail_i64(line,"nb_porcs")).bind(import_detail_f64(line,"poids_total")).bind(import_detail_f64(line,"poids_moyen")).bind(import_detail_f64(line,"prix_moyen")).bind(import_detail_f64(line,"plus_value")).bind(import_detail_f64(line,"montant_net")).bind(import_detail_f64(line,"tmp")).bind(import_detail_f64(line,"muscle_gamme")).bind(import_detail_f64(line,"muscle_lot")).bind(import_detail_f64(line,"total_retenues")).bind(import_detail_str(line,"semaine")).bind(lots_json).bind(id).execute(&mut *transaction).await?;
+                    sqlx::query("UPDATE venteapport SET date=?,bande_id=COALESCE(?,bande_id),frappe=?,nb_porcs=?,poids_total=?,poids_moyen=?,prix_moyen=?,plus_value=?,montant_ht=?,montant_net=?,tmp=?,muscle_gamme=?,muscle_lot=?,total_retenues=?,semaine=?,lots_json=? WHERE id=?")
+                        .bind(line.date.as_deref()).bind(band_id).bind(frappe).bind(import_detail_i64(line,"nb_porcs")).bind(import_detail_f64(line,"poids_total")).bind(import_detail_f64(line,"poids_moyen")).bind(import_detail_f64(line,"prix_moyen")).bind(import_detail_f64(line,"plus_value")).bind(import_detail_f64(line,"montant_ht")).bind(import_detail_f64(line,"montant_net")).bind(import_detail_f64(line,"tmp")).bind(import_detail_f64(line,"muscle_gamme")).bind(import_detail_f64(line,"muscle_lot")).bind(import_detail_f64(line,"total_retenues")).bind(import_detail_str(line,"semaine")).bind(lots_json).bind(id).execute(&mut *transaction).await?;
                 } else {
-                    sqlx::query("INSERT INTO venteapport(date,num_apport,bande_id,frappe,nb_porcs,poids_total,poids_moyen,prix_moyen,plus_value,montant_net,tmp,muscle_gamme,muscle_lot,total_retenues,semaine,lots_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-                        .bind(line.date.as_deref()).bind(reference).bind(band_id).bind(frappe).bind(import_detail_i64(line,"nb_porcs")).bind(import_detail_f64(line,"poids_total")).bind(import_detail_f64(line,"poids_moyen")).bind(import_detail_f64(line,"prix_moyen")).bind(import_detail_f64(line,"plus_value")).bind(import_detail_f64(line,"montant_net")).bind(import_detail_f64(line,"tmp")).bind(import_detail_f64(line,"muscle_gamme")).bind(import_detail_f64(line,"muscle_lot")).bind(import_detail_f64(line,"total_retenues")).bind(import_detail_str(line,"semaine")).bind(lots_json).execute(&mut *transaction).await?;
+                    sqlx::query("INSERT INTO venteapport(date,num_apport,bande_id,frappe,nb_porcs,poids_total,poids_moyen,prix_moyen,plus_value,montant_ht,montant_net,tmp,muscle_gamme,muscle_lot,total_retenues,semaine,lots_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+                        .bind(line.date.as_deref()).bind(reference).bind(band_id).bind(frappe).bind(import_detail_i64(line,"nb_porcs")).bind(import_detail_f64(line,"poids_total")).bind(import_detail_f64(line,"poids_moyen")).bind(import_detail_f64(line,"prix_moyen")).bind(import_detail_f64(line,"plus_value")).bind(import_detail_f64(line,"montant_ht")).bind(import_detail_f64(line,"montant_net")).bind(import_detail_f64(line,"tmp")).bind(import_detail_f64(line,"muscle_gamme")).bind(import_detail_f64(line,"muscle_lot")).bind(import_detail_f64(line,"total_retenues")).bind(import_detail_str(line,"semaine")).bind(lots_json).execute(&mut *transaction).await?;
                 }
             }
             "valorisation" | "retenue" => {
@@ -6432,13 +6436,13 @@ async fn economique_vente(
         (Some(n), Some(w)) if n > 0 => Some(w / n as f64),
         _ => form_f64(&form, "poids_moyen"),
     };
-    let amount = economic_amount(&form, "montant_net")
-        .ok_or_else(|| AppError::Invalid("Montant net obligatoire".into()))?;
+    let amount = economic_amount(&form, "montant_ht")
+        .ok_or_else(|| AppError::Invalid("Montant HT obligatoire".into()))?;
     let date = form_date(&form, "date")?;
     let apport = form_text(&form, "num_apport");
     let band_id = form_i64(&form, "bande_id");
     let mut tx = state.pool.begin().await?;
-    let result=sqlx::query("INSERT INTO venteapport(date,num_apport,bande_id,nb_porcs,poids_total,poids_moyen,prix_moyen,plus_value,montant_net,tmp,tx_qualification,nb_hors_poids,nb_tmp_bas,nb_g2,nb_tatouage,nb_qualifies,nb_livres,muscle_gamme,muscle_lot,total_retenues) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").bind(&date).bind(&apport).bind(band_id).bind(number).bind(weight).bind(average).bind(form_f64(&form,"prix_moyen")).bind(form_f64(&form,"plus_value")).bind(amount).bind(form_f64(&form,"tmp")).bind(form_f64(&form,"tx_qualification")).bind(form_i64(&form,"nb_hors_poids")).bind(form_i64(&form,"nb_tmp_bas")).bind(form_i64(&form,"nb_g2")).bind(form_i64(&form,"nb_tatouage")).bind(form_i64(&form,"nb_qualifies")).bind(form_i64(&form,"nb_livres")).bind(form_f64(&form,"muscle_gamme")).bind(form_f64(&form,"muscle_lot")).bind(form_f64(&form,"total_retenues")).execute(&mut *tx).await?;
+    let result=sqlx::query("INSERT INTO venteapport(date,num_apport,bande_id,nb_porcs,poids_total,poids_moyen,prix_moyen,plus_value,montant_ht,tmp,tx_qualification,nb_hors_poids,nb_tmp_bas,nb_g2,nb_tatouage,nb_qualifies,nb_livres,muscle_gamme,muscle_lot,total_retenues) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").bind(&date).bind(&apport).bind(band_id).bind(number).bind(weight).bind(average).bind(form_f64(&form,"prix_moyen")).bind(form_f64(&form,"plus_value")).bind(amount).bind(form_f64(&form,"tmp")).bind(form_f64(&form,"tx_qualification")).bind(form_i64(&form,"nb_hors_poids")).bind(form_i64(&form,"nb_tmp_bas")).bind(form_i64(&form,"nb_g2")).bind(form_i64(&form,"nb_tatouage")).bind(form_i64(&form,"nb_qualifies")).bind(form_i64(&form,"nb_livres")).bind(form_f64(&form,"muscle_gamme")).bind(form_f64(&form,"muscle_lot")).bind(form_f64(&form,"total_retenues")).execute(&mut *tx).await?;
     synchronise_sortie_abattoir(
         &mut tx,
         result.last_insert_rowid(),
@@ -6472,10 +6476,9 @@ async fn economique_genetique(
 ) -> AppResult<Response> {
     require_writer(&session)?;
     verify_csrf(&session, &form)?;
-    let amount = economic_amount(&form, "montant_net")
-        .or_else(|| economic_amount(&form, "montant_ht"))
-        .ok_or_else(|| AppError::Invalid("Montant obligatoire".into()))?;
-    sqlx::query("INSERT INTO achatgenetique(date,num_facture,fournisseur,designation,nb_animaux,poids_total,prix_moyen,montant_ht,montant_net,bande_code,note) VALUES(?,?,?,?,?,?,?,?,?,?,?)").bind(form_date(&form,"date")?).bind(form_text(&form,"num_facture")).bind(form_text(&form,"fournisseur").unwrap_or_else(||"Cooperl".into())).bind(form_text(&form,"designation")).bind(form_i64(&form,"nb_animaux")).bind(form_f64(&form,"poids_total")).bind(form_f64(&form,"prix_moyen")).bind(None::<f64>).bind(amount).bind(form_text(&form,"bande_code")).bind(form_text(&form,"note")).execute(&state.pool).await?;
+    let amount = economic_amount(&form, "montant_ht")
+        .ok_or_else(|| AppError::Invalid("Montant HT obligatoire".into()))?;
+    sqlx::query("INSERT INTO achatgenetique(date,num_facture,fournisseur,designation,nb_animaux,poids_total,prix_moyen,montant_ht,montant_net,bande_code,note) VALUES(?,?,?,?,?,?,?,?,?,?,?)").bind(form_date(&form,"date")?).bind(form_text(&form,"num_facture")).bind(form_text(&form,"fournisseur").unwrap_or_else(||"Cooperl".into())).bind(form_text(&form,"designation")).bind(form_i64(&form,"nb_animaux")).bind(form_f64(&form,"poids_total")).bind(form_f64(&form,"prix_moyen")).bind(amount).bind(None::<f64>).bind(form_text(&form,"bande_code")).bind(form_text(&form,"note")).execute(&state.pool).await?;
     Ok(Redirect::to("/economique").into_response())
 }
 
@@ -9271,7 +9274,7 @@ async fn abattoir(
     }
     let ventes = generic_rows(
         &state.pool,
-        "SELECT v.id,v.date,v.num_apport,b.code AS bande,v.nb_porcs,v.poids_total,v.poids_moyen,v.tmp,v.tx_qualification,v.plus_value,v.montant_net FROM venteapport v LEFT JOIN bande b ON b.id=v.bande_id ORDER BY v.date DESC,v.id DESC LIMIT 250",
+        "SELECT v.id,v.date,v.num_apport,b.code AS bande,v.nb_porcs,v.poids_total,v.poids_moyen,v.tmp,v.tx_qualification,v.plus_value,v.montant_ht FROM venteapport v LEFT JOIN bande b ON b.id=v.bande_id ORDER BY v.date DESC,v.id DESC LIMIT 250",
     )
     .await?;
     let saisies = generic_rows(
@@ -9288,8 +9291,8 @@ async fn abattoir(
         sqlx::query_scalar("SELECT CAST(COALESCE(SUM(nb_porcs),0) AS INTEGER) FROM venteapport")
             .fetch_one(&state.pool)
             .await?;
-    let net_total: f64 =
-        sqlx::query_scalar("SELECT CAST(COALESCE(SUM(montant_net),0) AS REAL) FROM venteapport")
+    let ht_total: f64 =
+        sqlx::query_scalar("SELECT CAST(COALESCE(SUM(montant_ht),0) AS REAL) FROM venteapport")
             .fetch_one(&state.pool)
             .await?;
     let poids_moy: Option<f64> = sqlx::query_scalar(
@@ -9302,8 +9305,8 @@ async fn abattoir(
     )
     .fetch_one(&state.pool)
     .await?;
-    let prix_net_kg: Option<f64> = sqlx::query_scalar(
-        "SELECT SUM(COALESCE(montant_net,0))/NULLIF(SUM(COALESCE(poids_total,0)),0) FROM venteapport",
+    let prix_ht_kg: Option<f64> = sqlx::query_scalar(
+        "SELECT SUM(COALESCE(montant_ht,0))/NULLIF(SUM(COALESCE(poids_total,0)),0) FROM venteapport",
     )
     .fetch_one(&state.pool)
     .await?;
@@ -9313,7 +9316,7 @@ async fn abattoir(
             .await?;
     let synthesis = generic_rows(
         &state.pool,
-        "WITH v AS (SELECT bande_id,SUM(COALESCE(nb_porcs,0)) AS porcs,SUM(COALESCE(poids_total,0)) AS poids,SUM(COALESCE(montant_net,0)) AS net,SUM(COALESCE(tmp,0)*COALESCE(nb_porcs,0))/NULLIF(SUM(COALESCE(nb_porcs,0)),0) AS tmp FROM venteapport GROUP BY bande_id),s AS (SELECT bande_code,SUM(COALESCE(nombre,0)) AS saisies FROM saisieabattoir GROUP BY bande_code) SELECT b.id,b.code,CAST(COALESCE(v.porcs,0) AS INTEGER) AS porcs,ROUND(v.poids/NULLIF(v.porcs,0),1) AS poids_moyen,ROUND(v.tmp,2) AS tmp,ROUND(v.net/NULLIF(v.poids,0),3) AS prix_net_kg,ROUND(v.net,2) AS net,CAST(COALESCE(s.saisies,0) AS INTEGER) AS saisies FROM bande b LEFT JOIN v ON v.bande_id=b.id LEFT JOIN s ON s.bande_code=b.code WHERE v.porcs IS NOT NULL OR s.saisies IS NOT NULL ORDER BY b.date_mb DESC,b.id DESC",
+        "WITH v AS (SELECT bande_id,SUM(COALESCE(nb_porcs,0)) AS porcs,SUM(COALESCE(poids_total,0)) AS poids,SUM(COALESCE(montant_ht,0)) AS ht,SUM(COALESCE(tmp,0)*COALESCE(nb_porcs,0))/NULLIF(SUM(COALESCE(nb_porcs,0)),0) AS tmp FROM venteapport GROUP BY bande_id),s AS (SELECT bande_code,SUM(COALESCE(nombre,0)) AS saisies FROM saisieabattoir GROUP BY bande_code) SELECT b.id,b.code,CAST(COALESCE(v.porcs,0) AS INTEGER) AS porcs,ROUND(v.poids/NULLIF(v.porcs,0),1) AS poids_moyen,ROUND(v.tmp,2) AS tmp,ROUND(v.ht/NULLIF(v.poids,0),3) AS prix_ht_kg,ROUND(v.ht,2) AS ht,CAST(COALESCE(s.saisies,0) AS INTEGER) AS saisies FROM bande b LEFT JOIN v ON v.bande_id=b.id LEFT JOIN s ON s.bande_code=b.code WHERE v.porcs IS NOT NULL OR s.saisies IS NOT NULL ORDER BY b.date_mb DESC,b.id DESC",
     )
     .await?;
     let seizure_causes = generic_rows(
@@ -9329,7 +9332,7 @@ async fn abattoir(
     ctx.insert("causes_saisies".into(), Value::Array(seizure_causes));
     ctx.insert(
         "stats".into(),
-        json!({"total_abattus":total_abattus,"net_total":net_total,"poids_moy":poids_moy,"tmp_moy":tmp_moy,"prix_net_kg":prix_net_kg,"total_saisies":total_saisies}),
+        json!({"total_abattus":total_abattus,"ht_total":ht_total,"poids_moy":poids_moy,"tmp_moy":tmp_moy,"prix_ht_kg":prix_ht_kg,"total_saisies":total_saisies}),
     );
     ctx.insert(
         "today".into(),
@@ -9690,7 +9693,7 @@ async fn vente_session_cout_calculer(
         .await?
         .ok_or(AppError::NotFound)?;
     let costs = sqlx::query_as::<_, (f64, f64, f64, f64)>(
-        "SELECT CAST(COALESCE((SELECT SUM(montant_ht) FROM livraisonaliment WHERE bande_id=?),0) AS REAL),CAST(COALESCE((SELECT SUM(montant_ht) FROM achatveto WHERE bande_id=?),0) AS REAL),CAST(COALESCE((SELECT SUM(montant_ht) FROM achatsemence WHERE bande_id=?),0) AS REAL),CAST(COALESCE((SELECT SUM(COALESCE(montant_net,montant_ht)) FROM achatgenetique WHERE bande_code=?),0) AS REAL)",
+        "SELECT CAST(COALESCE((SELECT SUM(montant_ht) FROM livraisonaliment WHERE bande_id=?),0) AS REAL),CAST(COALESCE((SELECT SUM(montant_ht) FROM achatveto WHERE bande_id=?),0) AS REAL),CAST(COALESCE((SELECT SUM(montant_ht) FROM achatsemence WHERE bande_id=?),0) AS REAL),CAST(COALESCE((SELECT SUM(COALESCE(montant_ht,0)) FROM achatgenetique WHERE bande_code=?),0) AS REAL)",
     )
     .bind(band_id)
     .bind(band_id)
