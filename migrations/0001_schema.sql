@@ -20,7 +20,8 @@ CREATE TABLE IF NOT EXISTS utilisateur (
 CREATE TABLE IF NOT EXISTS site (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     code TEXT NOT NULL,
-    nom TEXT
+    nom TEXT,
+    zone TEXT
 );
 
 CREATE TABLE IF NOT EXISTS salle (
@@ -40,7 +41,15 @@ CREATE TABLE IF NOT EXISTS casesalle (
     nom TEXT NOT NULL,
     rfid TEXT,
     nb_max_porcs INTEGER,
+    nb_max_truies INTEGER,
+    nb_max_porcelets INTEGER,
     num_vanne TEXT
+);
+
+CREATE TABLE IF NOT EXISTS numeromarquage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    numero TEXT NOT NULL UNIQUE,
+    actif INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS verrat (

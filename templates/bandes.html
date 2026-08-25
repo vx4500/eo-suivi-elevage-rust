@@ -3,17 +3,18 @@
 <div class="card"><b>Conduite configurée : {{ conduite_bandes.nombre }} bandes</b> · intervalle {{ conduite_bandes.intervalle_j }} jours. <a href="/parametres#conduite-bandes">Modifier la conduite</a></div>
 {% if session.peut_modifier %}<form class="card rust-actions" method="post" action="/bandes/ajouter">
   <input type="hidden" name="csrf_token" value="{{ session.csrf }}">
-  <label>Code<input name="code" required></label><label>N° marquage<input name="num_officiel" placeholder="ex. FR35G6K07"></label>
-  <label>Mise-bas prévue<input type="date" name="date_mb"></label><label>Site<input name="site"></label><button>Ajouter</button>
+  <label>Code<input name="code" required></label><label>N° marquage<select name="num_officiel"><option value="">Non défini</option>{% for m in marquages %}<option value="{{ m.numero }}">{{ m.numero }}</option>{% endfor %}</select></label>
+  <label>Mise-bas prévue<input type="date" name="date_mb"></label><label>Site / zone<select name="site"><option value="">Non défini</option>{% for s in sites %}<option value="{{ s.code }}">{{ s.nom or s.code }}{% if s.zone %} · {{ s.zone }}{% endif %}</option>{% endfor %}</select></label><button>Ajouter</button>
 </form>{% endif %}
+{% if session.peut_modifier %}<details class="card"><summary><b>Liste des numéros de marquage</b></summary><form class="rust-actions" method="post" action="/marquages/ajouter"><input type="hidden" name="csrf_token" value="{{ session.csrf }}"><label>Nouveau numéro<input name="numero" required placeholder="ex. FR35G6K07"></label><button>Ajouter à la liste</button></form></details>{% endif %}
 {% if session.peut_modifier %}<p class="muted">Mise-bas, n° marquage et site sont modifiables directement dans le tableau, ligne par ligne.</p>
 {% for l in bandes %}<form id="bf{{ l.id }}" method="post" action="/bandes/{{ l.id }}/modifier-rapide" hidden><input type="hidden" name="csrf_token" value="{{ session.csrf }}"></form>{% endfor %}{% endif %}
 <div class="rust-scroll"><table><thead><tr><th>Bande</th><th>N° marquage</th><th>Mise-bas</th><th>Site</th><th>Stade</th><th>Truies</th><th>Après sevrage</th><th>Porcelets / porcs</th><th></th></tr></thead><tbody>
 {% for l in bandes %}<tr>
 <td><a href="/bande/{{ l.id }}"><b>{{ l.code }}</b></a>{% if l.date_mb %}<br><small class="muted">Mise-bas {{ l.date_mb|date_fr }}</small>{% endif %}</td>
-<td>{% if session.peut_modifier %}<input form="bf{{ l.id }}" name="num_officiel" value="{{ l.num_officiel or '' }}" placeholder="ex. FR35G6K07">{% else %}{{ l.num_officiel or '—' }}{% endif %}</td>
+<td>{% if session.peut_modifier %}<select form="bf{{ l.id }}" name="num_officiel"><option value="">Non défini</option>{% for m in marquages %}<option value="{{ m.numero }}"{% if l.num_officiel == m.numero %} selected{% endif %}>{{ m.numero }}</option>{% endfor %}</select>{% else %}{{ l.num_officiel or '—' }}{% endif %}</td>
 <td>{% if session.peut_modifier %}<input form="bf{{ l.id }}" type="date" name="date_mb" value="{{ l.date_mb or '' }}">{% else %}{{ l.date_mb|date_fr }}{% endif %}</td>
-<td>{% if session.peut_modifier %}<input form="bf{{ l.id }}" name="site" value="{{ l.site or '' }}">{% else %}{{ l.site or '—' }}{% endif %}</td>
+<td>{% if session.peut_modifier %}<select form="bf{{ l.id }}" name="site"><option value="">Non défini</option>{% for s in sites %}<option value="{{ s.code }}"{% if l.site == s.code %} selected{% endif %}>{{ s.nom or s.code }}{% if s.zone %} · {{ s.zone }}{% endif %}</option>{% endfor %}</select>{% else %}{{ l.site or '—' }}{% endif %}</td>
 <td>{{ l.stade }}</td><td>{{ l.truies }}</td>
 <td><span class="flow-badge">{{ l.flux.verraterie }} verraterie</span> <span class="flow-badge waiting">{{ l.flux.attente }} attente</span> <span class="flow-badge exit">{{ l.flux.reformees }} réforme</span></td>
 <td><b>{{ l.flux.sevres }} sevrés</b><br><span>{{ l.flux.vendus }} vendus{% if l.flux.derniere_vente %} · {{ l.flux.derniere_vente|date_fr }}{% endif %}</span></td>

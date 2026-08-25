@@ -334,3 +334,24 @@ fn commandes_clients_est_enregistree_et_journalise_avec_date() {
     assert!(database.contains("journal(horodatage,utilisateur"));
     assert!(database.contains("VALUES(CURRENT_TIMESTAMP,?,?,?,?,?)"));
 }
+
+#[test]
+fn version_235_structure_maternite_et_sevrage_sont_tracables() {
+    let routes = include_str!("../src/routes/mod.rs");
+    let schema = include_str!("../migrations/0001_schema.sql");
+    let bands = include_str!("../templates/bandes.html");
+    let maternity = include_str!("../templates/maternite.html");
+    let structure = include_str!("../templates/structure.html");
+    let effectifs = include_str!("../templates/effectifs.html");
+
+    assert!(schema.contains("CREATE TABLE IF NOT EXISTS numeromarquage"));
+    assert!(schema.contains("nb_max_porcelets INTEGER"));
+    assert!(bands.contains("Site / zone<select"));
+    assert!(bands.contains("N° marquage<select"));
+    assert!(structure.contains("Places truies maternité"));
+    assert!(structure.contains("Places porcelets sous la mère"));
+    assert!(maternity.contains("Sevrage et transfert vers le post-sevrage"));
+    assert!(routes.contains("Sevrage : mouvement de la portée vers le post-sevrage"));
+    assert!(routes.contains("SELECT COUNT(*) FROM inventairecase WHERE case_id=?"));
+    assert!(effectifs.contains("<th>Bande(s)</th>"));
+}

@@ -133,9 +133,20 @@ pub async fn init(pool: &SqlitePool) -> anyhow::Result<()> {
         ("venteapport", "montant_ht", "REAL"),
         ("evenement", "creneaux_ia", "TEXT"),
         ("evenement", "case_id", "INTEGER"),
+        ("site", "zone", "TEXT"),
+        ("casesalle", "nb_max_truies", "INTEGER"),
+        ("casesalle", "nb_max_porcelets", "INTEGER"),
     ] {
         ensure_column(pool, table, column, definition).await?;
     }
+
+    // Les anciens numéros libres deviennent immédiatement des choix fiables.
+    sqlx::query("INSERT OR IGNORE INTO numeromarquage(numero) SELECT DISTINCT upper(trim(num_officiel)) FROM bande WHERE num_officiel IS NOT NULL AND trim(num_officiel)<>''")
+        .execute(pool)
+        .await?;
+    sqlx::query("UPDATE bande SET num_officiel=upper(trim(num_officiel)) WHERE num_officiel IS NOT NULL AND trim(num_officiel)<>''")
+        .execute(pool)
+        .await?;
 
     // Prépare également les soins des portées déjà présentes lors d'une mise
     // à jour depuis une ancienne version. L'unicité évite tout doublon.

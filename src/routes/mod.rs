@@ -51,6 +51,7 @@ pub fn router(state: AppState) -> Router {
         .route("/mon-compte/mdp", get(password_page).post(password_post))
         .route("/bandes", get(bandes))
         .route("/bandes/ajouter", post(bande_ajouter))
+        .route("/marquages/ajouter", post(marquage_ajouter))
         .route("/bandes/{id}/modifier-rapide", post(bande_modifier_rapide))
         .route("/bande/{id}", get(bande_detail))
         .route("/bande/{id}/marquage", post(bande_marquage))
@@ -58,6 +59,10 @@ pub fn router(state: AppState) -> Router {
         .route("/export/mise-bas/{id}", get(export_mise_bas))
         .route("/bande/{id}/fiche-mise-bas", get(fiche_mise_bas))
         .route("/maternite", get(maternite))
+        .route(
+            "/maternite/bande/{band_id}/sevrage",
+            post(maternite_sevrage),
+        )
         .route(
             "/maternite/bande/{band_id}/truie/{sow_id}/perte",
             post(maternite_perte),
@@ -314,6 +319,10 @@ pub fn router(state: AppState) -> Router {
         .route("/sauvegarde/telecharger", get(sauvegarde_telecharger))
         .route("/structure", get(structure))
         .route("/structure/site", post(structure_site))
+        .route(
+            "/structure/site/{id}/modifier",
+            post(structure_site_modifier),
+        )
         .route("/structure/salle", post(structure_salle))
         .route("/structure/case", post(structure_case))
         .route(
@@ -1863,7 +1872,77 @@ async fn bandes(
         "conduite_bandes".into(),
         json!({"nombre":nombre_bandes,"intervalle_j":intervalle_bandes_j}),
     );
+    ctx.insert(
+        "sites".into(),
+        Value::Array(
+            generic_rows(
+                &state.pool,
+                "SELECT code,nom,zone FROM site ORDER BY COALESCE(nom,code),zone",
+            )
+            .await?,
+        ),
+    );
+    ctx.insert(
+        "marquages".into(),
+        Value::Array(
+            generic_rows(
+                &state.pool,
+                "SELECT id,numero FROM numeromarquage WHERE actif=1 ORDER BY numero COLLATE NOCASE",
+            )
+            .await?,
+        ),
+    );
     render(&state, "bandes.html", Value::Object(ctx))
+}
+
+async fn selected_site(
+    pool: &SqlitePool,
+    form: &HashMap<String, String>,
+) -> AppResult<Option<String>> {
+    let Some(code) = form_text(form, "site") else {
+        return Ok(None);
+    };
+    sqlx::query_scalar("SELECT code FROM site WHERE code=?")
+        .bind(&code)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| AppError::Invalid("Sélectionnez un site / une zone dans la liste".into()))
+        .map(Some)
+}
+
+async fn selected_marking(
+    pool: &SqlitePool,
+    form: &HashMap<String, String>,
+) -> AppResult<Option<String>> {
+    let Some(number) = form_text(form, "num_officiel") else {
+        return Ok(None);
+    };
+    sqlx::query_scalar("SELECT numero FROM numeromarquage WHERE actif=1 AND numero=?")
+        .bind(number.trim().to_uppercase())
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| AppError::Invalid("Sélectionnez un numéro de marquage dans la liste".into()))
+        .map(Some)
+}
+
+async fn marquage_ajouter(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    verify_csrf(&session, &form)?;
+    let number = form_text(&form, "numero")
+        .ok_or_else(|| AppError::Invalid("Numéro de marquage obligatoire".into()))?
+        .trim()
+        .to_uppercase();
+    sqlx::query(
+        "INSERT INTO numeromarquage(numero) VALUES(?) ON CONFLICT(numero) DO UPDATE SET actif=1",
+    )
+    .bind(number)
+    .execute(&state.pool)
+    .await?;
+    Ok(Redirect::to("/bandes").into_response())
 }
 
 async fn bande_ajouter(
@@ -1883,11 +1962,13 @@ async fn bande_ajouter(
     if exists > 0 {
         return Err(AppError::Invalid("Cette bande existe déjà".into()));
     }
+    let marking = selected_marking(&state.pool, &form).await?;
+    let site = selected_site(&state.pool, &form).await?;
     sqlx::query("INSERT INTO bande(code,num_officiel,date_mb,site,active) VALUES(?,?,?,?,1)")
         .bind(&code)
-        .bind(form_text(&form, "num_officiel"))
+        .bind(marking)
         .bind(form_date(&form, "date_mb")?)
-        .bind(form_text(&form, "site"))
+        .bind(site)
         .execute(&state.pool)
         .await?;
     db::journal(
@@ -1918,10 +1999,12 @@ async fn bande_modifier_rapide(
 ) -> AppResult<Response> {
     require_writer(&session)?;
     verify_csrf(&session, &form)?;
+    let marking = selected_marking(&state.pool, &form).await?;
+    let site = selected_site(&state.pool, &form).await?;
     sqlx::query("UPDATE bande SET num_officiel=?,date_mb=?,site=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND active=1")
-        .bind(form_text(&form, "num_officiel"))
+        .bind(marking)
         .bind(form_date(&form, "date_mb")?)
-        .bind(form_text(&form, "site"))
+        .bind(site)
         .bind(id)
         .execute(&state.pool)
         .await?;
@@ -2098,6 +2181,16 @@ async fn bande_detail(
             "mortnes": technical_summary.taux_mortnes,
         }),
     );
+    ctx.insert(
+        "marquages".into(),
+        Value::Array(
+            generic_rows(
+                &state.pool,
+                "SELECT numero FROM numeromarquage WHERE actif=1 ORDER BY numero COLLATE NOCASE",
+            )
+            .await?,
+        ),
+    );
     ctx.insert("today".into(), json!(today_iso()));
     render(&state, "bande.html", Value::Object(ctx))
 }
@@ -2112,6 +2205,16 @@ async fn bande_marquage(
     verify_csrf(&session, &form)?;
     let number = form_text(&form, "num_marquage")
         .ok_or_else(|| AppError::Invalid("Numéro de marquage obligatoire".into()))?;
+    let exists: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM numeromarquage WHERE actif=1 AND numero=?")
+            .bind(number.trim().to_uppercase())
+            .fetch_one(&state.pool)
+            .await?;
+    if exists == 0 {
+        return Err(AppError::Invalid(
+            "Sélectionnez un numéro de marquage dans la liste".into(),
+        ));
+    }
     sqlx::query("UPDATE bande SET num_officiel=?,updated_at=CURRENT_TIMESTAMP WHERE id=?")
         .bind(number.trim().to_uppercase())
         .bind(id)
@@ -2762,11 +2865,131 @@ async fn maternite(
         "SELECT libelle FROM causeperte ORDER BY libelle COLLATE NOCASE",
     )
     .await?;
+    let weaning_sows = generic_rows(&state.pool, &format!(
+        "SELECT t.id,t.num_travail,e.date AS date_mise_bas,e.case_id AS case_source_id,c.nom AS case_source,c.num_vanne AS vanne_source,MAX(0,COALESCE(e.nes_vifs,0)-COALESCE((SELECT SUM(p.nb) FROM perteporcelet p WHERE p.truie_id=t.id AND p.bande_id={band_id}),0)) AS porcelets_presents FROM evenement e JOIN truie t ON t.id=e.truie_id LEFT JOIN casesalle c ON c.id=COALESCE(e.case_id,t.case_id) WHERE e.bande_id={band_id} AND e.type='mise_bas' AND e.id=(SELECT e2.id FROM evenement e2 WHERE e2.bande_id={band_id} AND e2.truie_id=t.id AND e2.type='mise_bas' ORDER BY e2.date DESC,e2.id DESC LIMIT 1) AND NOT EXISTS(SELECT 1 FROM evenement sv WHERE sv.bande_id={band_id} AND sv.truie_id=t.id AND sv.type='sevrage' AND sv.date>=e.date) ORDER BY e.date,t.num_travail COLLATE NOCASE"
+    )).await?;
+    let mut destinations = generic_rows(&state.pool, "SELECT c.id,c.salle_id,c.nom,c.num_vanne,c.nb_max_porcs,s.nom AS salle,COALESCE(si.nom,si.code) AS site FROM casesalle c JOIN salle s ON s.id=c.salle_id JOIN site si ON si.id=s.site_id WHERE lower(COALESCE(s.type,'')) LIKE '%sevr%' OR lower(s.nom) LIKE '%sevr%' ORDER BY COALESCE(si.nom,si.code),s.ordre,c.nom").await?;
+    for destination in &mut destinations {
+        let object = json_object_mut(destination, "les destinations de sevrage")?;
+        let case_id = object.get("id").and_then(Value::as_i64).unwrap_or_default();
+        let present = case_pig_count(&state.pool, case_id).await?;
+        let capacity = object.get("nb_max_porcs").and_then(Value::as_i64);
+        object.insert("effectif".into(), json!(present));
+        object.insert(
+            "places_disponibles".into(),
+            capacity
+                .map(|value| json!((value - present).max(0)))
+                .unwrap_or(Value::Null),
+        );
+    }
     ctx.insert("bande".into(), band);
     ctx.insert("truies".into(), Value::Array(sows));
+    ctx.insert("truies_sevrage".into(), Value::Array(weaning_sows));
+    ctx.insert("destinations_sevrage".into(), Value::Array(destinations));
     ctx.insert("causes".into(), Value::Array(causes));
     ctx.insert("totaux".into(), totals);
     render(&state, "maternite.html", Value::Object(ctx))
+}
+
+async fn maternite_sevrage(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Path(band_id): Path<i64>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    verify_csrf(&session, &form)?;
+    let date = form_date_or_today(&form, "date")?;
+    let band_code: String = sqlx::query_scalar("SELECT code FROM bande WHERE id=?")
+        .bind(band_id)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let mut selections = Vec::<(i64, i64, i64, Option<i64>, i64)>::new();
+    let mut assigned: HashMap<i64, i64> = HashMap::new();
+    for key in form.keys().filter(|key| key.starts_with("selection_")) {
+        let sow_id = key
+            .trim_start_matches("selection_")
+            .parse::<i64>()
+            .map_err(|_| AppError::Invalid("Sélection de truie invalide".into()))?;
+        let number = form
+            .get(&format!("nb_{sow_id}"))
+            .and_then(|v| v.parse::<i64>().ok())
+            .filter(|v| *v >= 0)
+            .ok_or_else(|| AppError::Invalid("Nombre de porcelets invalide".into()))?;
+        let destination = form
+            .get(&format!("case_{sow_id}"))
+            .and_then(|v| v.parse::<i64>().ok())
+            .ok_or_else(|| {
+                AppError::Invalid(
+                    "Choisissez une case de post-sevrage pour chaque truie cochée".into(),
+                )
+            })?;
+        let source: Option<i64> = sqlx::query_scalar("SELECT COALESCE(e.case_id,t.case_id) FROM evenement e JOIN truie t ON t.id=e.truie_id WHERE e.bande_id=? AND e.truie_id=? AND e.type='mise_bas' AND NOT EXISTS(SELECT 1 FROM evenement sv WHERE sv.bande_id=e.bande_id AND sv.truie_id=e.truie_id AND sv.type='sevrage' AND sv.date>=e.date) ORDER BY e.date DESC,e.id DESC LIMIT 1")
+            .bind(band_id).bind(sow_id).fetch_optional(&state.pool).await?.flatten();
+        let born: Option<i64> = sqlx::query_scalar("SELECT MAX(0,COALESCE(e.nes_vifs,0)-COALESCE((SELECT SUM(p.nb) FROM perteporcelet p WHERE p.truie_id=e.truie_id AND p.bande_id=e.bande_id),0)) FROM evenement e WHERE e.bande_id=? AND e.truie_id=? AND e.type='mise_bas' AND NOT EXISTS(SELECT 1 FROM evenement sv WHERE sv.bande_id=e.bande_id AND sv.truie_id=e.truie_id AND sv.type='sevrage' AND sv.date>=e.date) ORDER BY e.date DESC,e.id DESC LIMIT 1")
+            .bind(band_id).bind(sow_id).fetch_optional(&state.pool).await?.flatten();
+        let present = born.ok_or_else(|| {
+            AppError::Invalid(
+                "Cette truie est déjà sevrée ou n’a pas de mise-bas dans la bande".into(),
+            )
+        })?;
+        if number > present {
+            return Err(AppError::Invalid(format!(
+                "La truie sélectionnée n’a que {present} porcelet(s) présent(s)"
+            )));
+        }
+        let destination_room: Option<i64> = sqlx::query_scalar("SELECT c.salle_id FROM casesalle c JOIN salle s ON s.id=c.salle_id WHERE c.id=? AND (lower(COALESCE(s.type,'')) LIKE '%sevr%' OR lower(s.nom) LIKE '%sevr%')").bind(destination).fetch_optional(&state.pool).await?;
+        let room_id = destination_room.ok_or_else(|| {
+            AppError::Invalid("La destination doit être une case de post-sevrage".into())
+        })?;
+        *assigned.entry(destination).or_default() += number;
+        selections.push((sow_id, number, destination, source, room_id));
+    }
+    if selections.is_empty() {
+        return Err(AppError::Invalid(
+            "Cochez au moins une truie à sevrer".into(),
+        ));
+    }
+    for (case_id, number) in &assigned {
+        let (capacity,): (Option<i64>,) =
+            sqlx::query_as("SELECT nb_max_porcs FROM casesalle WHERE id=?")
+                .bind(case_id)
+                .fetch_one(&state.pool)
+                .await?;
+        let present = case_pig_count(&state.pool, *case_id).await?;
+        if capacity.is_some_and(|max| present + number > max) {
+            return Err(AppError::Invalid(format!("Capacité dépassée dans la case {case_id} : {present} présent(s), {number} ajouté(s), maximum {}", capacity.unwrap_or_default())));
+        }
+    }
+    let mut tx = state.pool.begin().await?;
+    for (sow_id, number, destination, source, room_id) in selections {
+        sqlx::query("INSERT INTO evenement(type,date,truie_id,bande_id,nb_sevres,note) VALUES('sevrage',?,?,?,?,?)")
+            .bind(&date).bind(sow_id).bind(band_id).bind(number).bind("Sevrage depuis le tableau maternité").execute(&mut *tx).await?;
+        let source_room: Option<i64> = if let Some(source_id) = source {
+            sqlx::query_scalar("SELECT salle_id FROM casesalle WHERE id=?")
+                .bind(source_id)
+                .fetch_optional(&mut *tx)
+                .await?
+        } else {
+            None
+        };
+        sqlx::query("INSERT INTO transfert(date,espece,bande_id,salle_source_id,salle_dest_id,case_source_id,case_dest_id,nombre,truie_id,note) VALUES(?,'porc',?,?,?,?,?,?,?,?)")
+            .bind(&date).bind(band_id).bind(source_room).bind(room_id).bind(source).bind(destination).bind(number).bind(sow_id).bind("Sevrage : mouvement de la portée vers le post-sevrage").execute(&mut *tx).await?;
+        sqlx::query("UPDATE truie SET bande_code=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=? AND bande_code=?").bind(sow_id).bind(&band_code).execute(&mut *tx).await?;
+    }
+    sqlx::query("UPDATE bande SET cs_total_sevres=(SELECT CAST(COALESCE(SUM(nb_sevres),0) AS INTEGER) FROM evenement WHERE bande_id=? AND type='sevrage'),updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(band_id).bind(band_id).execute(&mut *tx).await?;
+    tx.commit().await?;
+    db::journal(
+        &state.pool,
+        &session.nom,
+        "sevrer",
+        "bande",
+        &band_code,
+        "/maternite",
+    )
+    .await;
+    Ok(Redirect::to(&format!("/maternite?bande_id={band_id}&onglet=sevrage")).into_response())
 }
 
 async fn maternite_perte(
@@ -5573,6 +5796,9 @@ async fn effectifs(
             "effectif".into(),
             json!(case_pig_count(&state.pool, id).await?),
         );
+        let band_codes: Option<String> = sqlx::query_scalar("SELECT group_concat(code, ', ') FROM bande b WHERE (SELECT COALESCE(SUM(CASE WHEN t.case_dest_id=? THEN COALESCE(t.nombre,0) ELSE -COALESCE(t.nombre,0) END),0) FROM transfert t WHERE t.espece='porc' AND t.bande_id=b.id AND (t.case_dest_id=? OR t.case_source_id=?))>0")
+            .bind(id).bind(id).bind(id).fetch_one(&state.pool).await?;
+        object.insert("bandes_cases".into(), json!(band_codes));
     }
     let case_inventories=generic_rows(&state.pool,"SELECT i.id,i.date,i.nombre,i.note,i.cree_par,c.nom AS case_nom,s.nom AS salle,COALESCE(si.nom,si.code) AS site FROM inventairecase i JOIN casesalle c ON c.id=i.case_id JOIN salle s ON s.id=c.salle_id JOIN site si ON si.id=s.site_id ORDER BY i.date DESC,i.id DESC LIMIT 100").await?;
     let mut bands = generic_rows(
@@ -5737,7 +5963,7 @@ async fn energie(
         .fetch_all(&state.pool).await?;
     let sites = generic_rows(
         &state.pool,
-        "SELECT id,code,nom FROM site ORDER BY COALESCE(nom,code)",
+        "SELECT id,code,nom,zone FROM site ORDER BY COALESCE(nom,code),zone",
     )
     .await?;
     let mut data = Vec::new();
@@ -8327,7 +8553,28 @@ async fn structure(
     )
     .await?;
     let rooms = generic_rows(&state.pool, "SELECT s.id,s.site_id,s.nom,s.type,s.rfid,s.nb_cases,s.ordre,COALESCE(si.nom,si.code) AS site FROM salle s JOIN site si ON si.id=s.site_id ORDER BY COALESCE(si.nom,si.code),s.ordre,s.nom").await?;
-    let cases = generic_rows(&state.pool, "SELECT c.id,c.salle_id,c.nom,c.rfid,c.nb_max_porcs,c.num_vanne,s.nom AS salle,COALESCE(si.nom,si.code) AS site FROM casesalle c JOIN salle s ON s.id=c.salle_id JOIN site si ON si.id=s.site_id ORDER BY COALESCE(si.nom,si.code),s.ordre,c.nom").await?;
+    let mut cases = generic_rows(&state.pool, "SELECT c.id,c.salle_id,c.nom,c.rfid,c.nb_max_porcs,c.nb_max_truies,c.nb_max_porcelets,c.num_vanne,s.nom AS salle,COALESCE(si.nom,si.code) AS site,(SELECT COUNT(*) FROM truie t WHERE t.case_id=c.id AND t.reformee=0) AS truies_presentes,COALESCE((SELECT SUM(MAX(0,COALESCE(e.nes_vifs,0)-COALESCE((SELECT SUM(p.nb) FROM perteporcelet p WHERE p.evenement_id=e.id OR (p.evenement_id IS NULL AND p.truie_id=e.truie_id AND p.bande_id=e.bande_id)),0))) FROM evenement e WHERE e.type='mise_bas' AND e.case_id=c.id AND NOT EXISTS(SELECT 1 FROM evenement sv WHERE sv.type='sevrage' AND sv.truie_id=e.truie_id AND sv.bande_id=e.bande_id AND sv.date>=e.date)),0) AS porcelets_presents FROM casesalle c JOIN salle s ON s.id=c.salle_id JOIN site si ON si.id=s.site_id ORDER BY COALESCE(si.nom,si.code),s.ordre,c.nom").await?;
+    for case in &mut cases {
+        let object = json_object_mut(case, "la capacité des cases")?;
+        let sows = object
+            .get("truies_presentes")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        let piglets = object
+            .get("porcelets_presents")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        let sow_places = object
+            .get("nb_max_truies")
+            .and_then(Value::as_i64)
+            .map(|v| (v - sows).max(0));
+        let piglet_places = object
+            .get("nb_max_porcelets")
+            .and_then(Value::as_i64)
+            .map(|v| (v - piglets).max(0));
+        object.insert("places_truies_dispo".into(), json!(sow_places));
+        object.insert("places_porcelets_dispo".into(), json!(piglet_places));
+    }
     let mut ctx = context(&session);
     ctx.insert("sites".into(), Value::Array(sites));
     ctx.insert("salles".into(), Value::Array(rooms));
@@ -8343,11 +8590,43 @@ async fn structure_site(
     verify_csrf(&session, &form)?;
     let code =
         form_text(&form, "code").ok_or_else(|| AppError::Invalid("Code obligatoire".into()))?;
-    sqlx::query("INSERT INTO site(code,nom) VALUES(?,?)")
+    sqlx::query("INSERT INTO site(code,nom,zone) VALUES(?,?,?)")
         .bind(code)
         .bind(form_text(&form, "nom"))
+        .bind(form_text(&form, "zone"))
         .execute(&state.pool)
         .await?;
+    Ok(Redirect::to("/structure").into_response())
+}
+async fn structure_site_modifier(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Path(id): Path<i64>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    verify_csrf(&session, &form)?;
+    let code =
+        form_text(&form, "code").ok_or_else(|| AppError::Invalid("Code obligatoire".into()))?;
+    let old: String = sqlx::query_scalar("SELECT code FROM site WHERE id=?")
+        .bind(id)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let mut tx = state.pool.begin().await?;
+    sqlx::query("UPDATE site SET code=?,nom=?,zone=? WHERE id=?")
+        .bind(&code)
+        .bind(form_text(&form, "nom"))
+        .bind(form_text(&form, "zone"))
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("UPDATE bande SET site=? WHERE site=?")
+        .bind(&code)
+        .bind(old)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
     Ok(Redirect::to("/structure").into_response())
 }
 async fn structure_salle(
@@ -8368,12 +8647,14 @@ async fn structure_case(
     require_writer(&session)?;
     verify_csrf(&session, &form)?;
     sqlx::query(
-        "INSERT INTO casesalle(salle_id,nom,rfid,nb_max_porcs,num_vanne) VALUES(?,?,?,?,?)",
+        "INSERT INTO casesalle(salle_id,nom,rfid,nb_max_porcs,nb_max_truies,nb_max_porcelets,num_vanne) VALUES(?,?,?,?,?,?,?)",
     )
     .bind(form_i64(&form, "salle_id"))
     .bind(form_text(&form, "nom"))
     .bind(form_text(&form, "rfid"))
     .bind(form_i64(&form, "nb_max_porcs"))
+    .bind(form_i64(&form, "nb_max_truies"))
+    .bind(form_i64(&form, "nb_max_porcelets"))
     .bind(form_text(&form, "num_vanne"))
     .execute(&state.pool)
     .await?;
@@ -8451,10 +8732,12 @@ async fn structure_case_rfid(
 ) -> AppResult<Response> {
     require_writer(&session)?;
     verify_csrf(&session, &form)?;
-    sqlx::query("UPDATE casesalle SET rfid=?,num_vanne=?,nb_max_porcs=? WHERE id=?")
+    sqlx::query("UPDATE casesalle SET rfid=?,num_vanne=?,nb_max_porcs=?,nb_max_truies=?,nb_max_porcelets=? WHERE id=?")
         .bind(form_text(&form, "rfid"))
         .bind(form_text(&form, "num_vanne"))
         .bind(form_i64(&form, "nb_max_porcs"))
+        .bind(form_i64(&form, "nb_max_truies"))
+        .bind(form_i64(&form, "nb_max_porcelets"))
         .bind(id)
         .execute(&state.pool)
         .await?;
@@ -8469,8 +8752,8 @@ async fn structure_case_supprimer(
 ) -> AppResult<Response> {
     require_writer(&session)?;
     verify_csrf(&session, &form)?;
-    let used: i64 = sqlx::query_scalar("SELECT (SELECT COUNT(*) FROM transfert WHERE case_source_id=? OR case_dest_id=?)+(SELECT COUNT(*) FROM declarationmort WHERE case_id=?)+(SELECT COUNT(*) FROM truie WHERE case_id=?)")
-        .bind(id).bind(id).bind(id).bind(id).fetch_one(&state.pool).await?;
+    let used: i64 = sqlx::query_scalar("SELECT (SELECT COUNT(*) FROM transfert WHERE case_source_id=? OR case_dest_id=?)+(SELECT COUNT(*) FROM declarationmort WHERE case_id=?)+(SELECT COUNT(*) FROM truie WHERE case_id=?)+(SELECT COUNT(*) FROM evenement WHERE case_id=?)+(SELECT COUNT(*) FROM inventairecase WHERE case_id=?)+(SELECT COUNT(*) FROM receptionachat WHERE case_id=?)")
+        .bind(id).bind(id).bind(id).bind(id).bind(id).bind(id).bind(id).fetch_one(&state.pool).await?;
     if used > 0 {
         return Err(AppError::Invalid(
             "Cette case contient un historique ou des animaux et ne peut pas être supprimée".into(),
@@ -8491,13 +8774,14 @@ async fn structure_salle_supprimer(
 ) -> AppResult<Response> {
     require_writer(&session)?;
     verify_csrf(&session, &form)?;
-    let children: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM casesalle WHERE salle_id=?")
+    let children: i64 = sqlx::query_scalar("SELECT (SELECT COUNT(*) FROM casesalle WHERE salle_id=?)+(SELECT COUNT(*) FROM truie WHERE salle_id=?)+(SELECT COUNT(*) FROM transfert WHERE salle_source_id=? OR salle_dest_id=?)+(SELECT COUNT(*) FROM controlequotidien WHERE salle_id=?)")
         .bind(id)
+        .bind(id).bind(id).bind(id).bind(id)
         .fetch_one(&state.pool)
         .await?;
     if children > 0 {
         return Err(AppError::Invalid(
-            "Supprime ou déplace d'abord les cases de cette salle".into(),
+            "Cette salle contient des cases, animaux, contrôles ou mouvements. Conservez-la pour préserver l’historique, ou déplacez d’abord les éléments actifs.".into(),
         ));
     }
     sqlx::query("DELETE FROM salle WHERE id=?")
@@ -8515,13 +8799,14 @@ async fn structure_site_supprimer(
 ) -> AppResult<Response> {
     require_writer(&session)?;
     verify_csrf(&session, &form)?;
-    let children: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM salle WHERE site_id=?")
+    let children: i64 = sqlx::query_scalar("SELECT (SELECT COUNT(*) FROM salle WHERE site_id=?)+(SELECT COUNT(*) FROM compteur_energie WHERE site_id=?)+(SELECT COUNT(*) FROM silo_aliment WHERE site_id=?)+(SELECT COUNT(*) FROM bande WHERE site=(SELECT code FROM site WHERE id=?))")
         .bind(id)
+        .bind(id).bind(id).bind(id)
         .fetch_one(&state.pool)
         .await?;
     if children > 0 {
         return Err(AppError::Invalid(
-            "Supprime d'abord les salles de ce site".into(),
+            "Ce site est encore utilisé par une bande, une salle, un compteur ou un silo. Il n’a pas été supprimé afin de conserver les données.".into(),
         ));
     }
     sqlx::query("DELETE FROM site WHERE id=?")

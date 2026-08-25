@@ -1,10 +1,18 @@
 # Notice utilisateur — EO‑Suivi Élevage
 
-Version de la notice : 2.2.34 — mise à jour le 25 août 2026.
+Version de la notice : 2.2.35 — mise à jour le 25 août 2026.
 
 Cette notice doit être relue à chaque livraison. Toute fonction ajoutée ou
 modifiée doit être inscrite dans la section « Nouveautés de la version » avant
 la publication, puis le numéro et la date ci-dessus doivent être actualisés.
+
+## Nouveautés de la version 2.2.35
+
+- Les bandes utilisent maintenant les listes officielles de sites/zones et de numéros de marquage.
+- La structure distingue les capacités de porcs, de truies en maternité et de porcelets sous la mère, avec occupation et vannes visibles.
+- La suppression d’un site, d’une salle ou d’une case vérifie toutes les données liées et affiche un refus explicite au lieu d’une erreur générale.
+- Le tableau maternité comprend le sevrage par portée, le choix de la case/vanne de post-sevrage, le contrôle de capacité et la création du transfert d’effectif.
+- Le tableau des effectifs par case indique la ou les bandes réellement présentes d’après les mouvements.
 
 ## Nouveautés de la version 2.2.34
 
