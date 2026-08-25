@@ -439,6 +439,94 @@ fn selected_bands(form: &HashMap<String, String>) -> Option<String> {
     }
 }
 
+pub(super) async fn economique_facture_affectations(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Path((category, id)): Path<(String, i64)>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    verify_csrf(&session, &form)?;
+    let (table, redirect) = match category.as_str() {
+        "aliment" => ("livraisonaliment", "aliment"),
+        "veto" => ("achatveto", "veterinaire"),
+        "semence" => ("achatsemence", "semence"),
+        "genetique" => ("achatgenetique", "genetique"),
+        _ => return Err(AppError::NotFound),
+    };
+    let exists: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table} WHERE id=?"))
+        .bind(id)
+        .fetch_one(&state.pool)
+        .await?;
+    if exists == 0 {
+        return Err(AppError::NotFound);
+    }
+    let ids = selected_bands(&form)
+        .unwrap_or_default()
+        .split(',')
+        .filter_map(|value| value.parse::<i64>().ok())
+        .collect::<Vec<_>>();
+    let mut tx = state.pool.begin().await?;
+    sqlx::query("DELETE FROM affectationfacturebande WHERE categorie=? AND facture_id=?")
+        .bind(&category)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    let mut valid_ids = Vec::new();
+    for band_id in &ids {
+        let inserted = sqlx::query("INSERT INTO affectationfacturebande(categorie,facture_id,bande_id,automatique) SELECT ?,?,?,0 WHERE EXISTS(SELECT 1 FROM bande WHERE id=?)")
+            .bind(&category).bind(id).bind(band_id).bind(band_id).execute(&mut *tx).await?;
+        if inserted.rows_affected() == 1 {
+            valid_ids.push(*band_id);
+        }
+    }
+    sqlx::query("INSERT INTO affectationfacturecontrole(categorie,facture_id,verrou_manuel,modifie_le) VALUES(?,?,1,CURRENT_TIMESTAMP) ON CONFLICT(categorie,facture_id) DO UPDATE SET verrou_manuel=1,modifie_le=CURRENT_TIMESTAMP")
+        .bind(&category).bind(id).execute(&mut *tx).await?;
+    let primary = valid_ids.first().copied();
+    let selected = (!valid_ids.is_empty()).then(|| {
+        valid_ids
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    });
+    match category.as_str() {
+        "aliment" => {
+            sqlx::query("UPDATE livraisonaliment SET bande_id=?,bandes=? WHERE id=?")
+                .bind(primary)
+                .bind(&selected)
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+        }
+        "veto" => {
+            sqlx::query("UPDATE achatveto SET bande_id=?,bandes=? WHERE id=?")
+                .bind(primary)
+                .bind(&selected)
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+        }
+        "semence" => {
+            sqlx::query("UPDATE achatsemence SET bande_id=? WHERE id=?")
+                .bind(primary)
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+        }
+        "genetique" => {
+            sqlx::query("UPDATE achatgenetique SET bande_code=(SELECT code FROM bande WHERE id=?) WHERE id=?")
+                .bind(primary).bind(id).execute(&mut *tx).await?;
+        }
+        _ => unreachable!(),
+    }
+    tx.commit().await?;
+    Ok(Redirect::to(&format!(
+        "/economique?secteur={redirect}#facture-{category}-{id}"
+    ))
+    .into_response())
+}
+
 macro_rules! economy_simple_update {
     ($name:ident,$table:literal,$column:literal,$parser:expr,$redirect:literal) => {
         pub(super) async fn $name(
@@ -586,21 +674,7 @@ pub(super) async fn economique_vente_lot_bande(
 }
 
 async fn auto_link_economy(pool: &SqlitePool, include_sales: bool) -> AppResult<u64> {
-    let mut changed = 0;
-    for (table, min_day, max_day, center) in [
-        ("livraisonaliment", -175_i64, 210_i64, 70_i64),
-        ("achatveto", -115, 210, 55),
-        ("achatsemence", -175, 30, -60),
-    ] {
-        let sql=format!("UPDATE {table} AS x SET bande_id=(SELECT b.id FROM bande b WHERE b.date_mb IS NOT NULL AND x.date IS NOT NULL AND julianday(x.date)-julianday(b.date_mb) BETWEEN ? AND ? AND (x.site IS NULL OR trim(x.site)='' OR b.site=x.site) ORDER BY ABS((julianday(x.date)-julianday(b.date_mb))-?) LIMIT 1) WHERE x.bande_id IS NULL AND x.date IS NOT NULL");
-        changed += sqlx::query(&sql)
-            .bind(min_day)
-            .bind(max_day)
-            .bind(center)
-            .execute(pool)
-            .await?
-            .rows_affected();
-    }
+    let mut changed = db::auto_assign_economic_invoices(pool).await?;
     if include_sales {
         changed+=sqlx::query("UPDATE venteapport AS v SET bande_id=(SELECT b.id FROM bande b WHERE b.date_mb IS NOT NULL AND v.date IS NOT NULL AND julianday(v.date)-julianday(b.date_mb) BETWEEN 150 AND 225 ORDER BY ABS((julianday(v.date)-julianday(b.date_mb))-185) LIMIT 1) WHERE v.bande_id IS NULL AND v.date IS NOT NULL").execute(pool).await?.rows_affected();
     }

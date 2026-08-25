@@ -1,10 +1,17 @@
 # Notice utilisateur — EO‑Suivi Élevage
 
-Version de la notice : 2.2.31 — mise à jour le 25 août 2026.
+Version de la notice : 2.2.32 — mise à jour le 25 août 2026.
 
 Cette notice doit être relue à chaque livraison. Toute fonction ajoutée ou
 modifiée doit être inscrite dans la section « Nouveautés de la version » avant
 la publication, puis le numéro et la date ci-dessus doivent être actualisés.
+
+## Nouveautés de la version 2.2.32
+
+- Les factures d’aliment, vétérinaires, de semence et de génétique sans bande reçoivent automatiquement la bande la plus probable selon leur date, leur site lorsqu’il est connu et le calendrier des mises-bas.
+- Chaque écran économique permet d’ajouter ou de retirer librement plusieurs bandes sur une facture.
+- Lorsqu’une facture concerne plusieurs bandes, son montant et ses quantités sont répartis à parts égales : la facture n’est jamais comptée plusieurs fois.
+- Une correction manuelle est conservée, y compris lorsque toutes les bandes ont volontairement été retirées.
 
 ## Nouveautés de la version 2.2.31
 

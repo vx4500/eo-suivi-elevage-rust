@@ -489,3 +489,4 @@ body .rust-nav{background:#183b2e;border-bottom:3px solid #b4743c;box-shadow:0 3
   .dashboard-panel{padding:12px}.capacity-grid{grid-template-columns:1fr 1fr}
 }
 @media(max-width:390px){.dashboard-kpis{grid-template-columns:1fr}.band-steps{grid-template-columns:1fr}.capacity-grid{grid-template-columns:1fr}}
+.band-assignment-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:5px;max-height:240px;overflow:auto;margin:10px 0;padding:8px;border:1px solid var(--line);border-radius:8px;background:#fafcfb}.band-assignment-grid label{display:flex;align-items:center;gap:5px;margin:0;font-size:.78rem}.band-assignment-grid input{width:auto}

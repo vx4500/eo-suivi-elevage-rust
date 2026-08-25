@@ -368,6 +368,47 @@ CREATE TABLE IF NOT EXISTS achatgenetique (
     note TEXT
 );
 
+-- Affectation commune des factures économiques : une facture peut concerner
+-- plusieurs bandes sans dupliquer son montant. `facture_id` référence la
+-- table indiquée par `categorie` (relation polymorphe contrôlée par le code).
+CREATE TABLE IF NOT EXISTS affectationfacturebande (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    categorie TEXT NOT NULL CHECK(categorie IN ('aliment','veto','semence','genetique')),
+    facture_id INTEGER NOT NULL,
+    bande_id INTEGER NOT NULL REFERENCES bande(id) ON DELETE CASCADE,
+    automatique INTEGER NOT NULL DEFAULT 0,
+    score REAL,
+    UNIQUE(categorie,facture_id,bande_id)
+);
+
+CREATE TABLE IF NOT EXISTS affectationfacturecontrole (
+    categorie TEXT NOT NULL CHECK(categorie IN ('aliment','veto','semence','genetique')),
+    facture_id INTEGER NOT NULL,
+    verrou_manuel INTEGER NOT NULL DEFAULT 0,
+    modifie_le TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(categorie,facture_id)
+);
+
+CREATE INDEX IF NOT EXISTS ix_affectationfacture_bande
+ON affectationfacturebande(bande_id,categorie);
+
+CREATE TRIGGER IF NOT EXISTS trg_affectation_aliment_delete AFTER DELETE ON livraisonaliment BEGIN
+    DELETE FROM affectationfacturebande WHERE categorie='aliment' AND facture_id=OLD.id;
+    DELETE FROM affectationfacturecontrole WHERE categorie='aliment' AND facture_id=OLD.id;
+END;
+CREATE TRIGGER IF NOT EXISTS trg_affectation_veto_delete AFTER DELETE ON achatveto BEGIN
+    DELETE FROM affectationfacturebande WHERE categorie='veto' AND facture_id=OLD.id;
+    DELETE FROM affectationfacturecontrole WHERE categorie='veto' AND facture_id=OLD.id;
+END;
+CREATE TRIGGER IF NOT EXISTS trg_affectation_semence_delete AFTER DELETE ON achatsemence BEGIN
+    DELETE FROM affectationfacturebande WHERE categorie='semence' AND facture_id=OLD.id;
+    DELETE FROM affectationfacturecontrole WHERE categorie='semence' AND facture_id=OLD.id;
+END;
+CREATE TRIGGER IF NOT EXISTS trg_affectation_genetique_delete AFTER DELETE ON achatgenetique BEGIN
+    DELETE FROM affectationfacturebande WHERE categorie='genetique' AND facture_id=OLD.id;
+    DELETE FROM affectationfacturecontrole WHERE categorie='genetique' AND facture_id=OLD.id;
+END;
+
 CREATE TABLE IF NOT EXISTS objectif (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     cle TEXT NOT NULL,

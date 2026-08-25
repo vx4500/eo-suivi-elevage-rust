@@ -32,11 +32,13 @@ async fn schema_complet_et_ecritures_compatibles() -> anyhow::Result<()> {
     )
     .fetch_one(&pool)
     .await?;
-    // 61 depuis l'ajout de receptionachat (§1bis), lignee_genetique (§2),
+    // 63 depuis l'ajout de receptionachat (§1bis), lignee_genetique (§2),
     // silo_aliment/releve_silo (prévisions aliment, §5), acterealiseverrat
     // (historique sanitaire des verrats, §3) et consommationsoupe (import
     // machine à soupe, § « aliment et stock »).
-    assert_eq!(tables, 61);
+    // affectationfacturebande et affectationfacturecontrole assurent la
+    // ventilation multi-bandes des factures sans double comptage.
+    assert_eq!(tables, 63);
     let objectives: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM objectif")
         .fetch_one(&pool)
         .await?;

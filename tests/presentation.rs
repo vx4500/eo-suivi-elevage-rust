@@ -104,6 +104,25 @@ fn version_227_calcule_les_couts_et_permet_la_modification_client() {
 }
 
 #[test]
+fn version_232_affecte_et_corrige_les_factures_par_bande() {
+    let routes = include_str!("../src/routes/mod.rs");
+    let parity = include_str!("../src/routes/parity.rs");
+    let database = include_str!("../src/db.rs");
+    let template = include_str!("../templates/economique.html");
+    let schema = include_str!("../migrations/0001_schema.sql");
+
+    assert!(schema.contains("CREATE TABLE IF NOT EXISTS affectationfacturebande"));
+    assert!(schema.contains("CREATE TABLE IF NOT EXISTS affectationfacturecontrole"));
+    assert!(database.contains("auto_assign_economic_invoices"));
+    assert!(parity.contains("economique_facture_affectations"));
+    assert!(routes.contains("/{categorie}/{id}/affectations"));
+    assert!(routes.contains("affectationfacturebande n"));
+    assert!(template.contains("proposition automatique"));
+    assert!(template.contains("Enregistrer les bandes"));
+    assert!(template.contains("réparti à parts égales"));
+}
+
+#[test]
 fn version_226_imprime_un_bon_de_commande_client_complet() {
     let routes = include_str!("../src/routes/mod.rs");
     let orders = include_str!("../templates/vente_directe_commandes.html");

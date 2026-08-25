@@ -187,6 +187,7 @@ pub fn build() -> anyhow::Result<Environment<'static>> {
     env.add_filter("decimal1", decimal1);
     env.add_filter("decimal2", decimal2);
     env.add_filter("decimal3", decimal3);
+    env.add_filter("id_in_csv", id_in_csv);
     Ok(env)
 }
 
@@ -216,6 +217,15 @@ fn decimal2(value: Value) -> String {
 
 fn decimal3(value: Value) -> String {
     format!("{:.3}", f64::try_from(value).unwrap_or(0.0)).replace('.', ",")
+}
+
+fn id_in_csv(value: Value, id: i64) -> bool {
+    value
+        .as_str()
+        .unwrap_or_default()
+        .split(',')
+        .filter_map(|part| part.trim().parse::<i64>().ok())
+        .any(|candidate| candidate == id)
 }
 
 #[cfg(test)]

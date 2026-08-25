@@ -158,6 +158,8 @@ pub async fn init(pool: &SqlitePool) -> anyhow::Result<()> {
         .execute(pool)
         .await?;
 
+    auto_assign_economic_invoices(pool).await?;
+
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM utilisateur")
         .fetch_one(pool)
         .await?;
@@ -172,6 +174,52 @@ pub async fn init(pool: &SqlitePool) -> anyhow::Result<()> {
         tracing::warn!("Compte admin initial créé; mot de passe temporaire: admin");
     }
     Ok(())
+}
+
+/// Reprend les anciennes affectations puis propose une bande aux factures qui
+/// n'en ont aucune. Une correction manuelle, y compris « aucune bande », est
+/// verrouillée et ne sera jamais écrasée au prochain démarrage.
+pub async fn auto_assign_economic_invoices(pool: &SqlitePool) -> anyhow::Result<u64> {
+    let mut changed = 0;
+    for (category, table) in [
+        ("aliment", "livraisonaliment"),
+        ("veto", "achatveto"),
+        ("semence", "achatsemence"),
+    ] {
+        let sql = format!(
+            "INSERT OR IGNORE INTO affectationfacturebande(categorie,facture_id,bande_id,automatique) SELECT '{category}',id,bande_id,0 FROM {table} WHERE bande_id IS NOT NULL"
+        );
+        changed += sqlx::query(&sql).execute(pool).await?.rows_affected();
+    }
+    changed += sqlx::query("INSERT OR IGNORE INTO affectationfacturebande(categorie,facture_id,bande_id,automatique) SELECT 'genetique',a.id,b.id,0 FROM achatgenetique a JOIN bande b ON b.code=a.bande_code WHERE a.bande_code IS NOT NULL AND trim(a.bande_code)<>''")
+        .execute(pool).await?.rows_affected();
+    for (category, table) in [("aliment", "livraisonaliment"), ("veto", "achatveto")] {
+        let sql = format!("INSERT OR IGNORE INTO affectationfacturebande(categorie,facture_id,bande_id,automatique) SELECT '{category}',x.id,CAST(j.value AS INTEGER),0 FROM {table} x,json_each('['||x.bandes||']') j WHERE x.bandes IS NOT NULL AND json_valid('['||x.bandes||']') AND EXISTS(SELECT 1 FROM bande b WHERE b.id=CAST(j.value AS INTEGER))");
+        changed += sqlx::query(&sql).execute(pool).await?.rows_affected();
+    }
+
+    for (category, table, center, has_site) in [
+        ("aliment", "livraisonaliment", 70_i64, true),
+        ("veto", "achatveto", 55_i64, true),
+        ("semence", "achatsemence", -114_i64, false),
+        ("genetique", "achatgenetique", -180_i64, false),
+    ] {
+        let site_order = if has_site {
+            "CASE WHEN trim(COALESCE(x.site,''))='' THEN 1 WHEN lower(trim(COALESCE(b.site,'')))=lower(trim(x.site)) THEN 0 ELSE 2 END,"
+        } else {
+            ""
+        };
+        let sql = format!(
+            "WITH candidats AS (SELECT x.id AS facture_id,b.id AS bande_id,ABS((julianday(x.date)-julianday(b.date_mb))-({center})) AS score,ROW_NUMBER() OVER(PARTITION BY x.id ORDER BY {site_order} CASE WHEN x.date IS NULL THEN CASE WHEN b.active=1 THEN 0 ELSE 1 END ELSE ABS((julianday(x.date)-julianday(b.date_mb))-({center})) END,b.active DESC,b.date_mb DESC,b.id DESC) AS rang FROM {table} x CROSS JOIN bande b WHERE b.date_mb IS NOT NULL AND NOT EXISTS(SELECT 1 FROM affectationfacturebande a WHERE a.categorie='{category}' AND a.facture_id=x.id) AND NOT EXISTS(SELECT 1 FROM affectationfacturecontrole c WHERE c.categorie='{category}' AND c.facture_id=x.id AND c.verrou_manuel=1)) INSERT OR IGNORE INTO affectationfacturebande(categorie,facture_id,bande_id,automatique,score) SELECT '{category}',facture_id,bande_id,1,score FROM candidats WHERE rang=1"
+        );
+        changed += sqlx::query(&sql).execute(pool).await?.rows_affected();
+    }
+
+    sqlx::query("UPDATE livraisonaliment SET bande_id=(SELECT a.bande_id FROM affectationfacturebande a WHERE a.categorie='aliment' AND a.facture_id=livraisonaliment.id ORDER BY a.id LIMIT 1),bandes=(SELECT GROUP_CONCAT(a.bande_id) FROM affectationfacturebande a WHERE a.categorie='aliment' AND a.facture_id=livraisonaliment.id)").execute(pool).await?;
+    sqlx::query("UPDATE achatveto SET bande_id=(SELECT a.bande_id FROM affectationfacturebande a WHERE a.categorie='veto' AND a.facture_id=achatveto.id ORDER BY a.id LIMIT 1),bandes=(SELECT GROUP_CONCAT(a.bande_id) FROM affectationfacturebande a WHERE a.categorie='veto' AND a.facture_id=achatveto.id)").execute(pool).await?;
+    sqlx::query("UPDATE achatsemence SET bande_id=(SELECT a.bande_id FROM affectationfacturebande a WHERE a.categorie='semence' AND a.facture_id=achatsemence.id ORDER BY a.id LIMIT 1)").execute(pool).await?;
+    sqlx::query("UPDATE achatgenetique SET bande_code=(SELECT b.code FROM affectationfacturebande a JOIN bande b ON b.id=a.bande_id WHERE a.categorie='genetique' AND a.facture_id=achatgenetique.id ORDER BY a.id LIMIT 1)").execute(pool).await?;
+    Ok(changed)
 }
 
 async fn verify_sqlite_pragmas(pool: &SqlitePool) -> anyhow::Result<()> {
@@ -242,5 +290,52 @@ pub async fn journal(
             .await
     {
         tracing::warn!(%error, "journalisation impossible");
+    }
+}
+
+#[cfg(test)]
+mod economic_assignment_tests {
+    use super::*;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    #[tokio::test]
+    async fn propose_la_bande_probable_et_respecte_un_retrait_manuel() -> anyhow::Result<()> {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await?;
+        sqlx::raw_sql(include_str!("../migrations/0001_schema.sql"))
+            .execute(&pool)
+            .await?;
+        let first =
+            sqlx::query("INSERT INTO bande(code,date_mb,active) VALUES('B1','2026-01-01',1)")
+                .execute(&pool)
+                .await?
+                .last_insert_rowid();
+        let second =
+            sqlx::query("INSERT INTO bande(code,date_mb,active) VALUES('B2','2026-04-01',1)")
+                .execute(&pool)
+                .await?
+                .last_insert_rowid();
+        let invoice = sqlx::query("INSERT INTO livraisonaliment(date,produit,montant_ht) VALUES('2026-03-12','Aliment test',1000)")
+            .execute(&pool).await?.last_insert_rowid();
+        let removed = sqlx::query("INSERT INTO livraisonaliment(date,produit,montant_ht) VALUES('2026-03-12','Retrait manuel',500)")
+            .execute(&pool).await?.last_insert_rowid();
+        sqlx::query("INSERT INTO affectationfacturecontrole(categorie,facture_id,verrou_manuel) VALUES('aliment',?,1)")
+            .bind(removed).execute(&pool).await?;
+
+        auto_assign_economic_invoices(&pool).await?;
+        let proposed: i64 = sqlx::query_scalar("SELECT bande_id FROM affectationfacturebande WHERE categorie='aliment' AND facture_id=?")
+            .bind(invoice).fetch_one(&pool).await?;
+        let removed_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM affectationfacturebande WHERE categorie='aliment' AND facture_id=?")
+            .bind(removed).fetch_one(&pool).await?;
+        assert_eq!(proposed, first);
+        assert_eq!(removed_count, 0);
+        sqlx::query("INSERT INTO affectationfacturebande(categorie,facture_id,bande_id,automatique) VALUES('aliment',?,?,0)")
+            .bind(invoice).bind(second).execute(&pool).await?;
+        let distributed_total: f64 = sqlx::query_scalar("SELECT CAST(SUM(x.montant_ht/(SELECT COUNT(*) FROM affectationfacturebande n WHERE n.categorie='aliment' AND n.facture_id=x.id)) AS REAL) FROM livraisonaliment x JOIN affectationfacturebande a ON a.categorie='aliment' AND a.facture_id=x.id WHERE x.id=?")
+            .bind(invoice).fetch_one(&pool).await?;
+        assert!((distributed_total - 1000.0).abs() < 0.001);
+        Ok(())
     }
 }
