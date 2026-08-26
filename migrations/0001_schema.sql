@@ -784,6 +784,7 @@ CREATE TABLE IF NOT EXISTS importjournal (
     cree_le TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     resume TEXT,
     applique_le TEXT
+    ,contenu_sha256 TEXT
 );
 
 CREATE TABLE IF NOT EXISTS importligne (
@@ -881,6 +882,28 @@ CREATE TABLE IF NOT EXISTS consommationsoupe (
 
 CREATE INDEX IF NOT EXISTS ix_consommationsoupe_silo ON consommationsoupe(silo_id);
 CREATE INDEX IF NOT EXISTS ix_consommationsoupe_date ON consommationsoupe(date);
+
+CREATE TRIGGER IF NOT EXISTS consommationsoupe_refuse_doublon
+BEFORE INSERT ON consommationsoupe
+WHEN EXISTS (
+    SELECT 1 FROM consommationsoupe
+    WHERE COALESCE(date,'')=COALESCE(NEW.date,'')
+      AND COALESCE(heure_debut,'')=COALESCE(NEW.heure_debut,'')
+      AND lower(trim(produit_machine))=lower(trim(NEW.produit_machine))
+)
+BEGIN
+    SELECT RAISE(ABORT, 'consommation machine à soupe déjà importée');
+END;
+
+CREATE TRIGGER IF NOT EXISTS releve_compteur_refuse_doublon
+BEFORE INSERT ON releve_compteur
+WHEN EXISTS (
+    SELECT 1 FROM releve_compteur
+    WHERE compteur_id=NEW.compteur_id AND date_releve=NEW.date_releve
+)
+BEGIN
+    SELECT RAISE(ABORT, 'relevé compteur déjà importé pour cette date');
+END;
 
 -- Catalogue de lignées génétiques (module optionnel « Génétique avancée »,
 -- §2 de la spécification). Un petit élevage garde le champ texte libre

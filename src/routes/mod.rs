@@ -17,12 +17,34 @@ use chrono::{Duration, Local, NaiveDate};
 use dashmap::DashMap;
 use minijinja::Environment;
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Column, Row, SqlitePool, TypeInfo, ValueRef};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 mod parity;
+
+fn contenu_sha256(bytes: &[u8]) -> String {
+    hex::encode(Sha256::digest(bytes))
+}
+
+async fn refuser_fichier_deja_importe(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    digest: &str,
+) -> AppResult<()> {
+    let existe: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM importjournal WHERE contenu_sha256=?")
+            .bind(digest)
+            .fetch_one(&mut **transaction)
+            .await?;
+    if existe > 0 {
+        return Err(AppError::Invalid(
+            "Ce fichier a déjà été importé, même sous un autre nom".into(),
+        ));
+    }
+    Ok(())
+}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -506,7 +528,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/sauvegarde/restaurer",
-            post(parity::sauvegarde_restaurer).layer(DefaultBodyLimit::max(512 * 1024 * 1024)),
+            post(parity::sauvegarde_restaurer).layer(DefaultBodyLimit::max(128 * 1024 * 1024)),
         )
         .route("/stock/doses", post(parity::stock_doses))
         .route("/template/truies.csv", get(truies_modele_csv))
@@ -3576,6 +3598,7 @@ async fn truies_import(
     if bytes.len() > 5 * 1024 * 1024 {
         return Err(AppError::Invalid("Fichier trop volumineux".into()));
     }
+    let digest = contenu_sha256(&bytes);
     let delimiter = if bytes
         .iter()
         .take(1024)
@@ -3611,18 +3634,20 @@ async fn truies_import(
     let mut seen = std::collections::HashSet::new();
     let mut preview_rows = Vec::new();
     let mut additions = 0_i64;
-    let mut ignored = 0_i64;
+    let ignored = 0_i64;
     let mut errors = 0_i64;
     let mut tx = state.pool.begin().await?;
+    refuser_fichier_deja_importe(&mut tx, &digest).await?;
     sqlx::query(
-        "DELETE FROM importjournal WHERE statut='apercu' AND cree_le<datetime('now','-1 day')",
+        "UPDATE importjournal SET statut='expire' WHERE statut='apercu' AND cree_le<datetime('now','-1 day')",
     )
     .execute(&mut *tx)
     .await?;
-    sqlx::query("INSERT INTO importjournal(token,type_import,nom_fichier,statut,cree_par) VALUES(?,'truies',?,'apercu',?)")
+    sqlx::query("INSERT INTO importjournal(token,type_import,nom_fichier,statut,cree_par,contenu_sha256) VALUES(?,'truies',?,'apercu',?,?)")
         .bind(&token)
         .bind(&filename)
         .bind(session.uid)
+        .bind(&digest)
         .execute(&mut *tx)
         .await?;
 
@@ -3657,9 +3682,9 @@ async fn truies_import(
             anomaly = Some("Date invalide : format attendu AAAA-MM-JJ".to_string());
             errors += 1;
         } else if !seen.insert(number.to_lowercase()) {
-            action = "ignorer";
+            action = "erreur";
             anomaly = Some("Doublon dans le fichier".to_string());
-            ignored += 1;
+            errors += 1;
         } else {
             let exists: i64 = sqlx::query_scalar(
                 "SELECT COUNT(*) FROM truie WHERE lower(trim(num_travail))=lower(trim(?)) AND reformee=0",
@@ -3668,9 +3693,9 @@ async fn truies_import(
             .fetch_one(&mut *tx)
             .await?;
             if exists > 0 {
-                action = "ignorer";
+                action = "erreur";
                 anomaly = Some("Truie active déjà présente".to_string());
-                ignored += 1;
+                errors += 1;
             } else {
                 additions += 1;
             }
@@ -6230,6 +6255,7 @@ async fn energie_import(
 ) -> AppResult<Response> {
     require_writer(&session)?;
     let mut data = None;
+    let mut filename = "import-energie.csv".to_string();
     let mut csrf = None;
     while let Some(field) = multipart
         .next_field()
@@ -6238,6 +6264,13 @@ async fn energie_import(
     {
         match field.name() {
             Some("fichier") => {
+                filename = field
+                    .file_name()
+                    .unwrap_or("import-energie.csv")
+                    .chars()
+                    .filter(|character| character.is_alphanumeric() || ".-_ ".contains(*character))
+                    .take(180)
+                    .collect();
                 data = Some(
                     field
                         .bytes()
@@ -6264,6 +6297,7 @@ async fn energie_import(
     if bytes.len() > 5 * 1024 * 1024 {
         return Err(AppError::Invalid("Fichier trop volumineux".into()));
     }
+    let digest = contenu_sha256(&bytes);
     let delimiter = if bytes.iter().take(512).filter(|&&byte| byte == b';').count()
         > bytes.iter().take(512).filter(|&&byte| byte == b',').count()
     {
@@ -6291,6 +6325,15 @@ async fn energie_import(
     }
 
     let mut transaction = state.pool.begin().await?;
+    refuser_fichier_deja_importe(&mut transaction, &digest).await?;
+    let import_token = uuid::Uuid::new_v4().simple().to_string();
+    sqlx::query("INSERT INTO importjournal(token,type_import,nom_fichier,statut,cree_par,contenu_sha256,applique_le) VALUES(?,'energie',?,'applique',?,?,CURRENT_TIMESTAMP)")
+        .bind(&import_token)
+        .bind(&filename)
+        .bind(session.uid)
+        .bind(&digest)
+        .execute(&mut *transaction)
+        .await?;
     let mut added = 0;
     for row in rows {
         let kind = match row.get("type_compteur").map(|value| value.to_lowercase()) {
@@ -6359,15 +6402,18 @@ async fn energie_import(
                 .await?
                 .last_insert_rowid(),
         };
-        let duplicate: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM releve_compteur WHERE compteur_id=? AND date_releve=? AND ABS(valeur_index-?)<0.000001",
+        let duplicate: Option<f64> = sqlx::query_scalar(
+            "SELECT valeur_index FROM releve_compteur WHERE compteur_id=? AND date_releve=? LIMIT 1",
         )
         .bind(meter_id)
         .bind(&date)
-        .bind(index)
-        .fetch_one(&mut *transaction)
+        .fetch_optional(&mut *transaction)
         .await?;
-        if duplicate == 0 {
+        if let Some(existing) = duplicate {
+            return Err(AppError::Invalid(format!(
+                "Relevé déjà présent pour {name} le {date} (index existant {existing}, fichier {index})"
+            )));
+        } else {
             // Même auto-tagging des bandes présentes que la saisie manuelle
             // (`energie_releve`) — sinon un relevé importé en masse ne
             // contribuerait jamais à la répartition du coût par bande.
@@ -6691,13 +6737,15 @@ async fn economic_preview_action(
             .bind(reference).bind(import_detail_str(line,"frappe")).fetch_one(&mut **transaction).await?,
         "synthese" => sqlx::query_scalar("SELECT COUNT(*) FROM venteapport WHERE COALESCE(frappe,'')=?")
             .bind(reference).fetch_one(&mut **transaction).await?,
-        "valorisation" | "retenue" => 1,
+        "valorisation" | "retenue" => sqlx::query_scalar("SELECT COUNT(*) FROM venteapport WHERE COALESCE(num_apport,'')=?")
+            .bind(reference).fetch_one(&mut **transaction).await?,
         _ => return Ok(("erreur".into(),Some("Type de ligne non pris en charge".into()))),
     };
-    let action = if matches!(line.kind.as_str(), "valorisation" | "retenue") {
-        "remplacer"
-    } else if exists > 0 {
-        "mettre_a_jour"
+    let action = if exists > 0 {
+        return Ok((
+            "erreur".into(),
+            Some("Référence déjà importée : modification interdite".into()),
+        ));
     } else {
         "ajouter"
     };
@@ -6774,19 +6822,20 @@ async fn economique_import_pdf(
             .map_err(|error| AppError::Invalid(format!("{filename} : {error}")))?;
         let parsed = economic_import::parse_document(&text)
             .map_err(|error| AppError::Invalid(format!("{filename} : {error}")))?;
-        documents.push((filename, parsed));
+        documents.push((filename, contenu_sha256(&bytes), parsed));
     }
     let mut transaction = state.pool.begin().await?;
     sqlx::query(
-        "DELETE FROM importjournal WHERE statut='apercu' AND cree_le<datetime('now','-1 day')",
+        "UPDATE importjournal SET statut='expire' WHERE statut='apercu' AND cree_le<datetime('now','-1 day')",
     )
     .execute(&mut *transaction)
     .await?;
     let mut tokens = Vec::new();
-    for (filename, parsed) in documents {
+    for (filename, digest, parsed) in documents {
         let token = uuid::Uuid::new_v4().simple().to_string();
-        sqlx::query("INSERT INTO importjournal(token,type_import,nom_fichier,statut,cree_par) VALUES(?,?,?,'apercu',?)")
-            .bind(&token).bind(format!("economique:{}",parsed.document_type)).bind(&filename).bind(session.uid)
+        refuser_fichier_deja_importe(&mut transaction, &digest).await?;
+        sqlx::query("INSERT INTO importjournal(token,type_import,nom_fichier,statut,cree_par,contenu_sha256) VALUES(?,?,?,'apercu',?,?)")
+            .bind(&token).bind(format!("economique:{}",parsed.document_type)).bind(&filename).bind(session.uid).bind(&digest)
             .execute(&mut *transaction).await?;
         let mut seen = HashSet::new();
         let mut counts = HashMap::<String, i64>::new();
@@ -6977,7 +7026,19 @@ async fn economique_import_confirmer(
             .map_err(|_| AppError::Invalid(format!("Données invalides à la ligne {number}")))?;
         lines.push((number, line));
     }
-    let mut cleared_apports = HashSet::new();
+    // Revérification atomique au moment de confirmer : un autre import peut
+    // avoir été appliqué depuis l'affichage de l'aperçu.
+    let mut confirmation_seen = HashSet::new();
+    for (_, line) in &lines {
+        let (action, anomaly) =
+            economic_preview_action(&mut transaction, line, &mut confirmation_seen).await?;
+        if action != "ajouter" {
+            return Err(AppError::Invalid(anomaly.unwrap_or_else(|| {
+                "Import en conflit avec des données déjà présentes".into()
+            })));
+        }
+    }
+    let mut affected_apports = HashSet::new();
     let mut applied = 0_i64;
     for (number, line) in &lines {
         // La bande globale reste un raccourci, mais chaque ligne (et donc
@@ -7000,13 +7061,8 @@ async fn economique_import_confirmer(
             .reference
             .as_deref()
             .ok_or_else(|| AppError::Invalid("Référence manquante".into()))?;
-        if matches!(line.kind.as_str(), "vente" | "valorisation" | "retenue")
-            && cleared_apports.insert(reference.to_string())
-        {
-            sqlx::query("DELETE FROM valorisationapport WHERE num_apport=?")
-                .bind(reference)
-                .execute(&mut *transaction)
-                .await?;
+        if matches!(line.kind.as_str(), "vente" | "valorisation" | "retenue") {
+            affected_apports.insert(reference.to_string());
         }
         match line.kind.as_str() {
             "aliment" => {
@@ -7081,7 +7137,7 @@ async fn economique_import_confirmer(
         }
         applied += 1;
     }
-    for reference in cleared_apports {
+    for reference in affected_apports {
         let sales: Vec<SaleMovementRow> = sqlx::query_as(
             "SELECT id,date,bande_id,nb_porcs,lots_json FROM venteapport WHERE num_apport=?",
         )
@@ -9820,6 +9876,7 @@ async fn machine_soupe_import(
     if bytes.len() > 10 * 1024 * 1024 {
         return Err(AppError::Invalid("Fichier trop volumineux".into()));
     }
+    let digest = contenu_sha256(&bytes);
     let lignes = machine_soupe::parse_fabrication_csv(&bytes).map_err(AppError::Invalid)?;
     if lignes.is_empty() {
         return Err(AppError::Invalid(
@@ -9829,17 +9886,20 @@ async fn machine_soupe_import(
 
     let token = uuid::Uuid::new_v4().simple().to_string();
     let mut tx = state.pool.begin().await?;
+    refuser_fichier_deja_importe(&mut tx, &digest).await?;
     sqlx::query(
-        "DELETE FROM importjournal WHERE statut='apercu' AND cree_le<datetime('now','-1 day')",
+        "UPDATE importjournal SET statut='expire' WHERE statut='apercu' AND cree_le<datetime('now','-1 day')",
     )
     .execute(&mut *tx)
     .await?;
-    sqlx::query("INSERT INTO importjournal(token,type_import,nom_fichier,statut,cree_par) VALUES(?,'machine_soupe',?,'apercu',?)")
+    sqlx::query("INSERT INTO importjournal(token,type_import,nom_fichier,statut,cree_par,contenu_sha256) VALUES(?,'machine_soupe',?,'apercu',?,?)")
         .bind(&token)
         .bind(&filename)
         .bind(session.uid)
+        .bind(&digest)
         .execute(&mut *tx)
         .await?;
+    let mut seen = HashSet::new();
     for (index, ligne) in lignes.iter().enumerate() {
         let deja_importe: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM consommationsoupe WHERE COALESCE(date,'')=COALESCE(?,'') AND COALESCE(heure_debut,'')=COALESCE(?,'') AND lower(trim(produit_machine))=lower(trim(?))",
@@ -9849,8 +9909,16 @@ async fn machine_soupe_import(
         .bind(&ligne.produit)
         .fetch_one(&mut *tx)
         .await?;
-        let (action, anomalie) = if deja_importe > 0 {
-            ("ignorer", Some("Déjà importé".to_string()))
+        let key = format!(
+            "{}|{}|{}",
+            ligne.date.as_deref().unwrap_or_default(),
+            ligne.heure_debut.as_deref().unwrap_or_default(),
+            ligne.produit.trim().to_lowercase()
+        );
+        let (action, anomalie) = if !seen.insert(key) {
+            ("erreur", Some("Doublon dans le fichier".to_string()))
+        } else if deja_importe > 0 {
+            ("erreur", Some("Déjà importé".to_string()))
         } else {
             ("ajouter", None)
         };
@@ -9865,6 +9933,20 @@ async fn machine_soupe_import(
             .await?;
     }
     tx.commit().await?;
+
+    if lignes.len() as i64
+        != sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM importligne WHERE token=? AND action='ajouter'",
+        )
+        .bind(&token)
+        .fetch_one(&state.pool)
+        .await?
+    {
+        return Err(AppError::Invalid(
+            "Import refusé : le fichier contient une consommation déjà présente ou en double"
+                .into(),
+        ));
+    }
 
     let a_importer: Vec<machine_soupe::LigneFabrication> = sqlx::query_scalar::<_, String>(
         "SELECT donnees_json FROM importligne WHERE token=? AND action='ajouter' ORDER BY numero_ligne",
@@ -9982,6 +10064,17 @@ async fn machine_soupe_import_confirmer(
         let Some(silo_id) = silo_par_produit.get(&ligne.produit) else {
             continue;
         };
+        let deja_importe: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM consommationsoupe WHERE COALESCE(date,'')=COALESCE(?,'') AND COALESCE(heure_debut,'')=COALESCE(?,'') AND lower(trim(produit_machine))=lower(trim(?))")
+            .bind(&ligne.date).bind(&ligne.heure_debut).bind(&ligne.produit)
+            .fetch_one(&mut *tx).await?;
+        if deja_importe > 0 {
+            return Err(AppError::Invalid(format!(
+                "Consommation déjà importée : {} {} {}",
+                ligne.date.as_deref().unwrap_or_default(),
+                ligne.heure_debut.as_deref().unwrap_or_default(),
+                ligne.produit
+            )));
+        }
         sqlx::query("INSERT INTO consommationsoupe(date,heure_debut,no_formule,produit_machine,silo_id,quantite_consigne,quantite_recue,token_import) VALUES(?,?,?,?,?,?,?,?)")
             .bind(&ligne.date)
             .bind(&ligne.heure_debut)

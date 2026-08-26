@@ -1637,6 +1637,11 @@ pub(super) async fn sauvegarde_restaurer(
         ));
     }
     let bytes = file.ok_or_else(|| AppError::Invalid("Sauvegarde SQLite obligatoire".into()))?;
+    if bytes.len() > 128 * 1024 * 1024 {
+        return Err(AppError::Invalid(
+            "Sauvegarde trop volumineuse (maximum 128 Mo)".into(),
+        ));
+    }
     if !bytes.starts_with(b"SQLite format 3\0") {
         return Err(AppError::Invalid(
             "Le fichier n'est pas une base SQLite".into(),
@@ -1658,12 +1663,41 @@ pub(super) async fn sauvegarde_restaurer(
     let check: String = sqlx::query_scalar("PRAGMA quick_check")
         .fetch_one(&check_pool)
         .await?;
-    let tables:i64=sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN('truie','bande','utilisateur')").fetch_one(&check_pool).await?;
+    let required_tables: Vec<String> = sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+        .fetch_all(&state.pool).await?;
+    let candidate_tables: Vec<String> = sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+        .fetch_all(&check_pool).await?;
+    let tables_ok = required_tables
+        .iter()
+        .all(|table| candidate_tables.contains(table));
+    let mut columns_ok = tables_ok;
+    if columns_ok {
+        for table in &required_tables {
+            let quoted = table.replace('"', "\"\"");
+            let live_columns: Vec<String> = sqlx::query_scalar(&format!(
+                "SELECT name FROM pragma_table_info(\"{quoted}\") ORDER BY cid"
+            ))
+            .fetch_all(&state.pool)
+            .await?;
+            let candidate_columns: Vec<String> = sqlx::query_scalar(&format!(
+                "SELECT name FROM pragma_table_info(\"{quoted}\") ORDER BY cid"
+            ))
+            .fetch_all(&check_pool)
+            .await?;
+            if live_columns
+                .iter()
+                .any(|column| !candidate_columns.contains(column))
+            {
+                columns_ok = false;
+                break;
+            }
+        }
+    }
     let foreign_key_errors = sqlx::query("PRAGMA foreign_key_check")
         .fetch_all(&check_pool)
         .await?;
     check_pool.close().await;
-    if check != "ok" || tables != 3 || !foreign_key_errors.is_empty() {
+    if check != "ok" || !tables_ok || !columns_ok || !foreign_key_errors.is_empty() {
         let _ = tokio::fs::remove_file(&candidate).await;
         return Err(AppError::Invalid(
             "Sauvegarde incomplète, corrompue ou contenant des références invalides".into(),

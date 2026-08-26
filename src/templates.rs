@@ -101,6 +101,10 @@ pub fn build() -> anyhow::Result<Environment<'static>> {
         include_str!("../templates/aliment_previsions.html"),
     )?;
     env.add_template(
+        "machine_soupe_apercu.html",
+        include_str!("../templates/machine_soupe_apercu.html"),
+    )?;
+    env.add_template(
         "fiche_mise_bas.html",
         include_str!("../templates/fiche_mise_bas.html"),
     )?;
@@ -235,6 +239,7 @@ fn id_in_csv(value: Value, id: i64) -> bool {
 #[cfg(test)]
 mod tests {
     use minijinja::Value;
+    use std::fs;
 
     #[test]
     fn tous_les_modeles_html_sont_valides() {
@@ -242,6 +247,28 @@ mod tests {
             super::build().is_ok(),
             "les modèles MiniJinja doivent être valides"
         );
+    }
+
+    #[test]
+    fn tous_les_fichiers_html_sont_enregistres() {
+        let templates_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("templates");
+        let registry = include_str!("templates.rs");
+
+        for entry in fs::read_dir(templates_dir).expect("dossier templates lisible") {
+            let path = entry.expect("entrée de template lisible").path();
+            if path.extension().and_then(|extension| extension.to_str()) != Some("html") {
+                continue;
+            }
+            let filename = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .expect("nom de template UTF-8");
+            let include = format!("include_str!(\"../templates/{filename}\")");
+            assert!(
+                registry.contains(&include),
+                "template non enregistré dans build() : {filename}"
+            );
+        }
     }
 
     #[test]

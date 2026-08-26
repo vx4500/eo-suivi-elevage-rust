@@ -430,3 +430,29 @@ async fn historique_sanitaire_reunit_bandes_et_verrats() -> anyhow::Result<()> {
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn imports_refusent_les_doublons_en_base() -> anyhow::Result<()> {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await?;
+    sqlx::raw_sql(include_str!("../migrations/0001_schema.sql"))
+        .execute(&pool)
+        .await?;
+
+    let compteur = sqlx::query("INSERT INTO compteur_energie(nom,type) VALUES('Eau','eau')")
+        .execute(&pool)
+        .await?
+        .last_insert_rowid();
+    sqlx::query("INSERT INTO releve_compteur(compteur_id,date_releve,valeur_index) VALUES(?,'2026-08-26',10)")
+        .bind(compteur).execute(&pool).await?;
+    assert!(sqlx::query("INSERT INTO releve_compteur(compteur_id,date_releve,valeur_index) VALUES(?,'2026-08-26',11)")
+        .bind(compteur).execute(&pool).await.is_err());
+
+    sqlx::query("INSERT INTO consommationsoupe(date,heure_debut,produit_machine,quantite_recue) VALUES('2026-08-26','08:00','Blé',10)")
+        .execute(&pool).await?;
+    assert!(sqlx::query("INSERT INTO consommationsoupe(date,heure_debut,produit_machine,quantite_recue) VALUES('2026-08-26','08:00',' blé ',12)")
+        .execute(&pool).await.is_err());
+    Ok(())
+}
