@@ -84,6 +84,10 @@ pub fn build() -> anyhow::Result<Environment<'static>> {
         include_str!("../templates/import_apercu.html"),
     )?;
     env.add_template(
+        "import_historique_apercu.html",
+        include_str!("../templates/import_historique_apercu.html"),
+    )?;
+    env.add_template(
         "prestataire.html",
         include_str!("../templates/prestataire.html"),
     )?;
