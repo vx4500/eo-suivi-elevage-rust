@@ -1352,15 +1352,41 @@ pub(super) async fn saisie_rapide(
             let case_id = form_i64(&form, "case_id");
             let mut stade = form_text(&form, "stade");
             if let Some(case_id) = case_id {
-                let present = case_pig_count(&state.pool, case_id).await?;
-                if number > present {
-                    return Err(AppError::Invalid(format!(
-                        "Effectif insuffisant dans la case : {present} porc(s) présent(s)"
-                    )));
+                let deduced = stade_from_case(&state.pool, case_id).await?;
+                if deduced.as_deref() == Some("Maternité") {
+                    // Vrai bug corrigé ici : les porcelets sous la mère ne
+                    // sont jamais comptés par case (aucun inventaire ni
+                    // transfert individuel n'est saisi pour eux — seul le
+                    // nombre né vivant moins les pertes déjà déclarées fait
+                    // foi, comme sur le tableau de maternité). Le contrôle
+                    // `case_pig_count`, qui lit `inventairecase`/`transfert`,
+                    // renvoyait donc toujours 0 en maternité et bloquait
+                    // systématiquement toute perte de porcelet dès qu'une
+                    // case était renseignée, avec le message trompeur
+                    // « 0 porc(s) présent(s) ».
+                    let alive: i64 = sqlx::query_scalar(
+                        "SELECT MAX(0,COALESCE((SELECT nes_vifs FROM evenement WHERE truie_id=? AND bande_id=? AND type='mise_bas' ORDER BY date DESC,id DESC LIMIT 1),0)-COALESCE((SELECT SUM(nb) FROM perteporcelet WHERE truie_id=? AND bande_id=?),0))",
+                    )
+                    .bind(sow_id)
+                    .bind(band_id)
+                    .bind(sow_id)
+                    .bind(band_id)
+                    .fetch_one(&state.pool)
+                    .await?;
+                    if number > alive {
+                        return Err(AppError::Invalid(format!(
+                            "Effectif insuffisant sous la mère : {alive} porcelet(s) présent(s)"
+                        )));
+                    }
+                } else {
+                    let present = case_pig_count(&state.pool, case_id).await?;
+                    if number > present {
+                        return Err(AppError::Invalid(format!(
+                            "Effectif insuffisant dans la case : {present} porc(s) présent(s)"
+                        )));
+                    }
                 }
-                if let Some(deduced) = stade_from_case(&state.pool, case_id).await? {
-                    stade = Some(deduced);
-                }
+                stade = deduced.or(stade);
             }
             let cause = form_text(&form, "cause")
                 .ok_or_else(|| AppError::Invalid("Cause obligatoire".into()))?;
@@ -2129,4 +2155,142 @@ pub(super) async fn vente_session_commande_rattacher(
         .execute(&state.pool)
         .await?;
     Ok(Redirect::to(&format!("/vente-directe/session/{id}")).into_response())
+}
+
+#[cfg(test)]
+mod perte_porcelet_tests {
+    use super::*;
+    use crate::config::Config;
+    use minijinja::Environment;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    async fn test_state() -> AppResult<(AppState, i64, i64)> {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await?;
+        sqlx::raw_sql(include_str!("../../migrations/0001_schema.sql"))
+            .execute(&pool)
+            .await?;
+        let site = sqlx::query("INSERT INTO site(code,nom) VALUES('S1','Site test')")
+            .execute(&pool)
+            .await?
+            .last_insert_rowid();
+        let room = sqlx::query(
+            "INSERT INTO salle(site_id,nom,type,nb_cases,ordre) VALUES(?,'Maternité 1','Maternité',1,1)",
+        )
+        .bind(site)
+        .execute(&pool)
+        .await?
+        .last_insert_rowid();
+        let pen = sqlx::query("INSERT INTO casesalle(salle_id,nom) VALUES(?,'Case 1')")
+            .bind(room)
+            .execute(&pool)
+            .await?
+            .last_insert_rowid();
+        let band =
+            sqlx::query("INSERT INTO bande(code,date_mb,active) VALUES('BTEST','2026-08-01',1)")
+                .execute(&pool)
+                .await?
+                .last_insert_rowid();
+        let sow = sqlx::query(
+            "INSERT INTO truie(num_travail,bande_code,statut,reformee) VALUES('T1','BTEST','active',0)",
+        )
+        .execute(&pool)
+        .await?
+        .last_insert_rowid();
+        sqlx::query("INSERT INTO evenement(type,date,truie_id,bande_id,nes_vifs) VALUES('mise_bas','2026-08-01',?,?,10)")
+            .bind(sow).bind(band).execute(&pool).await?;
+        sqlx::query("INSERT OR IGNORE INTO causeperte(libelle) VALUES('Autre')")
+            .execute(&pool)
+            .await?;
+
+        let config = Config {
+            bind: "0.0.0.0:8080".parse().unwrap(),
+            db_path: std::path::PathBuf::from("data/test.db"),
+            secure_cookies: false,
+        };
+        let env = Environment::new();
+        let state = AppState::new(config, pool, env);
+        Ok((state, sow, pen))
+    }
+
+    fn session() -> SessionData {
+        SessionData {
+            uid: 1,
+            identifiant: "test".into(),
+            nom: "Test".into(),
+            role: "admin".into(),
+            sections: vec![],
+            csrf: "csrf-test".into(),
+            doit_changer_mdp: false,
+            type_elevage: "naisseur_engraisseur".into(),
+            module_genetique: false,
+            module_prestataires: true,
+            module_charcutiers_rfid: false,
+            module_vente_directe: true,
+        }
+    }
+
+    fn perte_form(sow: i64, pen: i64, nombre: &str) -> HashMap<String, String> {
+        [
+            ("csrf_token", "csrf-test"),
+            ("type", "perte"),
+            ("truie_id", &sow.to_string()),
+            ("case_id", &pen.to_string()),
+            ("cause", "Autre"),
+            ("nombre", nombre),
+            ("date", "2026-08-10"),
+        ]
+        .into_iter()
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+        .collect()
+    }
+
+    /// Vrai bug corrigé : une case de maternité choisie comme « case
+    /// d'origine » de la perte rejetait systématiquement la saisie avec
+    /// « Effectif insuffisant dans la case : 0 porc(s) présent(s) », car le
+    /// contrôle lisait `inventairecase`/`transfert` — jamais renseignés pour
+    /// des porcelets sous la mère — au lieu du nombre né vivant moins les
+    /// pertes déjà déclarées. Une perte plausible (inférieure aux 10 nés
+    /// vifs) doit désormais être acceptée.
+    #[tokio::test]
+    async fn perte_porcelet_sous_la_mere_est_acceptee_avec_une_case_maternite() -> anyhow::Result<()>
+    {
+        let (state, sow, pen) = test_state().await?;
+        saisie_rapide(
+            State(state.clone()),
+            Extension(session()),
+            Form(perte_form(sow, pen, "3")),
+        )
+        .await?;
+        let recorded: i64 = sqlx::query_scalar("SELECT COALESCE(SUM(nb),0) FROM perteporcelet")
+            .fetch_one(&state.pool)
+            .await?;
+        assert_eq!(recorded, 3);
+        Ok(())
+    }
+
+    /// Une perte au-delà des porcelets réellement nés vivants doit toujours
+    /// être refusée, avec un message qui reflète le vrai effectif de la
+    /// portée plutôt qu'un compte de case toujours nul.
+    #[tokio::test]
+    async fn perte_porcelet_au_dela_de_la_portee_est_refusee() -> anyhow::Result<()> {
+        let (state, sow, pen) = test_state().await?;
+        let err = saisie_rapide(
+            State(state),
+            Extension(session()),
+            Form(perte_form(sow, pen, "999")),
+        )
+        .await
+        .expect_err("doit être refusée");
+        match err {
+            AppError::Invalid(message) => {
+                assert!(message.contains("sous la mère"), "message: {message}");
+                assert!(message.contains("10 porcelet"), "message: {message}");
+            }
+            other => panic!("erreur inattendue: {other:?}"),
+        }
+        Ok(())
+    }
 }

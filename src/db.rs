@@ -124,6 +124,8 @@ pub async fn init(pool: &SqlitePool) -> anyhow::Result<()> {
             "INTEGER NOT NULL DEFAULT 1",
         ),
         ("reglageventedirecte", "message_fermeture", "TEXT"),
+        ("reglageventedirecte", "logo_data", "BLOB"),
+        ("reglageventedirecte", "logo_mime", "TEXT"),
         (
             "releve_compteur",
             "remplacement_compteur",

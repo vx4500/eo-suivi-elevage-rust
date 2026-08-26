@@ -257,6 +257,10 @@ pub fn router(state: AppState) -> Router {
             get(produit_image).post(produit_image_maj),
         )
         .route(
+            "/vente-directe/enseigne-logo",
+            get(vente_enseigne_logo).post(vente_enseigne_logo_maj),
+        )
+        .route(
             "/vente-directe/produit/{id}/inventaire",
             post(produit_inventaire),
         )
@@ -1832,6 +1836,37 @@ async fn dashboard(
         "SELECT t.num_travail,date(e.date,'+1 day') AS date_prevue FROM evenement e JOIN truie t ON t.id=e.truie_id WHERE e.type='chaleur' AND NOT EXISTS(SELECT 1 FROM evenement ia WHERE ia.truie_id=e.truie_id AND ia.type='ia' AND ia.date>=e.date) ORDER BY e.date DESC LIMIT 12",
     )
     .await?;
+    // Alertes « délai d'attente en cours » : un animal (truie ou porc
+    // charcutier) ayant reçu un traitement dont le délai d'attente n'est
+    // pas encore écoulé ne doit pas partir à l'abattoir ni en vente directe
+    // — une information de sécurité sanitaire qui n'était affichée nulle
+    // part avant la fiche de l'animal concerné. `date(date,'+N day')`
+    // reproduit le même calcul d'échéance que les rappels sanitaires
+    // (`printf('%+d day', jour)` ailleurs dans le fichier), ici avec un
+    // décalage toujours positif ou nul.
+    let delais_attente_truies = generic_rows(
+        &state.pool,
+        "SELECT t.num_travail AS reference,e.produit,e.date AS date_traitement,date(e.date,'+'||e.delai_attente||' day') AS fin_attente FROM evenement e JOIN truie t ON t.id=e.truie_id WHERE e.type='traitement' AND e.delai_attente IS NOT NULL AND e.delai_attente>0 AND date(e.date,'+'||e.delai_attente||' day')>=date('now') ORDER BY fin_attente",
+    )
+    .await?;
+    let delais_attente_charcutiers = generic_rows(
+        &state.pool,
+        "SELECT COALESCE(NULLIF(p.rfid,''),'Porc #'||p.id) AS reference,tc.produit,tc.date AS date_traitement,date(tc.date,'+'||tc.delai_attente||' day') AS fin_attente FROM traitementcharcutier tc JOIN porccharcutier p ON p.id=tc.charcutier_id WHERE tc.delai_attente IS NOT NULL AND tc.delai_attente>0 AND date(tc.date,'+'||tc.delai_attente||' day')>=date('now') AND p.date_mort IS NULL ORDER BY fin_attente",
+    )
+    .await?;
+    let alertes_delai_attente: i64 =
+        delais_attente_truies.len() as i64 + delais_attente_charcutiers.len() as i64;
+    // Commandes de vente directe non traitées (statut initial « nouvelle »),
+    // uniquement si le module est actif — un compteur simple sur le tableau
+    // de bord, à côté des autres alertes structurelles.
+    let commandes_vente_ouvertes: i64 =
+        if module_actif(&state.pool, "module_vente_directe", true).await? {
+            sqlx::query_scalar("SELECT COUNT(*) FROM commandeventedirecte WHERE statut='nouvelle'")
+                .fetch_one(&state.pool)
+                .await?
+        } else {
+            0
+        };
     let capacites = capacites_par_etape(&state.pool, &session).await?;
     let mut ctx = context(&session);
     ctx.insert(
@@ -1845,6 +1880,15 @@ async fn dashboard(
     ctx.insert("annee".into(), json!(year));
     ctx.insert("aujourd_hui".into(), json!(today_iso()));
     ctx.insert("capacites".into(), Value::Array(capacites));
+    ctx.insert(
+        "alertes".into(),
+        json!({
+            "delai_attente_truies": delais_attente_truies,
+            "delai_attente_charcutiers": delais_attente_charcutiers,
+            "delai_attente_total": alertes_delai_attente,
+            "commandes_vente_ouvertes": commandes_vente_ouvertes,
+        }),
+    );
     ctx.insert(
         "stats".into(),
         json!({"band_active": bands.len(), "truies": truies, "sevres": sevres, "marge": vente-aliment-veto-semence-genetique,"porcs_vendus_annee":year_sales.0,"prix_ht_kg":if year_sales.1>0.0{Some(year_sales.2/year_sales.1)}else{None},"prix_dernieres_ventes":if latest_average.1>0.0{Some(latest_average.0/latest_average.1)}else{None},"morts_annee":year_deaths}),
@@ -5134,6 +5178,148 @@ async fn cochettes_criteres(
     Ok(Redirect::to("/cochettes").into_response())
 }
 
+/// Nombre de retours en chaleur depuis la dernière mise-bas (ou depuis
+/// l'entrée en verraterie pour une cochette qui n'a jamais mis bas) : une
+/// chaleur observée après une IA au cours du même cycle signale l'échec de
+/// cette IA. Vrai garde-fou trouvé cassé en vérifiant les prérequis de
+/// gestion d'élevage : la colonne historique `truie.nb_retours` (comme
+/// `truie.issf` ci-dessous), utilisée par le seuil de réforme « retours
+/// élevés » et par la sélection des mères à cochettes, n'était plus jamais
+/// mise à jour par l'application Rust — figée à sa valeur héritée de la
+/// base Python 1.65 au jour de la bascule, elle ne détectait donc plus
+/// aucune dérive survenue depuis. Recalculée en direct depuis l'historique
+/// des événements, comme le reste des effectifs de ce fichier, plutôt que
+/// maintenue comme un compteur à mettre à jour à chaque saisie (risque
+/// d'oubli à un des nombreux points de saisie de chaleur/IA/mise-bas).
+const NB_RETOURS_EXPR: &str = "(SELECT COUNT(*) FROM evenement c WHERE c.truie_id=t.id AND c.type='chaleur' AND c.date>COALESCE((SELECT MAX(mb.date) FROM evenement mb WHERE mb.truie_id=t.id AND mb.type='mise_bas'),'0000-01-01') AND EXISTS(SELECT 1 FROM evenement i WHERE i.truie_id=t.id AND i.type='ia' AND i.date<c.date AND i.date>COALESCE((SELECT MAX(mb2.date) FROM evenement mb2 WHERE mb2.truie_id=t.id AND mb2.type='mise_bas'),'0000-01-01')))";
+
+/// Intervalle sevrage → saillie fécondante (ISSF, en jours) : écart entre le
+/// sevrage précédent et l'IA la plus proche de 115 jours avant la dernière
+/// mise-bas (même repère de correspondance que `probable_ia` sur la fiche
+/// truie). `NULL` tant qu'aucune mise-bas n'est enregistrée : avant cela,
+/// aucune IA ne peut être identifiée comme celle qui a fécondé.
+// Note d'implémentation : le choix de l'IA la plus proche de 115 jours
+// avant la mise-bas passe volontairement par une égalité avec le minimum
+// (sous-requête MIN) plutôt que par un `ORDER BY ... LIMIT 1` corrélé à la
+// table externe — un vrai bug SQLite trouvé en écrivant les tests : un
+// `ORDER BY` référençant la truie externe (`t.id`) au sein d'une
+// sous-requête scalaire renvoie « no such column: t.id », alors que la même
+// référence fonctionne dans une clause WHERE de la même sous-requête.
+const ISSF_EXPR: &str = "(CASE WHEN (SELECT MAX(mb.date) FROM evenement mb WHERE mb.truie_id=t.id AND mb.type='mise_bas') IS NOT NULL THEN (SELECT CAST(julianday(x.date)-julianday((SELECT MAX(sev.date) FROM evenement sev WHERE sev.truie_id=t.id AND sev.type='sevrage' AND sev.date<x.date)) AS INTEGER) FROM evenement x WHERE x.truie_id=t.id AND x.type='ia' AND x.date IS NOT NULL AND (SELECT MAX(sev.date) FROM evenement sev WHERE sev.truie_id=t.id AND sev.type='sevrage' AND sev.date<x.date) IS NOT NULL AND ABS(julianday((SELECT MAX(mb.date) FROM evenement mb WHERE mb.truie_id=t.id AND mb.type='mise_bas'))-julianday(x.date)-115)=(SELECT MIN(ABS(julianday((SELECT MAX(mb2.date) FROM evenement mb2 WHERE mb2.truie_id=t.id AND mb2.type='mise_bas'))-julianday(x2.date)-115)) FROM evenement x2 WHERE x2.truie_id=t.id AND x2.type='ia' AND x2.date IS NOT NULL) LIMIT 1) ELSE NULL END)";
+
+#[cfg(test)]
+mod reforme_indicateurs_tests {
+    use super::*;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    async fn pool_with_sow() -> anyhow::Result<(SqlitePool, i64)> {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await?;
+        sqlx::raw_sql(include_str!("../../migrations/0001_schema.sql"))
+            .execute(&pool)
+            .await?;
+        let sow =
+            sqlx::query("INSERT INTO truie(num_travail,statut,reformee) VALUES('T1','active',0)")
+                .execute(&pool)
+                .await?
+                .last_insert_rowid();
+        Ok((pool, sow))
+    }
+
+    async fn scalar(pool: &SqlitePool, expr: &str, sow: i64) -> anyhow::Result<Option<i64>> {
+        let sql = format!("SELECT {expr} FROM truie t WHERE t.id=?");
+        Ok(sqlx::query_scalar(&sql).bind(sow).fetch_one(pool).await?)
+    }
+
+    /// Vrai garde-fou trouvé cassé en vérifiant les prérequis de gestion
+    /// d'élevage : `truie.nb_retours` (échecs d'IA répétés, critère de
+    /// réforme) n'était plus jamais recalculé par l'application Rust.
+    /// Ici : deux échecs d'IA doivent être comptés (deux chaleurs observées
+    /// après une IA), la toute première chaleur (avant toute IA) ne compte
+    /// pas — ce n'est pas un retour, c'est la chaleur normale de reprise.
+    #[tokio::test]
+    async fn nb_retours_compte_les_chaleurs_qui_suivent_une_ia() -> anyhow::Result<()> {
+        let (pool, sow) = pool_with_sow().await?;
+        for (date, kind) in [
+            ("2026-01-01", "chaleur"), // première chaleur, avant toute IA : pas un retour
+            ("2026-01-02", "ia"),
+            ("2026-01-23", "chaleur"), // retour n°1 (après l'IA du 02/01)
+            ("2026-01-24", "ia"),
+            ("2026-02-14", "chaleur"), // retour n°2 (après l'IA du 24/01)
+        ] {
+            sqlx::query("INSERT INTO evenement(type,date,truie_id) VALUES(?,?,?)")
+                .bind(kind)
+                .bind(date)
+                .bind(sow)
+                .execute(&pool)
+                .await?;
+        }
+        assert_eq!(scalar(&pool, NB_RETOURS_EXPR, sow).await?, Some(2));
+        Ok(())
+    }
+
+    /// Un cycle achevé par une mise-bas repart de zéro : les retours
+    /// d'avant cette mise-bas ne doivent plus compter pour le cycle suivant.
+    #[tokio::test]
+    async fn nb_retours_se_reinitialise_apres_une_mise_bas() -> anyhow::Result<()> {
+        let (pool, sow) = pool_with_sow().await?;
+        for (date, kind) in [
+            ("2026-01-01", "ia"),
+            ("2026-01-22", "chaleur"), // retour n°1, avant la mise-bas
+            ("2026-01-23", "ia"),
+            ("2026-05-18", "mise_bas"), // clôture le cycle
+            ("2026-06-01", "chaleur"),  // nouvelle chaleur, nouveau cycle : pas un retour
+        ] {
+            sqlx::query("INSERT INTO evenement(type,date,truie_id) VALUES(?,?,?)")
+                .bind(kind)
+                .bind(date)
+                .bind(sow)
+                .execute(&pool)
+                .await?;
+        }
+        assert_eq!(scalar(&pool, NB_RETOURS_EXPR, sow).await?, Some(0));
+        Ok(())
+    }
+
+    /// Vrai garde-fou trouvé cassé, même défaut que `nb_retours` :
+    /// `truie.issf` n'était plus recalculé. L'ISSF est l'écart entre le
+    /// sevrage précédent et l'IA la plus proche de 115 jours avant la
+    /// mise-bas qui a suivi.
+    #[tokio::test]
+    async fn issf_mesure_lecart_entre_sevrage_et_ia_fecondante() -> anyhow::Result<()> {
+        let (pool, sow) = pool_with_sow().await?;
+        for (date, kind) in [
+            ("2026-01-01", "sevrage"),
+            ("2026-01-06", "ia"), // IA fécondante : 5 jours après le sevrage
+            ("2026-05-01", "mise_bas"), // ~115 jours après l'IA du 06/01
+        ] {
+            sqlx::query("INSERT INTO evenement(type,date,truie_id) VALUES(?,?,?)")
+                .bind(kind)
+                .bind(date)
+                .bind(sow)
+                .execute(&pool)
+                .await?;
+        }
+        assert_eq!(scalar(&pool, ISSF_EXPR, sow).await?, Some(5));
+        Ok(())
+    }
+
+    /// Sans mise-bas enregistrée, aucune IA ne peut être identifiée comme
+    /// fécondante : l'ISSF reste `NULL` plutôt que d'inventer une valeur.
+    #[tokio::test]
+    async fn issf_est_nul_sans_mise_bas_enregistree() -> anyhow::Result<()> {
+        let (pool, sow) = pool_with_sow().await?;
+        sqlx::query("INSERT INTO evenement(type,date,truie_id) VALUES('ia','2026-01-06',?)")
+            .bind(sow)
+            .execute(&pool)
+            .await?;
+        assert_eq!(scalar(&pool, ISSF_EXPR, sow).await?, None);
+        Ok(())
+    }
+}
+
 async fn reformes(
     State(state): State<AppState>,
     Extension(session): Extension<SessionData>,
@@ -5152,7 +5338,7 @@ async fn reformes(
         &["nv", "sevres", "retours", "ecrases", "rang", "chetifs"],
     )
     .await?;
-    let raw=generic_rows(&state.pool,"SELECT id,num_travail,bande_code,rang,perf_nv,perf_sevres,nb_retours,tx_chetifs,CAST(COALESCE((SELECT SUM(p.nb) FROM perteporcelet p WHERE p.truie_id=t.id AND lower(COALESCE(p.cause,'')) LIKE '%cras%'),0) AS INTEGER) AS ecrases FROM truie t WHERE reformee=0 ORDER BY num_travail").await?;
+    let raw=generic_rows(&state.pool,&format!("SELECT id,num_travail,bande_code,rang,perf_nv,perf_sevres,{NB_RETOURS_EXPR} AS nb_retours,tx_chetifs,CAST(COALESCE((SELECT SUM(p.nb) FROM perteporcelet p WHERE p.truie_id=t.id AND lower(COALESCE(p.cause,'')) LIKE '%cras%'),0) AS INTEGER) AS ecrases FROM truie t WHERE reformee=0 ORDER BY num_travail")).await?;
     let mut rows = Vec::new();
     for mut row in raw {
         let Some(object) = row.as_object_mut() else {
@@ -5227,8 +5413,8 @@ async fn cochettes(
         &["nv", "sevres", "ecrases", "retours"],
     )
     .await?;
-    let averages=generic_rows(&state.pool,"SELECT ROUND(AVG(perf_nv),2) AS nv,ROUND(AVG(perf_sevres),2) AS sevres,ROUND(AVG(issf),2) AS issf,ROUND(AVG(tx_chetifs),2) AS chetifs FROM truie WHERE reformee=0").await?.into_iter().next().unwrap_or_else(||json!({}));
-    let rows=generic_rows(&state.pool,"SELECT id,num_travail,bande_code,mere_cochette,rang,perf_nv,perf_sevres,perf_tx_perte,nb_retours,issf,tx_chetifs,CAST(COALESCE((SELECT SUM(p.nb) FROM perteporcelet p WHERE p.truie_id=t.id AND lower(COALESCE(p.cause,'')) LIKE '%cras%'),0) AS INTEGER) AS ecrases FROM truie t WHERE reformee=0 AND (perf_nv IS NOT NULL OR perf_sevres IS NOT NULL) ORDER BY num_travail").await?;
+    let averages=generic_rows(&state.pool,&format!("SELECT ROUND(AVG(perf_nv),2) AS nv,ROUND(AVG(perf_sevres),2) AS sevres,ROUND(AVG({ISSF_EXPR}),2) AS issf,ROUND(AVG(tx_chetifs),2) AS chetifs FROM truie t WHERE reformee=0")).await?.into_iter().next().unwrap_or_else(||json!({}));
+    let rows=generic_rows(&state.pool,&format!("SELECT id,num_travail,bande_code,mere_cochette,rang,perf_nv,perf_sevres,perf_tx_perte,{NB_RETOURS_EXPR} AS nb_retours,{ISSF_EXPR} AS issf,tx_chetifs,CAST(COALESCE((SELECT SUM(p.nb) FROM perteporcelet p WHERE p.truie_id=t.id AND lower(COALESCE(p.cause,'')) LIKE '%cras%'),0) AS INTEGER) AS ecrases FROM truie t WHERE reformee=0 AND (perf_nv IS NOT NULL OR perf_sevres IS NOT NULL) ORDER BY num_travail")).await?;
     let threshold = criteria.len().saturating_sub(1).max(1);
     let mut candidates = Vec::new();
     let mut designated = Vec::new();
@@ -5549,6 +5735,184 @@ async fn case_pig_count(pool: &SqlitePool, case_id: i64) -> AppResult<i64> {
     Ok(case_pig_count_raw(pool, case_id).await?.max(0))
 }
 
+/// Effectif de porcelets sous la mère réellement présents dans une case de
+/// maternité : somme, pour chaque portée non encore sevrée logée dans cette
+/// case, des nés vifs moins les pertes déjà déclarées. Même requête que
+/// celle utilisée pour l'affichage `porcelets_presents` sur `/structure`,
+/// y compris le repli `COALESCE(e.case_id,t.case_id)` : la case de
+/// mise-bas n'est pas toujours enregistrée sur l'événement lui-même (champ
+/// facultatif à la saisie rapide), auquel cas la case actuelle de la truie
+/// fait foi — sans ce repli, une portée réellement présente aurait été
+/// comptée nulle et aurait reproduit le même faux blocage que celui corrigé
+/// ici, cette fois par absence de lien plutôt que par mauvaise source.
+/// À utiliser à la place de `case_pig_count` (basé sur
+/// `inventairecase`/`transfert`, jamais renseignés pour des porcelets sous
+/// la mère) partout où une case de maternité peut être choisie comme source
+/// d'un mouvement.
+async fn case_litter_count(pool: &SqlitePool, case_id: i64) -> AppResult<i64> {
+    sqlx::query_scalar(
+        "SELECT CAST(COALESCE(SUM(MAX(0,COALESCE(e.nes_vifs,0)-COALESCE((SELECT SUM(p.nb) FROM perteporcelet p WHERE p.evenement_id=e.id OR (p.evenement_id IS NULL AND p.truie_id=e.truie_id AND p.bande_id=e.bande_id)),0))),0) AS INTEGER) FROM evenement e JOIN truie t ON t.id=e.truie_id WHERE e.type='mise_bas' AND COALESCE(e.case_id,t.case_id)=? AND NOT EXISTS(SELECT 1 FROM evenement sv WHERE sv.type='sevrage' AND sv.truie_id=e.truie_id AND sv.bande_id=e.bande_id AND sv.date>=e.date)",
+    )
+    .bind(case_id)
+    .fetch_one(pool)
+    .await
+    .map_err(Into::into)
+}
+
+/// Effectif de la case à utiliser pour vérifier une sortie : l'effectif réel
+/// de la portée pour une case de maternité (voir `case_litter_count`), sinon
+/// `case_pig_count`. Centralise le choix pour ne pas le dupliquer à chaque
+/// point de saisie qui vérifie un effectif de case source.
+async fn case_departure_count(pool: &SqlitePool, case_id: i64) -> AppResult<i64> {
+    if stade_from_case(pool, case_id).await?.as_deref() == Some("Maternité") {
+        case_litter_count(pool, case_id).await
+    } else {
+        case_pig_count(pool, case_id).await
+    }
+}
+
+#[cfg(test)]
+mod transfert_maternite_tests {
+    use super::*;
+    use crate::config::Config;
+    use minijinja::Environment;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    async fn test_state() -> AppResult<(AppState, i64, i64)> {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await?;
+        sqlx::raw_sql(include_str!("../../migrations/0001_schema.sql"))
+            .execute(&pool)
+            .await?;
+        let site = sqlx::query("INSERT INTO site(code,nom) VALUES('S1','Site test')")
+            .execute(&pool)
+            .await?
+            .last_insert_rowid();
+        let maternity_room = sqlx::query(
+            "INSERT INTO salle(site_id,nom,type,nb_cases,ordre) VALUES(?,'Maternité 1','Maternité',1,1)",
+        )
+        .bind(site)
+        .execute(&pool)
+        .await?
+        .last_insert_rowid();
+        let maternity_pen = sqlx::query("INSERT INTO casesalle(salle_id,nom) VALUES(?,'Case 1')")
+            .bind(maternity_room)
+            .execute(&pool)
+            .await?
+            .last_insert_rowid();
+        let dest_room = sqlx::query(
+            "INSERT INTO salle(site_id,nom,type,nb_cases,ordre) VALUES(?,'Post-sevrage 1','Post-sevrage',1,2)",
+        )
+        .bind(site)
+        .execute(&pool)
+        .await?
+        .last_insert_rowid();
+        let dest_pen =
+            sqlx::query("INSERT INTO casesalle(salle_id,nom,nb_max_porcs) VALUES(?,'PS 1',100)")
+                .bind(dest_room)
+                .execute(&pool)
+                .await?
+                .last_insert_rowid();
+        let band =
+            sqlx::query("INSERT INTO bande(code,date_mb,active) VALUES('BTEST','2026-08-01',1)")
+                .execute(&pool)
+                .await?
+                .last_insert_rowid();
+        let sow = sqlx::query(
+            "INSERT INTO truie(num_travail,bande_code,statut,reformee) VALUES('T1','BTEST','active',0)",
+        )
+        .execute(&pool)
+        .await?
+        .last_insert_rowid();
+        sqlx::query("INSERT INTO evenement(type,date,truie_id,bande_id,case_id,nes_vifs) VALUES('mise_bas','2026-08-01',?,?,?,10)")
+            .bind(sow).bind(band).bind(maternity_pen).execute(&pool).await?;
+
+        let config = Config {
+            bind: "0.0.0.0:8080".parse().unwrap(),
+            db_path: std::path::PathBuf::from("data/test.db"),
+            secure_cookies: false,
+        };
+        let env = Environment::new();
+        let state = AppState::new(config, pool, env);
+        Ok((state, maternity_pen, dest_pen))
+    }
+
+    fn session() -> SessionData {
+        SessionData {
+            uid: 1,
+            identifiant: "test".into(),
+            nom: "Test".into(),
+            role: "admin".into(),
+            sections: vec![],
+            csrf: "csrf-test".into(),
+            doit_changer_mdp: false,
+            type_elevage: "naisseur_engraisseur".into(),
+            module_genetique: false,
+            module_prestataires: true,
+            module_charcutiers_rfid: false,
+            module_vente_directe: true,
+        }
+    }
+
+    fn movement_form(source_case: i64, dest_case: i64, nombre: &str) -> HashMap<String, String> {
+        [
+            ("csrf_token", "csrf-test"),
+            ("source", &format!("case:{source_case}")),
+            ("case_dest_id", &dest_case.to_string()),
+            ("nombre", nombre),
+            ("date", "2026-08-10"),
+        ]
+        .into_iter()
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+        .collect()
+    }
+
+    /// Vrai bug corrigé : déplacer des porcelets sous la mère depuis une
+    /// case de maternité via l'écran générique « Mouvement »/`/transferts`
+    /// (hors du flux dédié « Sevrage ») était systématiquement refusé —
+    /// `case_pig_count` ne lit que `inventairecase`/`transfert`, jamais
+    /// renseignés pour des porcelets sous la mère.
+    #[tokio::test]
+    async fn deplacer_des_porcelets_sous_la_mere_est_accepte() -> anyhow::Result<()> {
+        let (state, maternity_pen, dest_pen) = test_state().await?;
+        transferts_porcs(
+            State(state.clone()),
+            Extension(session()),
+            Form(movement_form(maternity_pen, dest_pen, "4")),
+        )
+        .await?;
+        let recorded: i64 =
+            sqlx::query_scalar("SELECT COALESCE(SUM(nombre),0) FROM transfert WHERE espece='porc'")
+                .fetch_one(&state.pool)
+                .await?;
+        assert_eq!(recorded, 4);
+        Ok(())
+    }
+
+    /// Toujours refuser un déplacement au-delà de la portée réellement
+    /// présente, avec le vrai effectif plutôt qu'un compte de case figé à 0.
+    #[tokio::test]
+    async fn deplacer_plus_de_porcelets_que_la_portee_est_refuse() -> anyhow::Result<()> {
+        let (state, maternity_pen, dest_pen) = test_state().await?;
+        let err = transferts_porcs(
+            State(state),
+            Extension(session()),
+            Form(movement_form(maternity_pen, dest_pen, "50")),
+        )
+        .await
+        .expect_err("doit être refusé");
+        match err {
+            AppError::Invalid(message) => {
+                assert!(message.contains("10 porc"), "message: {message}");
+            }
+            other => panic!("erreur inattendue: {other:?}"),
+        }
+        Ok(())
+    }
+}
+
 async fn remaining_band_pigs(pool: &SqlitePool, band_id: i64, code: &str) -> AppResult<i64> {
     let stock_date: Option<String> = sqlx::query_scalar(
         "SELECT MAX(date) FROM mouvementstock WHERE est_stock=1 AND bande_code=?",
@@ -5681,7 +6045,15 @@ async fn transferts_porcs(
                 .fetch_optional(&state.pool)
                 .await?
                 .ok_or_else(|| AppError::Invalid("Case source introuvable".into()))?;
-            let available = case_pig_count(&state.pool, source_id).await?;
+            // Vrai bug corrigé ici : une case de maternité choisie comme
+            // source d'un mouvement générique (écran « Mouvement » ou
+            // /transferts) renvoyait toujours 0 via `case_pig_count`
+            // (inventaire/transferts jamais renseignés pour des porcelets
+            // sous la mère), bloquant tout déplacement hors du flux dédié
+            // « Sevrage » — même défaut que celui corrigé en 2.2.38 pour la
+            // saisie rapide « Perte ». `case_departure_count` bascule sur
+            // l'effectif réel de la portée pour les cases de maternité.
+            let available = case_departure_count(&state.pool, source_id).await?;
             if number > available {
                 return Err(AppError::Invalid(format!(
                     "Effectif insuffisant : {available} porc(s) disponible(s)"
@@ -7405,12 +7777,12 @@ async fn vente_directe(
     .await?;
     let settings = generic_rows(
         &state.pool,
-        "SELECT date_livraison,texte_livraison,commandes_ouvertes,message_fermeture FROM reglageventedirecte WHERE id=1",
+        "SELECT date_livraison,texte_livraison,commandes_ouvertes,message_fermeture,logo_data IS NOT NULL AS logo FROM reglageventedirecte WHERE id=1",
     )
     .await?
     .into_iter()
     .next()
-    .unwrap_or_else(|| json!({"date_livraison":null,"texte_livraison":null,"commandes_ouvertes":1,"message_fermeture":null}));
+    .unwrap_or_else(|| json!({"date_livraison":null,"texte_livraison":null,"commandes_ouvertes":1,"message_fermeture":null,"logo":false}));
     let nb_commandes: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM commandeventedirecte")
         .fetch_one(&state.pool)
         .await?;
@@ -7613,20 +7985,7 @@ async fn produit_image_maj(
         return Ok(Redirect::to("/vente-directe#produits").into_response());
     }
     let bytes = file.ok_or_else(|| AppError::Invalid("Image obligatoire".into()))?;
-    if bytes.len() > 5 * 1024 * 1024 {
-        return Err(AppError::Invalid("Image limitée à 5 Mo".into()));
-    }
-    let mime = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
-        "image/png"
-    } else if bytes.starts_with(b"\xff\xd8\xff") {
-        "image/jpeg"
-    } else if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
-        "image/webp"
-    } else {
-        return Err(AppError::Invalid(
-            "Format refusé : utilisez une image JPEG, PNG ou WebP".into(),
-        ));
-    };
+    let mime = detect_image_mime(&bytes)?;
     sqlx::query("UPDATE produitventedirecte SET image_data=?,image_mime=? WHERE id=?")
         .bind(bytes)
         .bind(mime)
@@ -7634,6 +7993,81 @@ async fn produit_image_maj(
         .execute(&state.pool)
         .await?;
     Ok(Redirect::to("/vente-directe#produits").into_response())
+}
+
+/// Détecte le format d'une image envoyée (JPEG/PNG/WebP) par sa signature
+/// binaire, indépendamment du nom de fichier ou de l'en-tête HTTP envoyés
+/// par le navigateur (non fiables). Partagé entre l'image produit et le
+/// logo d'enseigne de la vente directe.
+fn detect_image_mime(bytes: &[u8]) -> AppResult<&'static str> {
+    if bytes.len() > 5 * 1024 * 1024 {
+        return Err(AppError::Invalid("Image limitée à 5 Mo".into()));
+    }
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Ok("image/png")
+    } else if bytes.starts_with(b"\xff\xd8\xff") {
+        Ok("image/jpeg")
+    } else if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Ok("image/webp")
+    } else {
+        Err(AppError::Invalid(
+            "Format refusé : utilisez une image JPEG, PNG ou WebP".into(),
+        ))
+    }
+}
+
+/// Logo d'enseigne affiché en en-tête de la page publique de vente directe
+/// (`/vente-directe/commande/{token}` ou équivalent) — un logo par
+/// installation, comme le reste des réglages de vente directe
+/// (`reglageventedirecte`, une seule ligne `id=1`). Même mécanisme que
+/// l'image par produit (colonnes BLOB dédiées, jamais de fichier écrit sur
+/// disque).
+async fn vente_enseigne_logo(State(state): State<AppState>) -> AppResult<Response> {
+    let image: Option<(Vec<u8>, String)> = sqlx::query_as(
+        "SELECT logo_data,logo_mime FROM reglageventedirecte WHERE id=1 AND logo_data IS NOT NULL AND logo_mime IS NOT NULL",
+    )
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((bytes, mime)) = image else {
+        return Err(AppError::NotFound);
+    };
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_str(&mime).map_err(|_| AppError::Invalid("Image invalide".into()))?,
+    );
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=3600"),
+    );
+    Ok((headers, bytes).into_response())
+}
+
+async fn vente_enseigne_logo_maj(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    multipart: Multipart,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    let (form, file, _) = parity::multipart_fields(multipart, "logo").await?;
+    verify_csrf(&session, &form)?;
+    sqlx::query("INSERT OR IGNORE INTO reglageventedirecte(id) VALUES(1)")
+        .execute(&state.pool)
+        .await?;
+    if form.contains_key("supprimer_logo") {
+        sqlx::query("UPDATE reglageventedirecte SET logo_data=NULL,logo_mime=NULL WHERE id=1")
+            .execute(&state.pool)
+            .await?;
+        return Ok(Redirect::to("/vente-directe#parametres").into_response());
+    }
+    let bytes = file.ok_or_else(|| AppError::Invalid("Logo obligatoire".into()))?;
+    let mime = detect_image_mime(&bytes)?;
+    sqlx::query("UPDATE reglageventedirecte SET logo_data=?,logo_mime=? WHERE id=1")
+        .bind(bytes)
+        .bind(mime)
+        .execute(&state.pool)
+        .await?;
+    Ok(Redirect::to("/vente-directe#parametres").into_response())
 }
 
 async fn produit_inventaire(
@@ -8342,12 +8776,12 @@ async fn commande_page(
     let products=sqlx::query_as::<_,ProduitVenteDirecte>("SELECT id,nom,prix,unite,actif,ordre,quantite_disponible,image_mime FROM produitventedirecte WHERE actif=1 AND (quantite_disponible IS NULL OR quantite_disponible>0) ORDER BY ordre,nom").fetch_all(&state.pool).await?;
     let settings = generic_rows(
         &state.pool,
-        "SELECT date_livraison,texte_livraison,CASE WHEN commandes_ouvertes=1 AND EXISTS(SELECT 1 FROM sessionventedirecte s WHERE s.active=1 AND (s.date_limite_commandes IS NULL OR date('now')<=date(s.date_limite_commandes))) THEN 1 ELSE 0 END AS commandes_ouvertes,message_fermeture FROM reglageventedirecte WHERE id=1",
+        "SELECT date_livraison,texte_livraison,CASE WHEN commandes_ouvertes=1 AND EXISTS(SELECT 1 FROM sessionventedirecte s WHERE s.active=1 AND (s.date_limite_commandes IS NULL OR date('now')<=date(s.date_limite_commandes))) THEN 1 ELSE 0 END AS commandes_ouvertes,message_fermeture,logo_data IS NOT NULL AS logo FROM reglageventedirecte WHERE id=1",
     )
     .await?
     .into_iter()
     .next()
-    .unwrap_or_else(|| json!({"date_livraison":null,"texte_livraison":null,"commandes_ouvertes":1,"message_fermeture":null}));
+    .unwrap_or_else(|| json!({"date_livraison":null,"texte_livraison":null,"commandes_ouvertes":1,"message_fermeture":null,"logo":false}));
     let active=generic_rows(&state.pool,"SELECT id,nom,date_livraison,date_limite_commandes FROM sessionventedirecte WHERE active=1 AND (date_limite_commandes IS NULL OR date('now')<=date(date_limite_commandes)) ORDER BY id DESC LIMIT 1").await?.into_iter().next().unwrap_or(Value::Null);
     render(
         &state,
@@ -9751,9 +10185,21 @@ async fn aliment_previsions(
     // silo ci-dessus, sans inventer une projection qu'aucune donnée ne
     // permet de dater avec confiance (poids cible/effectif restant varient
     // trop pour un chiffre fiable sans intervention de l'éleveur).
+    //
+    // Vrai bug corrigé ici : une livraison d'aliment est très souvent
+    // affectée à plusieurs bandes à la fois (une même facture couvrant
+    // plusieurs lots, `affectationfacturebande`, comme pour le reste de
+    // l'économie — voir `auto_assign_economic_invoices`). Cette section
+    // rejoignait directement `livraisonaliment.bande_id`, la seule bande
+    // « principale » historique, et ignorait donc silencieusement les
+    // autres bandes d'une même facture répartie : leur consommation
+    // n'apparaissait nulle part. Rejoint maintenant sur
+    // `affectationfacturebande` (comme les coûts économiques) et répartit
+    // le tonnage à parts égales entre toutes les bandes affectées à une
+    // même facture, plutôt que de le compter en entier sur chacune.
     let consommation_bandes = generic_rows(
         &state.pool,
-        "SELECT b.id,b.code,CAST(COALESCE(SUM(l.tonnage),0) AS REAL) AS tonnage_90j FROM bande b JOIN livraisonaliment l ON l.bande_id=b.id WHERE b.active=1 AND l.date>=date('now','-90 days') GROUP BY b.id,b.code ORDER BY tonnage_90j DESC",
+        "SELECT b.id,b.code,CAST(COALESCE(SUM(l.tonnage/(SELECT COUNT(*) FROM affectationfacturebande n WHERE n.categorie='aliment' AND n.facture_id=l.id)),0) AS REAL) AS tonnage_90j FROM bande b JOIN affectationfacturebande af ON af.categorie='aliment' AND af.bande_id=b.id JOIN livraisonaliment l ON l.id=af.facture_id WHERE b.active=1 AND l.date>=date('now','-90 days') GROUP BY b.id,b.code ORDER BY tonnage_90j DESC",
     )
     .await?;
     let sites = generic_rows(&state.pool, "SELECT id,code,nom FROM site ORDER BY code").await?;
