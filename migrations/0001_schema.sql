@@ -750,6 +750,19 @@ CREATE TABLE IF NOT EXISTS valorisationapport (
     categorie TEXT DEFAULT 'valorisation'
 );
 
+-- Ventilation exacte des valorisations/retenues d'un apport. Le montant est
+-- conservé au centime par bande ; sa somme doit rester égale au montant de la
+-- ligne source (contrôle transactionnel lors de l'import économique).
+CREATE TABLE IF NOT EXISTS valorisationapportbande (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    valorisation_id INTEGER NOT NULL REFERENCES valorisationapport(id) ON DELETE CASCADE,
+    bande_id INTEGER NOT NULL REFERENCES bande(id),
+    montant REAL NOT NULL,
+    source TEXT NOT NULL DEFAULT 'automatique',
+    UNIQUE(valorisation_id,bande_id)
+);
+CREATE INDEX IF NOT EXISTS ix_valorisationapportbande_bande ON valorisationapportbande(bande_id);
+
 CREATE TABLE IF NOT EXISTS compteur_energie (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     nom TEXT NOT NULL,

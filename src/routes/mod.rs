@@ -1207,6 +1207,31 @@ mod aliment_tests {
     }
 
     #[test]
+    fn retenue_est_repartie_sur_deux_lots_sans_perdre_un_centime() {
+        let parts = repartir_montant_par_bande(-20.20, &[(915, 8855.10), (600, 9607.76)])
+            .expect("ventilation");
+        assert_eq!(
+            parts
+                .iter()
+                .map(|(_, value)| (value * 100.0).round() as i64)
+                .sum::<i64>(),
+            -2020
+        );
+        assert_eq!(
+            parts.iter().map(|(band, _)| *band).collect::<Vec<_>>(),
+            vec![600, 915]
+        );
+    }
+
+    #[test]
+    fn retenue_regroupe_deux_lots_affectes_a_la_meme_bande() {
+        assert_eq!(
+            repartir_montant_par_bande(-111.70, &[(1, 8855.10), (1, 9607.76)]),
+            Some(vec![(1, -111.70)])
+        );
+    }
+
+    #[test]
     fn jours_avant_rupture_ignore_consommation_nulle() {
         assert_eq!(jours_avant_rupture(21.0, 3.0), Some(7.0));
         assert_eq!(jours_avant_rupture(21.0, 0.0), None);
@@ -4893,6 +4918,38 @@ fn consommation_quotidienne_tonnes(
     })
 }
 
+/// Répartit un montant au centime, dans un ordre de bande stable. La dernière
+/// bande reçoit le reliquat d'arrondi : aucune fraction de centime ne se perd.
+fn repartir_montant_par_bande(amount: f64, weights: &[(i64, f64)]) -> Option<Vec<(i64, f64)>> {
+    let mut grouped = HashMap::<i64, f64>::new();
+    for (band, weight) in weights.iter().filter(|(_, weight)| *weight > 0.0) {
+        *grouped.entry(*band).or_default() += *weight;
+    }
+    let total: f64 = grouped.values().sum();
+    if total <= 0.0 || grouped.is_empty() {
+        return None;
+    }
+    let mut ordered: Vec<(i64, f64)> = grouped.into_iter().collect();
+    ordered.sort_by_key(|(band, _)| *band);
+    let mut remaining_cents = (amount * 100.0).round() as i64;
+    let count = ordered.len();
+    Some(
+        ordered
+            .into_iter()
+            .enumerate()
+            .map(|(index, (band, weight))| {
+                let cents = if index + 1 == count {
+                    remaining_cents
+                } else {
+                    ((amount * 100.0) * weight / total).round() as i64
+                };
+                remaining_cents -= cents;
+                (band, cents as f64 / 100.0)
+            })
+            .collect(),
+    )
+}
+
 /// Nombre de jours avant rupture de stock au rythme de consommation actuel.
 /// `None` si la consommation quotidienne est nulle (pas de rupture prévisible).
 fn jours_avant_rupture(
@@ -6443,7 +6500,7 @@ async fn economique(
     let aliments = generic_rows(&state.pool,"SELECT a.id,a.date,a.num_facture,a.fournisseur,a.produit,a.tonnage,a.montant_ht,COALESCE((SELECT GROUP_CONCAT(b.code,', ') FROM affectationfacturebande af JOIN bande b ON b.id=af.bande_id WHERE af.categorie='aliment' AND af.facture_id=a.id),'Non affecté') AS bandes_affectees,COALESCE((SELECT GROUP_CONCAT(af.bande_id) FROM affectationfacturebande af WHERE af.categorie='aliment' AND af.facture_id=a.id),'') AS bandes_ids,EXISTS(SELECT 1 FROM affectationfacturebande af WHERE af.categorie='aliment' AND af.facture_id=a.id AND af.automatique=1) AS affectation_auto FROM livraisonaliment a ORDER BY a.date DESC,a.id DESC LIMIT 250").await?;
     let veterinaires = generic_rows(&state.pool,"SELECT a.id,a.date,a.num_facture,a.fournisseur,a.produit,a.quantite,a.montant_ht,COALESCE((SELECT GROUP_CONCAT(b.code,', ') FROM affectationfacturebande af JOIN bande b ON b.id=af.bande_id WHERE af.categorie='veto' AND af.facture_id=a.id),'Non affecté') AS bandes_affectees,COALESCE((SELECT GROUP_CONCAT(af.bande_id) FROM affectationfacturebande af WHERE af.categorie='veto' AND af.facture_id=a.id),'') AS bandes_ids,EXISTS(SELECT 1 FROM affectationfacturebande af WHERE af.categorie='veto' AND af.facture_id=a.id AND af.automatique=1) AS affectation_auto FROM achatveto a ORDER BY a.date DESC,a.id DESC LIMIT 250").await?;
     let semences = generic_rows(&state.pool,"SELECT a.id,a.date,a.num_facture,a.fournisseur,a.designation,a.nb_doses,a.montant_ht,COALESCE((SELECT GROUP_CONCAT(b.code,', ') FROM affectationfacturebande af JOIN bande b ON b.id=af.bande_id WHERE af.categorie='semence' AND af.facture_id=a.id),'Non affecté') AS bandes_affectees,COALESCE((SELECT GROUP_CONCAT(af.bande_id) FROM affectationfacturebande af WHERE af.categorie='semence' AND af.facture_id=a.id),'') AS bandes_ids,EXISTS(SELECT 1 FROM affectationfacturebande af WHERE af.categorie='semence' AND af.facture_id=a.id AND af.automatique=1) AS affectation_auto FROM achatsemence a ORDER BY a.date DESC,a.id DESC LIMIT 250").await?;
-    let valuations = generic_rows(&state.pool,"SELECT id,num_apport,date,libelle,montant,categorie,CASE WHEN lower(COALESCE(categorie,''))='retenue' THEN 1 ELSE 0 END AS est_retenue FROM valorisationapport ORDER BY date DESC,id DESC LIMIT 200").await?;
+    let valuations = generic_rows(&state.pool,"SELECT v.id,v.num_apport,v.date,v.libelle,v.montant,v.categorie,CASE WHEN lower(COALESCE(v.categorie,''))='retenue' THEN 1 ELSE 0 END AS est_retenue,COALESCE((SELECT GROUP_CONCAT(b.code||' : '||printf('%.2f €',a.montant),' · ') FROM valorisationapportbande a JOIN bande b ON b.id=a.bande_id WHERE a.valorisation_id=v.id),'Non ventilé') AS ventilation FROM valorisationapport v ORDER BY v.date DESC,v.id DESC LIMIT 200").await?;
     let monthly = generic_rows(&state.pool,"WITH RECURSIVE mois(m) AS (SELECT date('now','start of month','-11 months') UNION ALL SELECT date(m,'+1 month') FROM mois WHERE m<date('now','start of month')),depenses AS (SELECT substr(date,1,7) AS m,SUM(COALESCE(montant_ht,0)) AS montant FROM livraisonaliment GROUP BY m UNION ALL SELECT substr(date,1,7),SUM(COALESCE(montant_ht,0)) FROM achatveto GROUP BY substr(date,1,7) UNION ALL SELECT substr(date,1,7),SUM(COALESCE(montant_ht,0)) FROM achatsemence GROUP BY substr(date,1,7) UNION ALL SELECT substr(date,1,7),SUM(COALESCE(montant_ht,0)) FROM achatgenetique GROUP BY substr(date,1,7)),revenus AS (SELECT substr(date,1,7) AS m,SUM(COALESCE(montant_ht,0)) AS montant,SUM(COALESCE(poids_total,0)) AS poids FROM venteapport GROUP BY m) SELECT substr(m.m,1,7) AS mois,ROUND(COALESCE((SELECT SUM(d.montant) FROM depenses d WHERE d.m=substr(m.m,1,7)),0),2) AS depenses,ROUND(COALESCE(r.montant,0),2) AS revenus,ROUND(r.montant/NULLIF(r.poids,0),3) AS prix_ht_kg FROM mois m LEFT JOIN revenus r ON r.m=substr(m.m,1,7) ORDER BY m.m").await?;
     let unallocated = generic_rows(&state.pool,"SELECT 'Aliment' AS categorie,ROUND(COALESCE(SUM(montant_ht),0),2) AS montant FROM livraisonaliment x WHERE NOT EXISTS(SELECT 1 FROM affectationfacturebande a WHERE a.categorie='aliment' AND a.facture_id=x.id) UNION ALL SELECT 'Vétérinaire',ROUND(COALESCE(SUM(montant_ht),0),2) FROM achatveto x WHERE NOT EXISTS(SELECT 1 FROM affectationfacturebande a WHERE a.categorie='veto' AND a.facture_id=x.id) UNION ALL SELECT 'Semence',ROUND(COALESCE(SUM(montant_ht),0),2) FROM achatsemence x WHERE NOT EXISTS(SELECT 1 FROM affectationfacturebande a WHERE a.categorie='semence' AND a.facture_id=x.id) UNION ALL SELECT 'Génétique',ROUND(COALESCE(SUM(COALESCE(montant_ht,0)),0),2) FROM achatgenetique x WHERE NOT EXISTS(SELECT 1 FROM affectationfacturebande a WHERE a.categorie='genetique' AND a.facture_id=x.id)").await?;
     let imports = generic_rows(&state.pool,"SELECT token,replace(type_import,'economique:','') AS type_import,nom_fichier,statut,cree_le,applique_le FROM importjournal WHERE type_import LIKE 'economique:%' ORDER BY cree_le DESC LIMIT 15").await?;
@@ -6839,7 +6896,7 @@ async fn economique_import_apercu(
     for (number, action, anomaly, raw) in stored {
         let line: ImportLine =
             serde_json::from_str(&raw).map_err(|error| AppError::Internal(error.into()))?;
-        rows.push(json!({"ligne":number,"action":action,"anomalie":anomaly,"type":line.kind,"date":line.date,"reference":line.reference,"libelle":line.label,"quantite":line.quantity,"prix_unitaire":line.unit_price,"montant":line.amount}));
+        rows.push(json!({"ligne":number,"action":action,"anomalie":anomaly,"type":line.kind,"date":line.date,"reference":line.reference,"libelle":line.label,"quantite":line.quantity,"prix_unitaire":line.unit_price,"montant":line.amount,"est_vente":line.kind=="vente","est_retenue":line.kind=="retenue"}));
     }
     let summary = journal
         .2
@@ -6978,6 +7035,49 @@ async fn economique_import_confirmer(
         lines.push((number, line));
     }
     let mut cleared_apports = HashSet::new();
+    // Une retenue commune est répartie sur les bandes des lots de vente du
+    // même apport, au prorata de leurs montants. Tout est préparé avant la
+    // moindre écriture afin qu'une affectation incomplète bloque l'import.
+    let mut sale_allocations = HashMap::<String, Vec<(i64, f64)>>::new();
+    for (number, line) in &lines {
+        if line.kind != "vente" {
+            continue;
+        }
+        let reference = line
+            .reference
+            .as_deref()
+            .ok_or_else(|| AppError::Invalid(format!("Référence manquante à la ligne {number}")))?;
+        let selected = form_i64(&form, &format!("bande_ligne_{number}"))
+            .or(band_id)
+            .ok_or_else(|| {
+                AppError::Invalid(format!(
+                    "Affecte obligatoirement le lot de vente de la ligne {number} à une bande"
+                ))
+            })?;
+        let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM bande WHERE id=?")
+            .bind(selected)
+            .fetch_one(&mut *transaction)
+            .await?;
+        if exists != 1 {
+            return Err(AppError::Invalid(format!(
+                "Bande inconnue à la ligne {number}"
+            )));
+        }
+        let weight = line
+            .amount
+            .or_else(|| import_detail_f64(line, "montant_ht"))
+            .unwrap_or(0.0)
+            .abs();
+        if weight <= 0.0 {
+            return Err(AppError::Invalid(format!(
+                "Montant du lot invalide à la ligne {number} : ventilation impossible"
+            )));
+        }
+        sale_allocations
+            .entry(reference.to_string())
+            .or_default()
+            .push((selected, weight));
+    }
     let mut applied = 0_i64;
     for (number, line) in &lines {
         // La bande globale reste un raccourci, mais chaque ligne (et donc
@@ -7064,8 +7164,52 @@ async fn economique_import_confirmer(
                 }
             }
             "valorisation" | "retenue" => {
-                sqlx::query("INSERT INTO valorisationapport(num_apport,date,libelle,montant,categorie) VALUES(?,?,?,?,?)")
+                let result = sqlx::query("INSERT INTO valorisationapport(num_apport,date,libelle,montant,categorie) VALUES(?,?,?,?,?)")
                     .bind(reference).bind(line.date.as_deref()).bind(&line.label).bind(line.amount).bind(&line.kind).execute(&mut *transaction).await?;
+                let valuation_id = result.last_insert_rowid();
+                if line.kind == "retenue" {
+                    let amount = line.amount.ok_or_else(|| {
+                        AppError::Invalid(format!(
+                            "Montant de retenue manquant à la ligne {number}"
+                        ))
+                    })?;
+                    let selected = form_i64(&form, &format!("bande_ligne_{number}"));
+                    let allocations = if let Some(id) = selected {
+                        vec![(id, amount)]
+                    } else {
+                        let lots = sale_allocations.get(reference).ok_or_else(|| {
+                            AppError::Invalid(format!(
+                                "Aucun lot affecté pour ventiler la retenue de la ligne {number}"
+                            ))
+                        })?;
+                        repartir_montant_par_bande(amount, lots).ok_or_else(|| {
+                            AppError::Invalid(format!(
+                                "Montants des lots invalides pour la retenue ligne {number}"
+                            ))
+                        })?
+                    };
+                    let mut check_cents = 0_i64;
+                    for (id, share) in allocations {
+                        let exists: i64 =
+                            sqlx::query_scalar("SELECT COUNT(*) FROM bande WHERE id=?")
+                                .bind(id)
+                                .fetch_one(&mut *transaction)
+                                .await?;
+                        if exists != 1 {
+                            return Err(AppError::Invalid(format!(
+                                "Bande inconnue pour la retenue ligne {number}"
+                            )));
+                        }
+                        check_cents += (share * 100.0).round() as i64;
+                        sqlx::query("INSERT INTO valorisationapportbande(valorisation_id,bande_id,montant,source) VALUES(?,?,?,?)")
+                            .bind(valuation_id).bind(id).bind(share).bind(if selected.is_some(){"manuel"}else{"automatique"}).execute(&mut *transaction).await?;
+                    }
+                    if check_cents != (amount * 100.0).round() as i64 {
+                        return Err(AppError::Invalid(format!(
+                            "Écart de ventilation à la ligne {number} : validation annulée"
+                        )));
+                    }
+                }
             }
             "synthese" => {
                 let id: Option<i64> = sqlx::query_scalar("SELECT id FROM venteapport WHERE COALESCE(frappe,'')=? ORDER BY date DESC,id DESC LIMIT 1").bind(reference).fetch_optional(&mut *transaction).await?;
@@ -9609,11 +9753,50 @@ async fn aliment_previsions(
         .bind(id)
         .fetch_all(&state.pool)
         .await?;
-        let history = generic_rows(
+        let mut history = generic_rows(
             &state.pool,
             "SELECT id,date,niveau_tonnes,note FROM releve_silo WHERE silo_id=? ORDER BY date DESC,id DESC LIMIT 20",
         )
         .await?;
+        // Chaque relevé affiche sa consommation moyenne depuis le relevé
+        // précédent, livraisons incluses, et non uniquement le dernier KPI.
+        for index in 0..history.len().saturating_sub(1) {
+            let current_date = history[index]
+                .get("date")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            let previous_date = history[index + 1]
+                .get("date")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            let current_level = history[index].get("niveau_tonnes").and_then(Value::as_f64);
+            let previous_level = history[index + 1]
+                .get("niveau_tonnes")
+                .and_then(Value::as_f64);
+            if let (Some(cd), Some(pd), Some(cl), Some(pl), Some(cday), Some(pday)) = (
+                current_date,
+                previous_date,
+                current_level,
+                previous_level,
+                history[index]
+                    .get("date")
+                    .and_then(Value::as_str)
+                    .and_then(parse_stored_date),
+                history[index + 1]
+                    .get("date")
+                    .and_then(Value::as_str)
+                    .and_then(parse_stored_date),
+            ) {
+                let deliveries: f64 = sqlx::query_scalar("SELECT CAST(COALESCE(SUM(tonnage),0) AS REAL) FROM livraisonaliment WHERE lower(trim(COALESCE(silo,'')))=lower(trim(?)) AND date>? AND date<=?")
+                    .bind(&nom).bind(&pd).bind(&cd).fetch_one(&state.pool).await?;
+                let average =
+                    consommation_quotidienne_tonnes(pl, deliveries, cl, (cday - pday).num_days())
+                        .map(|v| (v * 100.0).round() / 100.0);
+                if let Some(object) = history[index].as_object_mut() {
+                    object.insert("consommation_quotidienne".into(), json!(average));
+                }
+            }
+        }
         let capacite = silo.get("capacite_tonnes").and_then(Value::as_f64);
         // Consommation réellement mesurée par une machine à soupe (import
         // Histo_fab), quand l'éleveur en a relié une à ce silo — purement
