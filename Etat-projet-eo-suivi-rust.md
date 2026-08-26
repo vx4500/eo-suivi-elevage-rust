@@ -1,6 +1,6 @@
 # EO-Suivi Élevage Rust — État du projet
 
-Version actuelle : **2.2.40** — Dernière mise à jour de ce document : 26 août 2026.
+Version actuelle : **2.2.41** — Dernière mise à jour de ce document : 26 août 2026.
 
 Ce fichier fusionne les anciens audits, listings et listes de modifications.
 Les informations devenues obsolètes (anciens comptages de routes, tâches déjà
@@ -516,7 +516,7 @@ l'arrêt déclenche le retour arrière ; la sauvegarde de la base est conservée
 ```bash
 systemctl status eo-suivi-rust --no-pager -l
 journalctl -u eo-suivi-rust -n 80 --no-pager -l -o cat
-curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.40"
+curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.41"
 ```
 
 Puis ouvrir `https://rust-elevage.basse-chevrie.ovh`.
