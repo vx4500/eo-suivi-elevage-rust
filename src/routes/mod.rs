@@ -5593,6 +5593,184 @@ async fn case_pig_count(pool: &SqlitePool, case_id: i64) -> AppResult<i64> {
     Ok(case_pig_count_raw(pool, case_id).await?.max(0))
 }
 
+/// Effectif de porcelets sous la mère réellement présents dans une case de
+/// maternité : somme, pour chaque portée non encore sevrée logée dans cette
+/// case, des nés vifs moins les pertes déjà déclarées. Même requête que
+/// celle utilisée pour l'affichage `porcelets_presents` sur `/structure`,
+/// y compris le repli `COALESCE(e.case_id,t.case_id)` : la case de
+/// mise-bas n'est pas toujours enregistrée sur l'événement lui-même (champ
+/// facultatif à la saisie rapide), auquel cas la case actuelle de la truie
+/// fait foi — sans ce repli, une portée réellement présente aurait été
+/// comptée nulle et aurait reproduit le même faux blocage que celui corrigé
+/// ici, cette fois par absence de lien plutôt que par mauvaise source.
+/// À utiliser à la place de `case_pig_count` (basé sur
+/// `inventairecase`/`transfert`, jamais renseignés pour des porcelets sous
+/// la mère) partout où une case de maternité peut être choisie comme source
+/// d'un mouvement.
+async fn case_litter_count(pool: &SqlitePool, case_id: i64) -> AppResult<i64> {
+    sqlx::query_scalar(
+        "SELECT CAST(COALESCE(SUM(MAX(0,COALESCE(e.nes_vifs,0)-COALESCE((SELECT SUM(p.nb) FROM perteporcelet p WHERE p.evenement_id=e.id OR (p.evenement_id IS NULL AND p.truie_id=e.truie_id AND p.bande_id=e.bande_id)),0))),0) AS INTEGER) FROM evenement e JOIN truie t ON t.id=e.truie_id WHERE e.type='mise_bas' AND COALESCE(e.case_id,t.case_id)=? AND NOT EXISTS(SELECT 1 FROM evenement sv WHERE sv.type='sevrage' AND sv.truie_id=e.truie_id AND sv.bande_id=e.bande_id AND sv.date>=e.date)",
+    )
+    .bind(case_id)
+    .fetch_one(pool)
+    .await
+    .map_err(Into::into)
+}
+
+/// Effectif de la case à utiliser pour vérifier une sortie : l'effectif réel
+/// de la portée pour une case de maternité (voir `case_litter_count`), sinon
+/// `case_pig_count`. Centralise le choix pour ne pas le dupliquer à chaque
+/// point de saisie qui vérifie un effectif de case source.
+async fn case_departure_count(pool: &SqlitePool, case_id: i64) -> AppResult<i64> {
+    if stade_from_case(pool, case_id).await?.as_deref() == Some("Maternité") {
+        case_litter_count(pool, case_id).await
+    } else {
+        case_pig_count(pool, case_id).await
+    }
+}
+
+#[cfg(test)]
+mod transfert_maternite_tests {
+    use super::*;
+    use crate::config::Config;
+    use minijinja::Environment;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    async fn test_state() -> AppResult<(AppState, i64, i64)> {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await?;
+        sqlx::raw_sql(include_str!("../../migrations/0001_schema.sql"))
+            .execute(&pool)
+            .await?;
+        let site = sqlx::query("INSERT INTO site(code,nom) VALUES('S1','Site test')")
+            .execute(&pool)
+            .await?
+            .last_insert_rowid();
+        let maternity_room = sqlx::query(
+            "INSERT INTO salle(site_id,nom,type,nb_cases,ordre) VALUES(?,'Maternité 1','Maternité',1,1)",
+        )
+        .bind(site)
+        .execute(&pool)
+        .await?
+        .last_insert_rowid();
+        let maternity_pen = sqlx::query("INSERT INTO casesalle(salle_id,nom) VALUES(?,'Case 1')")
+            .bind(maternity_room)
+            .execute(&pool)
+            .await?
+            .last_insert_rowid();
+        let dest_room = sqlx::query(
+            "INSERT INTO salle(site_id,nom,type,nb_cases,ordre) VALUES(?,'Post-sevrage 1','Post-sevrage',1,2)",
+        )
+        .bind(site)
+        .execute(&pool)
+        .await?
+        .last_insert_rowid();
+        let dest_pen =
+            sqlx::query("INSERT INTO casesalle(salle_id,nom,nb_max_porcs) VALUES(?,'PS 1',100)")
+                .bind(dest_room)
+                .execute(&pool)
+                .await?
+                .last_insert_rowid();
+        let band =
+            sqlx::query("INSERT INTO bande(code,date_mb,active) VALUES('BTEST','2026-08-01',1)")
+                .execute(&pool)
+                .await?
+                .last_insert_rowid();
+        let sow = sqlx::query(
+            "INSERT INTO truie(num_travail,bande_code,statut,reformee) VALUES('T1','BTEST','active',0)",
+        )
+        .execute(&pool)
+        .await?
+        .last_insert_rowid();
+        sqlx::query("INSERT INTO evenement(type,date,truie_id,bande_id,case_id,nes_vifs) VALUES('mise_bas','2026-08-01',?,?,?,10)")
+            .bind(sow).bind(band).bind(maternity_pen).execute(&pool).await?;
+
+        let config = Config {
+            bind: "0.0.0.0:8080".parse().unwrap(),
+            db_path: std::path::PathBuf::from("data/test.db"),
+            secure_cookies: false,
+        };
+        let env = Environment::new();
+        let state = AppState::new(config, pool, env);
+        Ok((state, maternity_pen, dest_pen))
+    }
+
+    fn session() -> SessionData {
+        SessionData {
+            uid: 1,
+            identifiant: "test".into(),
+            nom: "Test".into(),
+            role: "admin".into(),
+            sections: vec![],
+            csrf: "csrf-test".into(),
+            doit_changer_mdp: false,
+            type_elevage: "naisseur_engraisseur".into(),
+            module_genetique: false,
+            module_prestataires: true,
+            module_charcutiers_rfid: false,
+            module_vente_directe: true,
+        }
+    }
+
+    fn movement_form(source_case: i64, dest_case: i64, nombre: &str) -> HashMap<String, String> {
+        [
+            ("csrf_token", "csrf-test"),
+            ("source", &format!("case:{source_case}")),
+            ("case_dest_id", &dest_case.to_string()),
+            ("nombre", nombre),
+            ("date", "2026-08-10"),
+        ]
+        .into_iter()
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+        .collect()
+    }
+
+    /// Vrai bug corrigé : déplacer des porcelets sous la mère depuis une
+    /// case de maternité via l'écran générique « Mouvement »/`/transferts`
+    /// (hors du flux dédié « Sevrage ») était systématiquement refusé —
+    /// `case_pig_count` ne lit que `inventairecase`/`transfert`, jamais
+    /// renseignés pour des porcelets sous la mère.
+    #[tokio::test]
+    async fn deplacer_des_porcelets_sous_la_mere_est_accepte() -> anyhow::Result<()> {
+        let (state, maternity_pen, dest_pen) = test_state().await?;
+        transferts_porcs(
+            State(state.clone()),
+            Extension(session()),
+            Form(movement_form(maternity_pen, dest_pen, "4")),
+        )
+        .await?;
+        let recorded: i64 =
+            sqlx::query_scalar("SELECT COALESCE(SUM(nombre),0) FROM transfert WHERE espece='porc'")
+                .fetch_one(&state.pool)
+                .await?;
+        assert_eq!(recorded, 4);
+        Ok(())
+    }
+
+    /// Toujours refuser un déplacement au-delà de la portée réellement
+    /// présente, avec le vrai effectif plutôt qu'un compte de case figé à 0.
+    #[tokio::test]
+    async fn deplacer_plus_de_porcelets_que_la_portee_est_refuse() -> anyhow::Result<()> {
+        let (state, maternity_pen, dest_pen) = test_state().await?;
+        let err = transferts_porcs(
+            State(state),
+            Extension(session()),
+            Form(movement_form(maternity_pen, dest_pen, "50")),
+        )
+        .await
+        .expect_err("doit être refusé");
+        match err {
+            AppError::Invalid(message) => {
+                assert!(message.contains("10 porc"), "message: {message}");
+            }
+            other => panic!("erreur inattendue: {other:?}"),
+        }
+        Ok(())
+    }
+}
+
 async fn remaining_band_pigs(pool: &SqlitePool, band_id: i64, code: &str) -> AppResult<i64> {
     let stock_date: Option<String> = sqlx::query_scalar(
         "SELECT MAX(date) FROM mouvementstock WHERE est_stock=1 AND bande_code=?",
@@ -5725,7 +5903,15 @@ async fn transferts_porcs(
                 .fetch_optional(&state.pool)
                 .await?
                 .ok_or_else(|| AppError::Invalid("Case source introuvable".into()))?;
-            let available = case_pig_count(&state.pool, source_id).await?;
+            // Vrai bug corrigé ici : une case de maternité choisie comme
+            // source d'un mouvement générique (écran « Mouvement » ou
+            // /transferts) renvoyait toujours 0 via `case_pig_count`
+            // (inventaire/transferts jamais renseignés pour des porcelets
+            // sous la mère), bloquant tout déplacement hors du flux dédié
+            // « Sevrage » — même défaut que celui corrigé en 2.2.38 pour la
+            // saisie rapide « Perte ». `case_departure_count` bascule sur
+            // l'effectif réel de la portée pour les cases de maternité.
+            let available = case_departure_count(&state.pool, source_id).await?;
             if number > available {
                 return Err(AppError::Invalid(format!(
                     "Effectif insuffisant : {available} porc(s) disponible(s)"
