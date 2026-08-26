@@ -10,6 +10,13 @@
   <form class="card" method="post" action="/vente-directe/reglage-livraison"><input type="hidden" name="csrf_token" value="{{ session.csrf }}"><h2>Informations client</h2><label>Date de livraison<input type="date" name="date_livraison" value="{{ reglage.date_livraison or '' }}"></label><label>Message de livraison<textarea name="texte_livraison">{{ reglage.texte_livraison or '' }}</textarea></label><button>Enregistrer</button></form>
   <section class="card"><h2>Session active</h2>{% for s in sessions_vente %}{% if s.active %}<p><b>{{ s.nom }}</b></p><p>Livraison : {{ s.date_livraison|date_fr }}</p><a href="/vente-directe/preparation/imprimer?session_id={{ s.id }}" target="_blank">Feuille de préparation</a>{% endif %}{% else %}<p>Aucune session.</p>{% endfor %}<p><a href="/vente-directe/sessions">Créer ou activer une session</a></p></section>
 </div>
+<section id="parametres" class="card">
+  <h2>Enseigne</h2>
+  <p>Logo affiché en en-tête de la page client publique.</p>
+  {% if reglage.logo %}<img src="/vente-directe/enseigne-logo" alt="Logo actuel" style="max-height:80px;max-width:240px;object-fit:contain;display:block;margin-bottom:8px">{% endif %}
+  <form method="post" action="/vente-directe/enseigne-logo" enctype="multipart/form-data" class="rust-actions"><input type="hidden" name="csrf_token" value="{{ session.csrf }}"><label>Fichier (JPEG, PNG ou WebP, 5 Mo max)<input type="file" name="logo" accept="image/png,image/jpeg,image/webp" {% if not reglage.logo %}required{% endif %}></label>{% if reglage.logo %}<button name="supprimer_logo" value="1" class="ghost danger">Retirer</button>{% endif %}<button>{% if reglage.logo %}Remplacer{% else %}Importer{% endif %}</button></form>
+  <small class="muted">JPEG, PNG ou WebP · 5 Mo maximum</small>
+</section>
 
 <section id="classement-ventes">
   <h2>Classement des produits vendus</h2>

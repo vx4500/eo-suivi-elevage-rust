@@ -257,6 +257,10 @@ pub fn router(state: AppState) -> Router {
             get(produit_image).post(produit_image_maj),
         )
         .route(
+            "/vente-directe/enseigne-logo",
+            get(vente_enseigne_logo).post(vente_enseigne_logo_maj),
+        )
+        .route(
             "/vente-directe/produit/{id}/inventaire",
             post(produit_inventaire),
         )
@@ -1832,6 +1836,37 @@ async fn dashboard(
         "SELECT t.num_travail,date(e.date,'+1 day') AS date_prevue FROM evenement e JOIN truie t ON t.id=e.truie_id WHERE e.type='chaleur' AND NOT EXISTS(SELECT 1 FROM evenement ia WHERE ia.truie_id=e.truie_id AND ia.type='ia' AND ia.date>=e.date) ORDER BY e.date DESC LIMIT 12",
     )
     .await?;
+    // Alertes « délai d'attente en cours » : un animal (truie ou porc
+    // charcutier) ayant reçu un traitement dont le délai d'attente n'est
+    // pas encore écoulé ne doit pas partir à l'abattoir ni en vente directe
+    // — une information de sécurité sanitaire qui n'était affichée nulle
+    // part avant la fiche de l'animal concerné. `date(date,'+N day')`
+    // reproduit le même calcul d'échéance que les rappels sanitaires
+    // (`printf('%+d day', jour)` ailleurs dans le fichier), ici avec un
+    // décalage toujours positif ou nul.
+    let delais_attente_truies = generic_rows(
+        &state.pool,
+        "SELECT t.num_travail AS reference,e.produit,e.date AS date_traitement,date(e.date,'+'||e.delai_attente||' day') AS fin_attente FROM evenement e JOIN truie t ON t.id=e.truie_id WHERE e.type='traitement' AND e.delai_attente IS NOT NULL AND e.delai_attente>0 AND date(e.date,'+'||e.delai_attente||' day')>=date('now') ORDER BY fin_attente",
+    )
+    .await?;
+    let delais_attente_charcutiers = generic_rows(
+        &state.pool,
+        "SELECT COALESCE(NULLIF(p.rfid,''),'Porc #'||p.id) AS reference,tc.produit,tc.date AS date_traitement,date(tc.date,'+'||tc.delai_attente||' day') AS fin_attente FROM traitementcharcutier tc JOIN porccharcutier p ON p.id=tc.charcutier_id WHERE tc.delai_attente IS NOT NULL AND tc.delai_attente>0 AND date(tc.date,'+'||tc.delai_attente||' day')>=date('now') AND p.date_mort IS NULL ORDER BY fin_attente",
+    )
+    .await?;
+    let alertes_delai_attente: i64 =
+        delais_attente_truies.len() as i64 + delais_attente_charcutiers.len() as i64;
+    // Commandes de vente directe non traitées (statut initial « nouvelle »),
+    // uniquement si le module est actif — un compteur simple sur le tableau
+    // de bord, à côté des autres alertes structurelles.
+    let commandes_vente_ouvertes: i64 =
+        if module_actif(&state.pool, "module_vente_directe", true).await? {
+            sqlx::query_scalar("SELECT COUNT(*) FROM commandeventedirecte WHERE statut='nouvelle'")
+                .fetch_one(&state.pool)
+                .await?
+        } else {
+            0
+        };
     let capacites = capacites_par_etape(&state.pool, &session).await?;
     let mut ctx = context(&session);
     ctx.insert(
@@ -1845,6 +1880,15 @@ async fn dashboard(
     ctx.insert("annee".into(), json!(year));
     ctx.insert("aujourd_hui".into(), json!(today_iso()));
     ctx.insert("capacites".into(), Value::Array(capacites));
+    ctx.insert(
+        "alertes".into(),
+        json!({
+            "delai_attente_truies": delais_attente_truies,
+            "delai_attente_charcutiers": delais_attente_charcutiers,
+            "delai_attente_total": alertes_delai_attente,
+            "commandes_vente_ouvertes": commandes_vente_ouvertes,
+        }),
+    );
     ctx.insert(
         "stats".into(),
         json!({"band_active": bands.len(), "truies": truies, "sevres": sevres, "marge": vente-aliment-veto-semence-genetique,"porcs_vendus_annee":year_sales.0,"prix_ht_kg":if year_sales.1>0.0{Some(year_sales.2/year_sales.1)}else{None},"prix_dernieres_ventes":if latest_average.1>0.0{Some(latest_average.0/latest_average.1)}else{None},"morts_annee":year_deaths}),
@@ -7405,12 +7449,12 @@ async fn vente_directe(
     .await?;
     let settings = generic_rows(
         &state.pool,
-        "SELECT date_livraison,texte_livraison,commandes_ouvertes,message_fermeture FROM reglageventedirecte WHERE id=1",
+        "SELECT date_livraison,texte_livraison,commandes_ouvertes,message_fermeture,logo_data IS NOT NULL AS logo FROM reglageventedirecte WHERE id=1",
     )
     .await?
     .into_iter()
     .next()
-    .unwrap_or_else(|| json!({"date_livraison":null,"texte_livraison":null,"commandes_ouvertes":1,"message_fermeture":null}));
+    .unwrap_or_else(|| json!({"date_livraison":null,"texte_livraison":null,"commandes_ouvertes":1,"message_fermeture":null,"logo":false}));
     let nb_commandes: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM commandeventedirecte")
         .fetch_one(&state.pool)
         .await?;
@@ -7613,20 +7657,7 @@ async fn produit_image_maj(
         return Ok(Redirect::to("/vente-directe#produits").into_response());
     }
     let bytes = file.ok_or_else(|| AppError::Invalid("Image obligatoire".into()))?;
-    if bytes.len() > 5 * 1024 * 1024 {
-        return Err(AppError::Invalid("Image limitée à 5 Mo".into()));
-    }
-    let mime = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
-        "image/png"
-    } else if bytes.starts_with(b"\xff\xd8\xff") {
-        "image/jpeg"
-    } else if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
-        "image/webp"
-    } else {
-        return Err(AppError::Invalid(
-            "Format refusé : utilisez une image JPEG, PNG ou WebP".into(),
-        ));
-    };
+    let mime = detect_image_mime(&bytes)?;
     sqlx::query("UPDATE produitventedirecte SET image_data=?,image_mime=? WHERE id=?")
         .bind(bytes)
         .bind(mime)
@@ -7634,6 +7665,81 @@ async fn produit_image_maj(
         .execute(&state.pool)
         .await?;
     Ok(Redirect::to("/vente-directe#produits").into_response())
+}
+
+/// Détecte le format d'une image envoyée (JPEG/PNG/WebP) par sa signature
+/// binaire, indépendamment du nom de fichier ou de l'en-tête HTTP envoyés
+/// par le navigateur (non fiables). Partagé entre l'image produit et le
+/// logo d'enseigne de la vente directe.
+fn detect_image_mime(bytes: &[u8]) -> AppResult<&'static str> {
+    if bytes.len() > 5 * 1024 * 1024 {
+        return Err(AppError::Invalid("Image limitée à 5 Mo".into()));
+    }
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Ok("image/png")
+    } else if bytes.starts_with(b"\xff\xd8\xff") {
+        Ok("image/jpeg")
+    } else if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Ok("image/webp")
+    } else {
+        Err(AppError::Invalid(
+            "Format refusé : utilisez une image JPEG, PNG ou WebP".into(),
+        ))
+    }
+}
+
+/// Logo d'enseigne affiché en en-tête de la page publique de vente directe
+/// (`/vente-directe/commande/{token}` ou équivalent) — un logo par
+/// installation, comme le reste des réglages de vente directe
+/// (`reglageventedirecte`, une seule ligne `id=1`). Même mécanisme que
+/// l'image par produit (colonnes BLOB dédiées, jamais de fichier écrit sur
+/// disque).
+async fn vente_enseigne_logo(State(state): State<AppState>) -> AppResult<Response> {
+    let image: Option<(Vec<u8>, String)> = sqlx::query_as(
+        "SELECT logo_data,logo_mime FROM reglageventedirecte WHERE id=1 AND logo_data IS NOT NULL AND logo_mime IS NOT NULL",
+    )
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((bytes, mime)) = image else {
+        return Err(AppError::NotFound);
+    };
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_str(&mime).map_err(|_| AppError::Invalid("Image invalide".into()))?,
+    );
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=3600"),
+    );
+    Ok((headers, bytes).into_response())
+}
+
+async fn vente_enseigne_logo_maj(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    multipart: Multipart,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    let (form, file, _) = parity::multipart_fields(multipart, "logo").await?;
+    verify_csrf(&session, &form)?;
+    sqlx::query("INSERT OR IGNORE INTO reglageventedirecte(id) VALUES(1)")
+        .execute(&state.pool)
+        .await?;
+    if form.contains_key("supprimer_logo") {
+        sqlx::query("UPDATE reglageventedirecte SET logo_data=NULL,logo_mime=NULL WHERE id=1")
+            .execute(&state.pool)
+            .await?;
+        return Ok(Redirect::to("/vente-directe#parametres").into_response());
+    }
+    let bytes = file.ok_or_else(|| AppError::Invalid("Logo obligatoire".into()))?;
+    let mime = detect_image_mime(&bytes)?;
+    sqlx::query("UPDATE reglageventedirecte SET logo_data=?,logo_mime=? WHERE id=1")
+        .bind(bytes)
+        .bind(mime)
+        .execute(&state.pool)
+        .await?;
+    Ok(Redirect::to("/vente-directe#parametres").into_response())
 }
 
 async fn produit_inventaire(
@@ -8342,12 +8448,12 @@ async fn commande_page(
     let products=sqlx::query_as::<_,ProduitVenteDirecte>("SELECT id,nom,prix,unite,actif,ordre,quantite_disponible,image_mime FROM produitventedirecte WHERE actif=1 AND (quantite_disponible IS NULL OR quantite_disponible>0) ORDER BY ordre,nom").fetch_all(&state.pool).await?;
     let settings = generic_rows(
         &state.pool,
-        "SELECT date_livraison,texte_livraison,CASE WHEN commandes_ouvertes=1 AND EXISTS(SELECT 1 FROM sessionventedirecte s WHERE s.active=1 AND (s.date_limite_commandes IS NULL OR date('now')<=date(s.date_limite_commandes))) THEN 1 ELSE 0 END AS commandes_ouvertes,message_fermeture FROM reglageventedirecte WHERE id=1",
+        "SELECT date_livraison,texte_livraison,CASE WHEN commandes_ouvertes=1 AND EXISTS(SELECT 1 FROM sessionventedirecte s WHERE s.active=1 AND (s.date_limite_commandes IS NULL OR date('now')<=date(s.date_limite_commandes))) THEN 1 ELSE 0 END AS commandes_ouvertes,message_fermeture,logo_data IS NOT NULL AS logo FROM reglageventedirecte WHERE id=1",
     )
     .await?
     .into_iter()
     .next()
-    .unwrap_or_else(|| json!({"date_livraison":null,"texte_livraison":null,"commandes_ouvertes":1,"message_fermeture":null}));
+    .unwrap_or_else(|| json!({"date_livraison":null,"texte_livraison":null,"commandes_ouvertes":1,"message_fermeture":null,"logo":false}));
     let active=generic_rows(&state.pool,"SELECT id,nom,date_livraison,date_limite_commandes FROM sessionventedirecte WHERE active=1 AND (date_limite_commandes IS NULL OR date('now')<=date(date_limite_commandes)) ORDER BY id DESC LIMIT 1").await?.into_iter().next().unwrap_or(Value::Null);
     render(
         &state,
@@ -9751,9 +9857,21 @@ async fn aliment_previsions(
     // silo ci-dessus, sans inventer une projection qu'aucune donnée ne
     // permet de dater avec confiance (poids cible/effectif restant varient
     // trop pour un chiffre fiable sans intervention de l'éleveur).
+    //
+    // Vrai bug corrigé ici : une livraison d'aliment est très souvent
+    // affectée à plusieurs bandes à la fois (une même facture couvrant
+    // plusieurs lots, `affectationfacturebande`, comme pour le reste de
+    // l'économie — voir `auto_assign_economic_invoices`). Cette section
+    // rejoignait directement `livraisonaliment.bande_id`, la seule bande
+    // « principale » historique, et ignorait donc silencieusement les
+    // autres bandes d'une même facture répartie : leur consommation
+    // n'apparaissait nulle part. Rejoint maintenant sur
+    // `affectationfacturebande` (comme les coûts économiques) et répartit
+    // le tonnage à parts égales entre toutes les bandes affectées à une
+    // même facture, plutôt que de le compter en entier sur chacune.
     let consommation_bandes = generic_rows(
         &state.pool,
-        "SELECT b.id,b.code,CAST(COALESCE(SUM(l.tonnage),0) AS REAL) AS tonnage_90j FROM bande b JOIN livraisonaliment l ON l.bande_id=b.id WHERE b.active=1 AND l.date>=date('now','-90 days') GROUP BY b.id,b.code ORDER BY tonnage_90j DESC",
+        "SELECT b.id,b.code,CAST(COALESCE(SUM(l.tonnage/(SELECT COUNT(*) FROM affectationfacturebande n WHERE n.categorie='aliment' AND n.facture_id=l.id)),0) AS REAL) AS tonnage_90j FROM bande b JOIN affectationfacturebande af ON af.categorie='aliment' AND af.bande_id=b.id JOIN livraisonaliment l ON l.id=af.facture_id WHERE b.active=1 AND l.date>=date('now','-90 days') GROUP BY b.id,b.code ORDER BY tonnage_90j DESC",
     )
     .await?;
     let sites = generic_rows(&state.pool, "SELECT id,code,nom FROM site ORDER BY code").await?;

@@ -1,4 +1,27 @@
 {% extends "base.html" %}{% block content %}
+{% if alertes.delai_attente_total > 0 or alertes.commandes_vente_ouvertes > 0 %}
+<section class="dashboard-panel alert-panel" aria-label="Alertes de traitement">
+  <div class="dashboard-section-head compact"><div><span class="section-code">ALERTES</span><div><h2>Alertes à traiter</h2><p>Sécurité sanitaire et suivi commercial.</p></div></div></div>
+  <div class="dashboard-action-list">
+    {% if alertes.delai_attente_total > 0 %}
+    <div class="alert-line">
+      <strong>{{ alertes.delai_attente_total }} animal(aux) sous délai d'attente</strong>
+      <span>Ne pas envoyer à l'abattoir ni en vente directe avant la fin du délai.</span>
+      <div class="rust-scroll"><table><thead><tr><th>Animal</th><th>Produit</th><th>Traité le</th><th>Fin d'attente</th></tr></thead><tbody>
+        {% for a in alertes.delai_attente_truies %}<tr><td>Truie {{ a.reference }}</td><td>{{ a.produit or '—' }}</td><td>{{ a.date_traitement|date_fr }}</td><td><b>{{ a.fin_attente|date_fr }}</b></td></tr>{% endfor %}
+        {% for a in alertes.delai_attente_charcutiers %}<tr><td>{{ a.reference }}</td><td>{{ a.produit or '—' }}</td><td>{{ a.date_traitement|date_fr }}</td><td><b>{{ a.fin_attente|date_fr }}</b></td></tr>{% endfor %}
+      </tbody></table></div>
+    </div>
+    {% endif %}
+    {% if alertes.commandes_vente_ouvertes > 0 %}
+    <div class="alert-line">
+      <strong>{{ alertes.commandes_vente_ouvertes }} commande(s) de vente directe non traitée(s)</strong>
+      <span><a href="/vente-directe/commandes">Ouvrir les commandes</a></span>
+    </div>
+    {% endif %}
+  </div>
+</section>
+{% endif %}
 <section class="dashboard-toolbar">
   <div>
     <span class="dashboard-eyebrow">Centre de pilotage</span>

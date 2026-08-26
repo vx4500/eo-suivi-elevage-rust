@@ -456,3 +456,118 @@ async fn imports_refusent_les_doublons_en_base() -> anyhow::Result<()> {
         .execute(&pool).await.is_err());
     Ok(())
 }
+
+/// Alerte « délai d'attente en cours » du tableau de bord : un traitement
+/// (truie ou porc charcutier) dont le délai n'est pas écoulé doit remonter,
+/// un traitement déjà terminé ou un animal déjà mort ne doit pas apparaître.
+/// Mêmes requêtes que celles exécutées par le handler `dashboard`
+/// (`src/routes/mod.rs`) — dupliquées ici volontairement pour vérifier leur
+/// comportement réel plutôt que de supposer qu'elles fonctionnent.
+#[tokio::test]
+async fn dashboard_alerte_delai_attente_ignore_les_traitements_termines() -> anyhow::Result<()> {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await?;
+    sqlx::raw_sql(include_str!("../migrations/0001_schema.sql"))
+        .execute(&pool)
+        .await?;
+
+    let truie_en_cours = sqlx::query(
+        "INSERT INTO truie(num_travail,bande_code,statut,reformee) VALUES('T-ENCOURS',NULL,'active',0)",
+    )
+    .execute(&pool)
+    .await?
+    .last_insert_rowid();
+    let truie_terminee = sqlx::query(
+        "INSERT INTO truie(num_travail,bande_code,statut,reformee) VALUES('T-TERMINE',NULL,'active',0)",
+    )
+    .execute(&pool)
+    .await?
+    .last_insert_rowid();
+    sqlx::query("INSERT INTO evenement(type,date,truie_id,produit,delai_attente) VALUES('traitement',date('now','-1 day'),?,'Toujours en attente',5)")
+        .bind(truie_en_cours).execute(&pool).await?;
+    sqlx::query("INSERT INTO evenement(type,date,truie_id,produit,delai_attente) VALUES('traitement',date('now','-30 day'),?,'Depuis longtemps fini',5)")
+        .bind(truie_terminee).execute(&pool).await?;
+
+    let porc_vivant =
+        sqlx::query("INSERT INTO porccharcutier(rfid,bande_code) VALUES('P-VIVANT',NULL)")
+            .execute(&pool)
+            .await?
+            .last_insert_rowid();
+    let porc_mort = sqlx::query(
+        "INSERT INTO porccharcutier(rfid,bande_code,date_mort) VALUES('P-MORT',NULL,date('now'))",
+    )
+    .execute(&pool)
+    .await?
+    .last_insert_rowid();
+    sqlx::query("INSERT INTO traitementcharcutier(charcutier_id,date,produit,delai_attente) VALUES(?,date('now'),'En attente',10)")
+        .bind(porc_vivant).execute(&pool).await?;
+    // Même en plein délai d'attente, un animal déjà déclaré mort ne doit pas
+    // apparaître : il ne partira ni à l'abattoir ni en vente directe.
+    sqlx::query("INSERT INTO traitementcharcutier(charcutier_id,date,produit,delai_attente) VALUES(?,date('now'),'Animal mort entre-temps',10)")
+        .bind(porc_mort).execute(&pool).await?;
+
+    let truies: Vec<(String,)> = sqlx::query_as(
+        "SELECT t.num_travail AS reference FROM evenement e JOIN truie t ON t.id=e.truie_id WHERE e.type='traitement' AND e.delai_attente IS NOT NULL AND e.delai_attente>0 AND date(e.date,'+'||e.delai_attente||' day')>=date('now')",
+    )
+    .fetch_all(&pool)
+    .await?;
+    assert_eq!(truies, vec![("T-ENCOURS".to_string(),)]);
+
+    let charcutiers: Vec<(String,)> = sqlx::query_as(
+        "SELECT COALESCE(NULLIF(p.rfid,''),'Porc #'||p.id) AS reference FROM traitementcharcutier tc JOIN porccharcutier p ON p.id=tc.charcutier_id WHERE tc.delai_attente IS NOT NULL AND tc.delai_attente>0 AND date(tc.date,'+'||tc.delai_attente||' day')>=date('now') AND p.date_mort IS NULL",
+    )
+    .fetch_all(&pool)
+    .await?;
+    assert_eq!(charcutiers, vec![("P-VIVANT".to_string(),)]);
+    Ok(())
+}
+
+/// Vrai bug corrigé : la « Consommation aliment par bande » de
+/// `/aliment-previsions` rejoignait `livraisonaliment.bande_id`, la seule
+/// bande historique « principale » d'une facture, alors qu'une livraison
+/// est très souvent affectée à plusieurs bandes à la fois via
+/// `affectationfacturebande` (comme les coûts économiques). Une facture
+/// partagée entre deux bandes ne montrait donc rien pour la seconde.
+#[tokio::test]
+async fn consommation_aliment_par_bande_repartit_une_facture_a_deux_bandes() -> anyhow::Result<()> {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await?;
+    sqlx::raw_sql(include_str!("../migrations/0001_schema.sql"))
+        .execute(&pool)
+        .await?;
+
+    let bande1 = sqlx::query("INSERT INTO bande(code,date_mb,active) VALUES('B1','2026-08-01',1)")
+        .execute(&pool)
+        .await?
+        .last_insert_rowid();
+    let bande2 = sqlx::query("INSERT INTO bande(code,date_mb,active) VALUES('B2','2026-08-01',1)")
+        .execute(&pool)
+        .await?
+        .last_insert_rowid();
+    let livraison =
+        sqlx::query("INSERT INTO livraisonaliment(date,tonnage) VALUES(date('now'),10)")
+            .execute(&pool)
+            .await?
+            .last_insert_rowid();
+    for bande in [bande1, bande2] {
+        sqlx::query(
+            "INSERT INTO affectationfacturebande(categorie,facture_id,bande_id,automatique) VALUES('aliment',?,?,0)",
+        )
+        .bind(livraison)
+        .bind(bande)
+        .execute(&pool)
+        .await?;
+    }
+
+    let rows: Vec<(String, f64)> = sqlx::query_as(
+        "SELECT b.code,CAST(COALESCE(SUM(l.tonnage/(SELECT COUNT(*) FROM affectationfacturebande n WHERE n.categorie='aliment' AND n.facture_id=l.id)),0) AS REAL) AS tonnage_90j FROM bande b JOIN affectationfacturebande af ON af.categorie='aliment' AND af.bande_id=b.id JOIN livraisonaliment l ON l.id=af.facture_id WHERE b.active=1 AND l.date>=date('now','-90 days') GROUP BY b.id,b.code ORDER BY b.code",
+    )
+    .fetch_all(&pool)
+    .await?;
+    assert_eq!(rows, vec![("B1".to_string(), 5.0), ("B2".to_string(), 5.0)]);
+    Ok(())
+}
