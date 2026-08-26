@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Aperçu import historique truies · EO-Suivi{% endblock %}
+{% block content %}
+<h1>Aperçu de l'import historique des truies</h1>
+<p><b>Fichier :</b> {{ nom_fichier }}</p>
+<p>Chaque ligne source (un cycle de reproduction/bande par truie) sera appliquée : identité complétée, IA/écho/retour/avortement/mise-bas/sevrage ajoutés s’ils n’existent pas déjà, mesures ELD/poids à chaque étape, et réforme si une date de réforme est présente.</p>
+<div class="rust-grid">
+  <div class="card"><h3>Lignes lues</h3><strong>{{ resume.lignes }}</strong></div>
+  <div class="card"><h3>Truies concernées</h3><strong>{{ resume.truies }}</strong></div>
+  <div class="card"><h3>Erreurs</h3><strong>{{ resume.erreur }}</strong></div>
+</div>
+<div class="card rust-actions">
+  <form method="post" action="/truies/import-historique/confirmer"><input type="hidden" name="csrf_token" value="{{ session.csrf }}"><input type="hidden" name="token" value="{{ token }}"><button>Confirmer l'import complet</button></form>
+  <form method="post" action="/truies/import-historique/annuler"><input type="hidden" name="csrf_token" value="{{ session.csrf }}"><input type="hidden" name="token" value="{{ token }}"><button class="ghost">Annuler</button></form>
+</div>
+<p class="rust-empty">Réimporter le même fichier plus tard n’ajoute rien en double : chaque événement et chaque mesure n’est créé que s’il n’existe pas déjà pour cette truie à cette date.</p>
+{% endblock %}

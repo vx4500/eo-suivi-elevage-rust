@@ -23,6 +23,7 @@ use sqlx::{Column, Row, SqlitePool, TypeInfo, ValueRef};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+mod import_historique;
 mod parity;
 
 fn contenu_sha256(bytes: &[u8]) -> String {
@@ -103,6 +104,22 @@ pub fn router(state: AppState) -> Router {
         .route("/truies/import", post(truies_import))
         .route("/truies/import/confirmer", post(truies_import_confirmer))
         .route("/truies/import/annuler", post(truies_import_annuler))
+        .route(
+            "/truies/import-historique/modele.csv",
+            get(import_historique::modele_csv),
+        )
+        .route(
+            "/truies/import-historique",
+            post(import_historique::importer).layer(DefaultBodyLimit::max(15 * 1024 * 1024)),
+        )
+        .route(
+            "/truies/import-historique/confirmer",
+            post(import_historique::confirmer),
+        )
+        .route(
+            "/truies/import-historique/annuler",
+            post(import_historique::annuler),
+        )
         .route("/truies/affecter-bande", post(truies_affecter_bande))
         .route("/truie/{id}", get(truie_detail))
         .route("/truie/{id}/imprimer", get(truie_imprimer))

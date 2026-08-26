@@ -41,7 +41,7 @@ fn decode_text(bytes: &[u8]) -> String {
     }
 }
 
-fn parse_date_fr(raw: &str) -> Option<String> {
+pub(crate) fn parse_date_fr(raw: &str) -> Option<String> {
     let raw = raw.trim();
     if raw.is_empty() || raw == "00/00/00" {
         return None;
@@ -61,7 +61,7 @@ fn parse_date_fr(raw: &str) -> Option<String> {
         .map(|date| date.format("%Y-%m-%d").to_string())
 }
 
-fn number_fr(raw: &str) -> Option<f64> {
+pub(crate) fn number_fr(raw: &str) -> Option<f64> {
     let value = raw.trim().replace(',', ".");
     if value.is_empty() {
         return None;
