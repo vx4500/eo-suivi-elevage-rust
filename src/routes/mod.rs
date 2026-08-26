@@ -5178,6 +5178,148 @@ async fn cochettes_criteres(
     Ok(Redirect::to("/cochettes").into_response())
 }
 
+/// Nombre de retours en chaleur depuis la dernière mise-bas (ou depuis
+/// l'entrée en verraterie pour une cochette qui n'a jamais mis bas) : une
+/// chaleur observée après une IA au cours du même cycle signale l'échec de
+/// cette IA. Vrai garde-fou trouvé cassé en vérifiant les prérequis de
+/// gestion d'élevage : la colonne historique `truie.nb_retours` (comme
+/// `truie.issf` ci-dessous), utilisée par le seuil de réforme « retours
+/// élevés » et par la sélection des mères à cochettes, n'était plus jamais
+/// mise à jour par l'application Rust — figée à sa valeur héritée de la
+/// base Python 1.65 au jour de la bascule, elle ne détectait donc plus
+/// aucune dérive survenue depuis. Recalculée en direct depuis l'historique
+/// des événements, comme le reste des effectifs de ce fichier, plutôt que
+/// maintenue comme un compteur à mettre à jour à chaque saisie (risque
+/// d'oubli à un des nombreux points de saisie de chaleur/IA/mise-bas).
+const NB_RETOURS_EXPR: &str = "(SELECT COUNT(*) FROM evenement c WHERE c.truie_id=t.id AND c.type='chaleur' AND c.date>COALESCE((SELECT MAX(mb.date) FROM evenement mb WHERE mb.truie_id=t.id AND mb.type='mise_bas'),'0000-01-01') AND EXISTS(SELECT 1 FROM evenement i WHERE i.truie_id=t.id AND i.type='ia' AND i.date<c.date AND i.date>COALESCE((SELECT MAX(mb2.date) FROM evenement mb2 WHERE mb2.truie_id=t.id AND mb2.type='mise_bas'),'0000-01-01')))";
+
+/// Intervalle sevrage → saillie fécondante (ISSF, en jours) : écart entre le
+/// sevrage précédent et l'IA la plus proche de 115 jours avant la dernière
+/// mise-bas (même repère de correspondance que `probable_ia` sur la fiche
+/// truie). `NULL` tant qu'aucune mise-bas n'est enregistrée : avant cela,
+/// aucune IA ne peut être identifiée comme celle qui a fécondé.
+// Note d'implémentation : le choix de l'IA la plus proche de 115 jours
+// avant la mise-bas passe volontairement par une égalité avec le minimum
+// (sous-requête MIN) plutôt que par un `ORDER BY ... LIMIT 1` corrélé à la
+// table externe — un vrai bug SQLite trouvé en écrivant les tests : un
+// `ORDER BY` référençant la truie externe (`t.id`) au sein d'une
+// sous-requête scalaire renvoie « no such column: t.id », alors que la même
+// référence fonctionne dans une clause WHERE de la même sous-requête.
+const ISSF_EXPR: &str = "(CASE WHEN (SELECT MAX(mb.date) FROM evenement mb WHERE mb.truie_id=t.id AND mb.type='mise_bas') IS NOT NULL THEN (SELECT CAST(julianday(x.date)-julianday((SELECT MAX(sev.date) FROM evenement sev WHERE sev.truie_id=t.id AND sev.type='sevrage' AND sev.date<x.date)) AS INTEGER) FROM evenement x WHERE x.truie_id=t.id AND x.type='ia' AND x.date IS NOT NULL AND (SELECT MAX(sev.date) FROM evenement sev WHERE sev.truie_id=t.id AND sev.type='sevrage' AND sev.date<x.date) IS NOT NULL AND ABS(julianday((SELECT MAX(mb.date) FROM evenement mb WHERE mb.truie_id=t.id AND mb.type='mise_bas'))-julianday(x.date)-115)=(SELECT MIN(ABS(julianday((SELECT MAX(mb2.date) FROM evenement mb2 WHERE mb2.truie_id=t.id AND mb2.type='mise_bas'))-julianday(x2.date)-115)) FROM evenement x2 WHERE x2.truie_id=t.id AND x2.type='ia' AND x2.date IS NOT NULL) LIMIT 1) ELSE NULL END)";
+
+#[cfg(test)]
+mod reforme_indicateurs_tests {
+    use super::*;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    async fn pool_with_sow() -> anyhow::Result<(SqlitePool, i64)> {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await?;
+        sqlx::raw_sql(include_str!("../../migrations/0001_schema.sql"))
+            .execute(&pool)
+            .await?;
+        let sow =
+            sqlx::query("INSERT INTO truie(num_travail,statut,reformee) VALUES('T1','active',0)")
+                .execute(&pool)
+                .await?
+                .last_insert_rowid();
+        Ok((pool, sow))
+    }
+
+    async fn scalar(pool: &SqlitePool, expr: &str, sow: i64) -> anyhow::Result<Option<i64>> {
+        let sql = format!("SELECT {expr} FROM truie t WHERE t.id=?");
+        Ok(sqlx::query_scalar(&sql).bind(sow).fetch_one(pool).await?)
+    }
+
+    /// Vrai garde-fou trouvé cassé en vérifiant les prérequis de gestion
+    /// d'élevage : `truie.nb_retours` (échecs d'IA répétés, critère de
+    /// réforme) n'était plus jamais recalculé par l'application Rust.
+    /// Ici : deux échecs d'IA doivent être comptés (deux chaleurs observées
+    /// après une IA), la toute première chaleur (avant toute IA) ne compte
+    /// pas — ce n'est pas un retour, c'est la chaleur normale de reprise.
+    #[tokio::test]
+    async fn nb_retours_compte_les_chaleurs_qui_suivent_une_ia() -> anyhow::Result<()> {
+        let (pool, sow) = pool_with_sow().await?;
+        for (date, kind) in [
+            ("2026-01-01", "chaleur"), // première chaleur, avant toute IA : pas un retour
+            ("2026-01-02", "ia"),
+            ("2026-01-23", "chaleur"), // retour n°1 (après l'IA du 02/01)
+            ("2026-01-24", "ia"),
+            ("2026-02-14", "chaleur"), // retour n°2 (après l'IA du 24/01)
+        ] {
+            sqlx::query("INSERT INTO evenement(type,date,truie_id) VALUES(?,?,?)")
+                .bind(kind)
+                .bind(date)
+                .bind(sow)
+                .execute(&pool)
+                .await?;
+        }
+        assert_eq!(scalar(&pool, NB_RETOURS_EXPR, sow).await?, Some(2));
+        Ok(())
+    }
+
+    /// Un cycle achevé par une mise-bas repart de zéro : les retours
+    /// d'avant cette mise-bas ne doivent plus compter pour le cycle suivant.
+    #[tokio::test]
+    async fn nb_retours_se_reinitialise_apres_une_mise_bas() -> anyhow::Result<()> {
+        let (pool, sow) = pool_with_sow().await?;
+        for (date, kind) in [
+            ("2026-01-01", "ia"),
+            ("2026-01-22", "chaleur"), // retour n°1, avant la mise-bas
+            ("2026-01-23", "ia"),
+            ("2026-05-18", "mise_bas"), // clôture le cycle
+            ("2026-06-01", "chaleur"),  // nouvelle chaleur, nouveau cycle : pas un retour
+        ] {
+            sqlx::query("INSERT INTO evenement(type,date,truie_id) VALUES(?,?,?)")
+                .bind(kind)
+                .bind(date)
+                .bind(sow)
+                .execute(&pool)
+                .await?;
+        }
+        assert_eq!(scalar(&pool, NB_RETOURS_EXPR, sow).await?, Some(0));
+        Ok(())
+    }
+
+    /// Vrai garde-fou trouvé cassé, même défaut que `nb_retours` :
+    /// `truie.issf` n'était plus recalculé. L'ISSF est l'écart entre le
+    /// sevrage précédent et l'IA la plus proche de 115 jours avant la
+    /// mise-bas qui a suivi.
+    #[tokio::test]
+    async fn issf_mesure_lecart_entre_sevrage_et_ia_fecondante() -> anyhow::Result<()> {
+        let (pool, sow) = pool_with_sow().await?;
+        for (date, kind) in [
+            ("2026-01-01", "sevrage"),
+            ("2026-01-06", "ia"), // IA fécondante : 5 jours après le sevrage
+            ("2026-05-01", "mise_bas"), // ~115 jours après l'IA du 06/01
+        ] {
+            sqlx::query("INSERT INTO evenement(type,date,truie_id) VALUES(?,?,?)")
+                .bind(kind)
+                .bind(date)
+                .bind(sow)
+                .execute(&pool)
+                .await?;
+        }
+        assert_eq!(scalar(&pool, ISSF_EXPR, sow).await?, Some(5));
+        Ok(())
+    }
+
+    /// Sans mise-bas enregistrée, aucune IA ne peut être identifiée comme
+    /// fécondante : l'ISSF reste `NULL` plutôt que d'inventer une valeur.
+    #[tokio::test]
+    async fn issf_est_nul_sans_mise_bas_enregistree() -> anyhow::Result<()> {
+        let (pool, sow) = pool_with_sow().await?;
+        sqlx::query("INSERT INTO evenement(type,date,truie_id) VALUES('ia','2026-01-06',?)")
+            .bind(sow)
+            .execute(&pool)
+            .await?;
+        assert_eq!(scalar(&pool, ISSF_EXPR, sow).await?, None);
+        Ok(())
+    }
+}
+
 async fn reformes(
     State(state): State<AppState>,
     Extension(session): Extension<SessionData>,
@@ -5196,7 +5338,7 @@ async fn reformes(
         &["nv", "sevres", "retours", "ecrases", "rang", "chetifs"],
     )
     .await?;
-    let raw=generic_rows(&state.pool,"SELECT id,num_travail,bande_code,rang,perf_nv,perf_sevres,nb_retours,tx_chetifs,CAST(COALESCE((SELECT SUM(p.nb) FROM perteporcelet p WHERE p.truie_id=t.id AND lower(COALESCE(p.cause,'')) LIKE '%cras%'),0) AS INTEGER) AS ecrases FROM truie t WHERE reformee=0 ORDER BY num_travail").await?;
+    let raw=generic_rows(&state.pool,&format!("SELECT id,num_travail,bande_code,rang,perf_nv,perf_sevres,{NB_RETOURS_EXPR} AS nb_retours,tx_chetifs,CAST(COALESCE((SELECT SUM(p.nb) FROM perteporcelet p WHERE p.truie_id=t.id AND lower(COALESCE(p.cause,'')) LIKE '%cras%'),0) AS INTEGER) AS ecrases FROM truie t WHERE reformee=0 ORDER BY num_travail")).await?;
     let mut rows = Vec::new();
     for mut row in raw {
         let Some(object) = row.as_object_mut() else {
@@ -5271,8 +5413,8 @@ async fn cochettes(
         &["nv", "sevres", "ecrases", "retours"],
     )
     .await?;
-    let averages=generic_rows(&state.pool,"SELECT ROUND(AVG(perf_nv),2) AS nv,ROUND(AVG(perf_sevres),2) AS sevres,ROUND(AVG(issf),2) AS issf,ROUND(AVG(tx_chetifs),2) AS chetifs FROM truie WHERE reformee=0").await?.into_iter().next().unwrap_or_else(||json!({}));
-    let rows=generic_rows(&state.pool,"SELECT id,num_travail,bande_code,mere_cochette,rang,perf_nv,perf_sevres,perf_tx_perte,nb_retours,issf,tx_chetifs,CAST(COALESCE((SELECT SUM(p.nb) FROM perteporcelet p WHERE p.truie_id=t.id AND lower(COALESCE(p.cause,'')) LIKE '%cras%'),0) AS INTEGER) AS ecrases FROM truie t WHERE reformee=0 AND (perf_nv IS NOT NULL OR perf_sevres IS NOT NULL) ORDER BY num_travail").await?;
+    let averages=generic_rows(&state.pool,&format!("SELECT ROUND(AVG(perf_nv),2) AS nv,ROUND(AVG(perf_sevres),2) AS sevres,ROUND(AVG({ISSF_EXPR}),2) AS issf,ROUND(AVG(tx_chetifs),2) AS chetifs FROM truie t WHERE reformee=0")).await?.into_iter().next().unwrap_or_else(||json!({}));
+    let rows=generic_rows(&state.pool,&format!("SELECT id,num_travail,bande_code,mere_cochette,rang,perf_nv,perf_sevres,perf_tx_perte,{NB_RETOURS_EXPR} AS nb_retours,{ISSF_EXPR} AS issf,tx_chetifs,CAST(COALESCE((SELECT SUM(p.nb) FROM perteporcelet p WHERE p.truie_id=t.id AND lower(COALESCE(p.cause,'')) LIKE '%cras%'),0) AS INTEGER) AS ecrases FROM truie t WHERE reformee=0 AND (perf_nv IS NOT NULL OR perf_sevres IS NOT NULL) ORDER BY num_travail")).await?;
     let threshold = criteria.len().saturating_sub(1).max(1);
     let mut candidates = Vec::new();
     let mut designated = Vec::new();
