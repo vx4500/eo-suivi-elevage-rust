@@ -3688,6 +3688,18 @@ async fn truies_import(
         .map(|value| value.trim().trim_start_matches('\u{feff}').to_lowercase())
         .collect();
     if !normalized.iter().any(|value| value == "num_travail") {
+        let is_historique = String::from_utf8_lossy(&bytes)
+            .lines()
+            .take(10)
+            .any(|line| {
+                let normalized_line = line.trim().trim_start_matches('\u{feff}').to_lowercase();
+                normalized_line.contains("n° travail") && normalized_line.contains("date 1ère ia")
+            });
+        if is_historique {
+            return Err(AppError::Invalid(
+                "Ce fichier est un historique complet de truies. Utilisez l’import « Historique truie (export riche) » sur cette page.".into(),
+            ));
+        }
         return Err(AppError::Invalid("Colonne num_travail manquante".into()));
     }
 
