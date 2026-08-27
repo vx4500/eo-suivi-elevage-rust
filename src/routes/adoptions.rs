@@ -171,7 +171,7 @@ pub(super) async fn sortie_nourrice(
             ));
         }
         // Même calcul que case_pig_count, dans la transaction d'écriture.
-        let occupancy: i64 = sqlx::query_scalar("SELECT COALESCE((SELECT nombre FROM inventairecase WHERE case_id=? ORDER BY date DESC,id DESC LIMIT 1),0)+COALESCE((SELECT SUM(CASE WHEN case_dest_id=? THEN COALESCE(nombre,0) ELSE -COALESCE(nombre,0) END) FROM transfert WHERE espece='porc' AND (case_dest_id=? OR case_source_id=?) AND date>COALESCE((SELECT date FROM inventairecase WHERE case_id=? ORDER BY date DESC,id DESC LIMIT 1),'')),0)-COALESCE((SELECT SUM(nombre) FROM declarationmort WHERE case_id=? AND date>COALESCE((SELECT date FROM inventairecase WHERE case_id=? ORDER BY date DESC,id DESC LIMIT 1),'')),0)")
+        let occupancy: i64 = sqlx::query_scalar("SELECT COALESCE((SELECT nombre FROM inventairecase WHERE case_id=? ORDER BY date DESC,id DESC LIMIT 1),0)+COALESCE((SELECT SUM(CASE WHEN case_dest_id=? THEN COALESCE(nombre,0) WHEN id IN (SELECT transfert_id FROM sortienourrice WHERE transfert_id IS NOT NULL) THEN 0 ELSE -COALESCE(nombre,0) END) FROM transfert WHERE espece='porc' AND (case_dest_id=? OR case_source_id=?) AND date>COALESCE((SELECT date FROM inventairecase WHERE case_id=? ORDER BY date DESC,id DESC LIMIT 1),'')),0)-COALESCE((SELECT SUM(nombre) FROM declarationmort WHERE case_id=? AND date>COALESCE((SELECT date FROM inventairecase WHERE case_id=? ORDER BY date DESC,id DESC LIMIT 1),'')),0)")
             .bind(destination).bind(destination).bind(destination).bind(destination).bind(destination).bind(destination).bind(destination).fetch_one(&mut *tx).await?;
         if capacity.is_some_and(|max| nombre > max - occupancy.max(0)) {
             return Err(AppError::Invalid(
@@ -472,6 +472,12 @@ mod tests {
         .await?;
         assert_eq!(case_litter_count(&state.pool, 12).await?, 1);
         assert_eq!(case_pig_count(&state.pool, 13).await?, 3);
+        assert_eq!(case_pig_count_raw(&state.pool, 12).await?, 0);
+        let alerts = farm_alerts(&state.pool).await?;
+        assert!(!alerts
+            .to_string()
+            .contains("Cases avec un effectif incohérent"));
+
         assert_eq!(effectif(&state.pool, 1, 1).await?, 6);
         // Le sevrage de la mère ne fait pas disparaître le lot en nourrice.
         sqlx::query("INSERT INTO evenement(type,date,truie_id,bande_id,nb_sevres) VALUES('sevrage','2026-08-12',1,1,6)").execute(&state.pool).await?;
