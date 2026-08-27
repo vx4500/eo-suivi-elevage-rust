@@ -10,6 +10,10 @@ pub async fn init(pool: &SqlitePool) -> anyhow::Result<()> {
     // Migrations additives pour les bases anciennes 1.55–1.65. Une colonne déjà
     // présente est volontairement ignorée afin de rendre le démarrage idempotent.
     for (table, column, definition) in [
+        ("controlequotidien", "salle_nom", "TEXT"),
+        ("controlequotidien", "element", "TEXT"),
+        ("controlequotidien", "utilisateur", "TEXT"),
+        ("controlequotidien", "horodatage", "TEXT"),
         ("utilisateur", "sections", "TEXT"),
         (
             "utilisateur",
@@ -148,6 +152,7 @@ pub async fn init(pool: &SqlitePool) -> anyhow::Result<()> {
         .execute(pool)
         .await?;
 
+    sqlx::raw_sql("CREATE INDEX IF NOT EXISTS quotidien_date_id ON controlequotidien(date,id); CREATE INDEX IF NOT EXISTS quotidien_notes_date ON controlequotidien(categorie,date,id);").execute(pool).await?;
     crate::cleanup::historical_bands(pool).await?;
 
     // Les anciens numéros libres deviennent immédiatement des choix fiables.

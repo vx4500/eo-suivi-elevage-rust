@@ -1,0 +1,19 @@
+FROM rust:latest AS build
+WORKDIR /src
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+COPY templates ./templates
+COPY resources ./resources
+COPY migrations ./migrations
+RUN cargo build --locked --release
+FROM debian:trixie-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/* && useradd --create-home demo
+WORKDIR /app
+COPY --from=build /src/target/release/eo-suivi-elevage ./eo-suivi-elevage
+COPY static ./static
+RUN mkdir /app/donnees-demo && chown -R demo:demo /app
+USER demo
+ENV EO_DEMO_PORTAL=1 EO_HOST=0.0.0.0 EO_PORT=18444 ELEVAGE_DATA=/app/donnees-demo
+EXPOSE 18444
+VOLUME ["/app/donnees-demo"]
+ENTRYPOINT ["/app/eo-suivi-elevage"]

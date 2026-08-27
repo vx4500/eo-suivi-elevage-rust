@@ -223,11 +223,13 @@ pub async fn guard(State(state): State<AppState>, mut request: Request, next: Ne
         return next.run(request).await;
     }
 
-    let public = path == "/login"
-        || path == "/commande"
-        || path.starts_with("/commande/")
-        || (path.starts_with("/vente-directe/produit/") && path.ends_with("/image"))
-        || path.starts_with("/desinscription/");
+    let public = !crate::demo_portal::enabled()
+        && (path == "/login"
+            || path == "/commande"
+            || path.starts_with("/commande/")
+            || (path.starts_with("/vente-directe/produit/") && path.ends_with("/image"))
+            || path.starts_with("/desinscription/"))
+        || path == "/login";
     let session_id = cookie_value(request.headers(), "eo_session");
     let session = session_id
         .as_ref()
@@ -238,6 +240,23 @@ pub async fn guard(State(state): State<AppState>, mut request: Request, next: Ne
     }
 
     if let Some(session) = session {
+        if crate::demo_portal::enabled() {
+            if !crate::demo_portal::valid(&state.pool, session.uid, chrono::Utc::now().timestamp())
+                .await
+            {
+                if let Some(sid) = session_id.as_ref() {
+                    state.sessions.remove(sid);
+                }
+                return Redirect::to("/login?err=expire").into_response();
+            }
+            if crate::demo_portal::blocked(&path) {
+                return (
+                    axum::http::StatusCode::FORBIDDEN,
+                    "Cette opération système est désactivée dans la démonstration.",
+                )
+                    .into_response();
+            }
+        }
         if session.doit_changer_mdp && path != "/mon-compte/mdp" && path != "/logout" {
             return Redirect::to("/mon-compte/mdp?force=1").into_response();
         }
@@ -272,7 +291,14 @@ pub async fn guard(State(state): State<AppState>, mut request: Request, next: Ne
         }
         request.extensions_mut().insert(session);
     }
-    next.run(request).await
+    let mut response = next.run(request).await;
+    if crate::demo_portal::enabled() {
+        response.headers_mut().insert(
+            axum::http::header::CACHE_CONTROL,
+            axum::http::HeaderValue::from_static("no-store"),
+        );
+    }
+    response
 }
 
 fn cookie_value(headers: &axum::http::HeaderMap, name: &str) -> Option<String> {

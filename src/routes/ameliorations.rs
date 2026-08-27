@@ -497,6 +497,18 @@ mod tests {
             .collect()
     }
     #[tokio::test]
+    async fn quotidien_historique_pagine_et_note_vide() {
+        let s = state().await;
+        sqlx::raw_sql("WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<65) INSERT INTO controlequotidien(date,categorie,note) SELECT '2026-08-27','note_libre',CASE WHEN x=65 THEN NULL ELSE 'Note '||x END FROM n").execute(&s.pool).await.unwrap();
+        let Html(body) =
+            super::super::quotidien(State(s), Extension(session()), Query(HashMap::new()))
+                .await
+                .unwrap();
+        assert_eq!(body.matches("Enregistrer la modification").count(), 30);
+        assert!(body.contains("Plus anciennes"));
+        assert!(body.contains("65 notes"));
+    }
+    #[tokio::test]
     async fn routeur_et_pages_modernisees() {
         let s = state().await;
         let _router = super::super::router(s.clone());

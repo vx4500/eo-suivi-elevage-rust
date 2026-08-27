@@ -1799,6 +1799,9 @@ async fn brevo_send(
     subject: &str,
     content: &str,
 ) -> Result<String, String> {
+    if crate::demo_portal::enabled() {
+        return Err("Envoi externe désactivé en démonstration".into());
+    }
     let client = reqwest::Client::new();
     let (url, payload) = if channel == "email" {
         (

@@ -3,9 +3,31 @@ use minijinja::{Environment, Value};
 
 pub fn build() -> anyhow::Result<Environment<'static>> {
     let mut env = Environment::new();
+    env.add_filter("truncate", |value: String, length: usize| {
+        let mut chars = value.chars();
+        let text: String = chars.by_ref().take(length).collect();
+        if chars.next().is_some() {
+            format!("{text}…")
+        } else {
+            text
+        }
+    });
     env.add_template(
         "workflow_ui.html",
         include_str!("../templates/workflow_ui.html"),
+    )?;
+    env.add_global("demo_portal", crate::demo_portal::enabled());
+    env.add_template(
+        "demo_acces.html",
+        include_str!("../templates/demo_acces.html"),
+    )?;
+    env.add_template(
+        "demo_feedback.html",
+        include_str!("../templates/demo_feedback.html"),
+    )?;
+    env.add_template(
+        "solutions_terrain.html",
+        include_str!("../templates/solutions_terrain.html"),
     )?;
     env.add_global("app_version", env!("CARGO_PKG_VERSION"));
     env.add_template("base.html", include_str!("../templates/base.html"))?;

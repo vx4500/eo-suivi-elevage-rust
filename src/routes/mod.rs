@@ -25,6 +25,7 @@ use std::sync::Arc;
 
 mod adoptions;
 mod ameliorations;
+mod demo_portal;
 mod import_historique;
 mod parity;
 
@@ -72,6 +73,12 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/", get(dashboard))
         .route("/login", get(login_page).post(login_post))
+        .route(
+            "/demo/acces",
+            get(demo_portal::acces).post(demo_portal::creer),
+        )
+        .route("/demo/acces/{id}/revoquer", post(demo_portal::revoquer))
+        .route("/demo/suggestion", post(demo_portal::suggestion))
         .route("/logout", get(logout))
         .route("/mon-compte/mdp", get(password_page).post(password_post))
         .route("/bandes", get(bandes))
@@ -1419,6 +1426,7 @@ async fn login_page(
     Query(query): Query<HashMap<String, String>>,
 ) -> AppResult<Html<String>> {
     let error = match query.get("err").map(String::as_str) {
+        Some("expire") => "Accès de démonstration expiré ou révoqué. Contactez Emmanuel ORY.",
         Some("bloque") => "Compte temporairement verrouillé après plusieurs échecs.",
         Some(_) => "Identifiant ou mot de passe incorrect.",
         None => "",
@@ -1441,6 +1449,21 @@ async fn login_post(
     .await?;
 
     if let Some(user) = user {
+        if crate::demo_portal::enabled()
+            && !crate::demo_portal::valid(&state.pool, user.id, chrono::Utc::now().timestamp())
+                .await
+        {
+            return Ok(Redirect::to("/login?err=expire").into_response());
+        }
+        if user.bloque_jusqu.as_deref().is_some_and(|until| {
+            until
+                > chrono::Utc::now()
+                    .format("%Y-%m-%d %H:%M:%S")
+                    .to_string()
+                    .as_str()
+        }) {
+            return Ok(Redirect::to("/login?err=bloque").into_response());
+        }
         if auth::verify_password_async(password.clone(), user.hash_mdp.clone()).await? {
             sqlx::query("UPDATE utilisateur SET tentatives_echec=0,bloque_jusqu=NULL WHERE id=?")
                 .bind(user.id)
@@ -10137,6 +10160,11 @@ async fn genetique(
     .await?;
     let mut ctx = context(&session);
     ctx.insert("lignees".into(), Value::Array(lignees));
+    ctx.insert(
+        "catalogue".into(),
+        serde_json::from_str(include_str!("../../resources/danbred-2026-08.json"))
+            .map_err(|e| AppError::Internal(e.into()))?,
+    );
     render(&state, "genetique.html", Value::Object(ctx))
 }
 
@@ -10918,14 +10946,30 @@ async fn quotidien(
         .unwrap_or(today)
         .format("%Y-%m-%d")
         .to_string();
-    let rows = sqlx::query("SELECT id,date,horodatage,categorie,salle_nom,element,statut,note,utilisateur FROM controlequotidien WHERE date=? ORDER BY horodatage DESC,id DESC")
+    let rows = sqlx::query("SELECT id,date,horodatage,categorie,salle_nom,element,statut,note,utilisateur FROM controlequotidien WHERE date=? ORDER BY horodatage DESC,id DESC LIMIT 200")
         .bind(&jour)
         .fetch_all(&state.pool)
         .await?;
     let mut ctx = context(&session);
     ctx.insert("jour".into(), json!(jour));
     ctx.insert("controles".into(), Value::Array(rows_to_json(rows)?));
-    ctx.insert("historique_notes".into(),Value::Array(generic_rows(&state.pool,"SELECT id,date,note,utilisateur FROM controlequotidien WHERE categorie='note_libre' ORDER BY date DESC,id DESC").await?));
+    let page = query
+        .get("page")
+        .and_then(|s| s.parse::<i64>().ok())
+        .unwrap_or(1)
+        .clamp(1, 1_000_000);
+    let total: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM controlequotidien WHERE categorie='note_libre'")
+            .fetch_one(&state.pool)
+            .await?;
+    let notes=sqlx::query("SELECT id,date,note,utilisateur FROM controlequotidien WHERE categorie='note_libre' ORDER BY date DESC,id DESC LIMIT 30 OFFSET ?").bind((page-1)*30).fetch_all(&state.pool).await?;
+    ctx.insert(
+        "historique_notes".into(),
+        Value::Array(rows_to_json(notes)?),
+    );
+    ctx.insert("page".into(), json!(page));
+    ctx.insert("plus_notes".into(), json!(page * 30 < total));
+    ctx.insert("total_notes".into(), json!(total));
     render(&state, "quotidien.html", Value::Object(ctx))
 }
 

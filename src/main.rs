@@ -4,6 +4,7 @@ mod cleanup;
 mod config;
 mod db;
 mod demo;
+mod demo_portal;
 mod economic_import;
 mod error;
 mod machine_soupe;
@@ -30,6 +31,15 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let config = Config::from_env()?;
+    if demo_portal::enabled() && !config.db_path.exists() {
+        anyhow::ensure!(
+            std::env::var("EO_DEMO_ADMIN_PASSWORD")
+                .unwrap_or_default()
+                .len()
+                >= 16,
+            "Mot de passe administrateur de démonstration requis (16 caractères minimum)."
+        );
+    }
     let db_url = format!("sqlite://{}", config.db_path.display());
     let options = SqliteConnectOptions::from_str(&db_url)?
         .create_if_missing(true)
@@ -42,7 +52,22 @@ async fn main() -> anyhow::Result<()> {
         .connect_with(options)
         .await?;
 
+    if demo_portal::enabled() {
+        demo_portal::verify_database(&pool).await?;
+    }
     db::init(&pool).await?;
+    if demo_portal::enabled() {
+        demo_portal::init(&pool).await?;
+        let cleanup_pool = pool.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+                if let Err(e) = demo_portal::prune(&cleanup_pool).await {
+                    tracing::error!(error=%e,"Nettoyage démo impossible");
+                }
+            }
+        });
+    }
     let templates = templates::build()?;
     let state = AppState::new(config.clone(), pool, templates);
 

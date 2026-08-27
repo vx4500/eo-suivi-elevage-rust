@@ -2,6 +2,7 @@
 {% block content %}
 <div style="max-width:430px;margin:8vh auto" class="card">
   <h1>EO-Suivi Élevage</h1><p class="muted">Version Rust {{ app_version }}</p>
+  {% if demo_portal %}<p>Démonstration indépendante. Utilisez l’identifiant et le mot de passe de 48 h transmis par Emmanuel ORY. Contact : <a href="mailto:vx4500@gmail.com">vx4500@gmail.com</a>.</p>{% endif %}
   {% if error %}<div class="alert danger">{{ error }}</div>{% endif %}
   <form method="post" action="/login">
     <label>Identifiant<input name="identifiant" autocomplete="username" required autofocus></label>
