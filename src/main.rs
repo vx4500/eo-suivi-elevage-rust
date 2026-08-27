@@ -1,5 +1,6 @@
 #![recursion_limit = "256"]
 mod auth;
+mod cleanup;
 mod config;
 mod db;
 mod demo;

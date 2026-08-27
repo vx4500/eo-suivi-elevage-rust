@@ -1,6 +1,16 @@
 # EO-Suivi Élevage Rust — État du projet
 
-Version actuelle : **2.2.42** — Dernière mise à jour de ce document : 27 août 2026.
+Version actuelle : **2.2.43** — Dernière mise à jour de ce document : 27 août 2026.
+
+### Version 2.2.43 — ergonomie et gestion quotidienne
+
+- Modification des mises-bas dans la fiche truie, pertes associées synchronisées et effectifs contrôlés.
+- Six critères de sélection, tétines/splayleg, mères choisies surlignées et quatre niveaux de réforme.
+- Tâches, réparations et entretien réunis ; notes modifiables et supprimables.
+- Choix de semence depuis les factures importées ; relevés d’eau limités au site et bandes modifiables.
+- Inventaire CSV des produits et silos avec import atomique et contrôle du stock de référence.
+- Page Effectifs retirée ; bandes fantômes v1.14 archivées avant nettoyage (liens d’adoption protégés).
+- Plan sanitaire, inséminations et pilotage technique réorganisés.
 
 ### Version 2.2.42 — maternité et nourrice artificielle
 
@@ -526,7 +536,7 @@ l'arrêt déclenche le retour arrière ; la sauvegarde de la base est conservée
 ```bash
 systemctl status eo-suivi-rust --no-pager -l
 journalctl -u eo-suivi-rust -n 80 --no-pager -l -o cat
-curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.42"
+curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.43"
 ```
 
 Puis ouvrir `https://rust-elevage.basse-chevrie.ovh`.

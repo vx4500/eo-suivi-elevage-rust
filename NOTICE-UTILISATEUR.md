@@ -210,3 +210,16 @@ Les dates doivent suivre l'entrée et les opérations déjà enregistrées.
 Les **porcelets présents** comprennent les vivants sous les truies et dans les nourrices
 rattachés à la bande affichée. Les **pertes enregistrées** incluent les décès déclarés en
 nourrice, mais jamais les mort-nés ni les momifiés. Les sevrés quittent ce compteur.
+
+
+## Gestion quotidienne et ergonomie (2.2.43)
+
+- **Fiche truie → Modifier les mises-bas** : corrigez les nés vivants, mort-nés, momifiés et pertes à la naissance. Les pertes associées sont remplacées, pas cumulées. Une correction incompatible avec les adoptions, pertes ou sevrages enregistrés est refusée. La date reste protégée lorsqu’une adoption dépend de la portée.
+- **Sélection des mères** : jusqu’à six critères simultanés. Renseignez les tétines fonctionnelles et le nombre de cas de splayleg observés dans la fiche truie ; une valeur vide signifie « inconnu », zéro signifie « aucun ». Les mères désignées restent visibles en vert.
+- **Aide à la réforme** : quatre niveaux selon le nombre de critères dépassés, triés du plus prioritaire au moins prioritaire. La réforme reste une décision manuelle.
+- **Inséminations** : importez d’abord la facture de semence dans Imports, puis choisissez la facture, la saisie manuelle ou le mode automatique. L’automatique retient la dernière facture antérieure ou égale à la date d’IA, liée à la bande. Sans bande, il utilise la dernière facture disponible.
+- **Notes quotidiennes** : l’historique permet de modifier et supprimer chaque note.
+- **Tâches et entretien** : création, modification, suppression et achèvement des travaux ponctuels, entretiens périodiques et dates de lavage sur une page.
+- **Eau/énergie** : attribuez le bon site au compteur. Chaque relevé permet de modifier la liste des bandes ou de la recalculer. Le calcul automatique reste une estimation à partir des dates de bande et n’inclut plus les autres sites. Sans site défini, aucune bande n’est déduite. Les anciens relevés ne sont pas réécrits sans votre action.
+- **Stocks → Faire l’inventaire** : exportez le CSV, remplissez uniquement `quantite_comptee`, puis réimportez. Cellule vide : aucun changement ; zéro : stock nul. Produits de pharmacie et niveaux des silos sont inclus. Les noms, unités, identifiants et stocks de référence doivent rester intacts. Si un stock a changé depuis l’export, l’import entier est refusé : réexportez. Chaque correction produit un mouvement ou un relevé traçable.
+- Les bandes portant exactement le marqueur d’import automatique v1.14 sont nettoyées au démarrage. Les lignes touchées sont archivées dans `archive_nettoyage` avant modification. Les événements à lien facultatif sont conservés sans bande fantôme. Une bande encore liée à des adoptions est conservée et signalée dans les journaux afin de ne pas détacher des porcelets de leur historique. Faites une sauvegarde avant mise à jour.

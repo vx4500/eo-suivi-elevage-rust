@@ -196,7 +196,7 @@ fn section_for_path(path: &str) -> Option<&'static str> {
         "structure" | "salle" => Some("structure"),
         "effectifs" => Some("effectifs"),
         "archives" => Some("archives"),
-        "entretien" => Some("entretien"),
+        "entretien" | "taches" => Some("entretien"),
         _ => None,
     }
 }
@@ -306,7 +306,11 @@ mod tests {
         assert!(!salarie_path_allowed("/route-inconnue", &[]));
         assert!(!salarie_path_allowed("/economique", &[]));
         assert!(salarie_path_allowed("/bandes", &[]));
-        assert!(salarie_path_allowed("/taches", &[]));
+        assert_eq!(
+            salarie_path_allowed("/taches", &[]),
+            salarie_path_allowed("/entretien", &[])
+        );
+        assert!(salarie_path_allowed("/taches", &["entretien".to_string()]));
     }
 
     #[test]

@@ -61,6 +61,8 @@ CREATE TABLE IF NOT EXISTS verrat (
 );
 
 CREATE TABLE IF NOT EXISTS truie (
+    nb_tetines INTEGER CHECK(nb_tetines>=0),
+    splayleg INTEGER CHECK(splayleg>=0),
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT,
@@ -1078,3 +1080,9 @@ BEGIN
         OR NEW.date < (SELECT MAX(date) FROM sortienourrice WHERE adoption_id=NEW.adoption_id)
         THEN RAISE(ABORT,'Sortie de nourrice incohérente') END;
 END;
+
+CREATE TABLE IF NOT EXISTS archive_nettoyage (
+ table_source TEXT NOT NULL, ligne_id INTEGER NOT NULL, donnees TEXT NOT NULL,
+ motif TEXT NOT NULL, archive_le TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ PRIMARY KEY(table_source,ligne_id)
+);

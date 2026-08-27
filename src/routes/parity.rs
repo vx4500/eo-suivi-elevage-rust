@@ -1271,7 +1271,14 @@ pub(super) async fn salle_lavage(
         .bind(id)
         .execute(&state.pool)
         .await?;
-    Ok(Redirect::to("/structure").into_response())
+    Ok(Redirect::to(
+        if form.get("retour").map(String::as_str) == Some("taches") {
+            "/taches#lavages"
+        } else {
+            "/structure"
+        },
+    )
+    .into_response())
 }
 
 pub(super) async fn sanitaire_generer_protocole(

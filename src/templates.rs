@@ -3,6 +3,10 @@ use minijinja::{Environment, Value};
 
 pub fn build() -> anyhow::Result<Environment<'static>> {
     let mut env = Environment::new();
+    env.add_template(
+        "workflow_ui.html",
+        include_str!("../templates/workflow_ui.html"),
+    )?;
     env.add_global("app_version", env!("CARGO_PKG_VERSION"));
     env.add_template("base.html", include_str!("../templates/base.html"))?;
     env.add_template("login.html", include_str!("../templates/login.html"))?;
@@ -155,10 +159,6 @@ pub fn build() -> anyhow::Result<Environment<'static>> {
     env.add_template(
         "transferts.html",
         include_str!("../templates/transferts.html"),
-    )?;
-    env.add_template(
-        "effectifs.html",
-        include_str!("../templates/effectifs.html"),
     )?;
     env.add_template(
         "vente_sessions.html",

@@ -1,13 +1,13 @@
 {% extends "base.html" %}
-{% block content %}
-<h1>Pilotage technique</h1>
+{% block content %}{% include "workflow_ui.html" %}<div class="workflow">
+<header class="hero"><h1>Pilotage technique</h1><p>Les résultats essentiels, les écarts aux objectifs et les détails par bande, période ou rang.</p></header>
 
-<nav class="rust-actions">
+<nav class="toolbar">
   <a class="{% if vue == 'bandes' %}rust-badge{% endif %}" href="/productivite?vue=bandes&mois={{ mois }}">Bandes et abattage</a>
   <a class="{% if vue == 'cheptel' %}rust-badge{% endif %}" href="/productivite?vue=cheptel&mois={{ mois }}">Cheptel et ELD</a>
   <a class="{% if vue == 'rangs' %}rust-badge{% endif %}" href="/productivite?vue=rangs&mois={{ mois }}">Rangs de portée</a>
 </nav>
-<nav class="rust-actions">
+<nav class="toolbar">
   <span>Période :</span>
   {% for p in [6,12,24,36,60,120] %}<a class="{% if p == mois %}rust-badge{% endif %}" href="/productivite?vue={{ vue }}&mois={{ p }}">{{ p }} mois</a>{% endfor %}
 </nav>
@@ -23,20 +23,20 @@
 </div>
 <details class="card" open><summary><b>Objectifs de productivité</b></summary><div class="rust-scroll"><form method="post" action="/objectif/maj"><input type="hidden" name="csrf_token" value="{{ session.csrf }}"><table><thead><tr><th>Indicateur</th><th>Résultat pondéré</th><th>Objectif</th><th>Écart</th><th>État</th>{% if session.peut_modifier %}<th></th>{% endif %}</tr></thead><tbody>{% for o in objectifs %}<tr><td>{{ o.libelle }}</td><td><b>{% if o.valeur_elevage is not none %}{{ o.valeur_elevage|decimal2 }}{% else %}—{% endif %}</b></td><td><input name="obj_{{ o.id }}" value="{{ o.valeur if o.valeur is not none else '' }}" inputmode="decimal" {% if not session.peut_modifier %}readonly{% endif %}></td><td>{% if o.ecart is not none %}{{ o.ecart|decimal2 }}{% else %}—{% endif %}</td><td>{% if o.atteint is not none %}{% if o.atteint %}<span class="rust-badge">Atteint</span>{% else %}<span class="rust-badge danger">À améliorer</span>{% endif %}{% else %}—{% endif %}</td>{% if session.peut_modifier %}<td><button class="ghost" type="submit" formaction="/objectif/{{ o.id }}/supprimer">Retirer</button></td>{% endif %}</tr>{% else %}<tr><td colspan="6" class="rust-empty">Aucun objectif configuré</td></tr>{% endfor %}</tbody></table>{% if session.peut_modifier %}<p><button type="submit">Enregistrer tous les objectifs</button></p>{% endif %}</form></div>
 {% if session.peut_modifier and objectifs_disponibles %}<form class="rust-actions" method="post" action="/objectif/ajouter"><input type="hidden" name="csrf_token" value="{{ session.csrf }}"><label>Ajouter un indicateur<select name="cle" required>{% for o in objectifs_disponibles %}<option value="{{ o.cle }}">{{ o.libelle }}</option>{% endfor %}</select></label><label>Objectif<input name="valeur" inputmode="decimal"></label><label>Sens<select name="sens"><option value="haut">Plus haut est meilleur</option><option value="bas">Plus bas est meilleur</option></select></label><button>Ajouter</button></form>{% endif %}</details>
-<h2>Résultats des bandes</h2>
+<details class="card" open><summary><b>Résultats des bandes</b> — ouvrir le détail</summary>
 <div class="rust-scroll"><table><thead><tr><th>Bande</th><th>Site</th><th>Mise-bas prévue</th><th>1re IA réelle</th><th>1re mise-bas réelle</th><th>Dernier sevrage</th><th>Saillies</th><th>Pleines</th><th>Taux écho</th><th>Mise-bas/saillies</th><th>Nés vifs/portée</th><th>Sevrés/portée</th><th>Total sevrés</th><th>Pertes</th><th>Poids sevrage</th><th>GMQ PS</th><th>GMQ engraissement</th></tr></thead><tbody>
 {% for b in bandes %}<tr><td><a href="/bande/{{ b.id }}"><b>{{ b.code }}</b></a></td><td>{{ b.site or '—' }}</td><td>{{ b.date_mb|date_fr }}</td><td>{{ b.premiere_ia_reelle|date_fr }}</td><td>{{ b.premiere_mb_reelle|date_fr }}</td><td>{{ b.dernier_sevrage_reel|date_fr }}</td><td>{{ b.cs_truies_saillies or '—' }}</td><td>{{ b.cs_pleines or '—' }}</td><td>{{ b.taux_pleines_echo or '—' }}{% if b.taux_pleines_echo is not none %} %{% endif %}</td><td>{{ b.taux_mb_saillies or '—' }}{% if b.taux_mb_saillies is not none %} %{% endif %}</td><td>{{ b.cs_nv_portee or '—' }}</td><td>{{ b.cs_sevres_portee or '—' }}</td><td>{{ b.cs_total_sevres or '—' }}</td><td>{{ b.cs_tx_pertes_nv or '—' }}</td><td>{{ b.cs_poids_sevrage or '—' }}</td><td>{{ b.cs_gmq_ps or '—' }}</td><td>{{ b.cs_gmq_engr or '—' }}</td></tr>
 {% else %}<tr><td colspan="17" class="rust-empty">Aucune bande sur cette période</td></tr>{% endfor %}
 </tbody></table></div>
 
-<h2>Résultats techniques d’abattage par bande</h2>
+</details><details class="card"><summary><b>Résultats techniques d’abattage par bande</b></summary>
 <p>Les moyennes TMP, muscle et plus-value sont pondérées par le nombre de porcs.</p>
 <div class="rust-scroll"><table><thead><tr><th>Bande</th><th>Porcs</th><th>Poids moyen</th><th>TMP</th><th>Muscle lot</th><th>Plus-value</th><th>Prix HT/kg</th><th>Montant HT</th></tr></thead><tbody>
 {% for t in technique %}<tr><td><a href="/bande/{{ t.id }}"><b>{{ t.code }}</b></a></td><td>{{ t.porcs }}</td><td>{{ t.poids_moyen or '—' }}{% if t.poids_moyen is not none %} kg{% endif %}</td><td>{{ t.tmp or '—' }}</td><td>{{ t.muscle_lot or '—' }}</td><td>{{ t.plus_value or '—' }}</td><td>{{ t.prix_ht_kg or '—' }}{% if t.prix_ht_kg is not none %} €/kg{% endif %}</td><td>{{ t.montant_ht|euro }}</td></tr>
 {% else %}<tr><td colspan="8" class="rust-empty">Aucun apport relié à une bande sur cette période</td></tr>{% endfor %}
 </tbody></table></div>
 
-{% elif vue == 'cheptel' %}
+</details>{% elif vue == 'cheptel' %}
 <div class="rust-grid">
   <div class="card"><span class="rust-badge">Truies actives</span><h2>{{ truies_actives }}</h2></div>
   <div class="card"><span class="rust-badge">ELD la plus récente</span><h2>{{ eld_resume.moyenne or '—' }}{% if eld_resume.moyenne is not none %} mm{% endif %}</h2><p>{{ eld_resume.mesures }} truie(s) mesurée(s)</p></div>
@@ -50,4 +50,4 @@
 {% else %}<tr><td colspan="7" class="rust-empty">Aucune donnée par rang de portée</td></tr>{% endfor %}
 </tbody></table></div>
 {% endif %}
-{% endblock %}
+</div>{% endblock %}

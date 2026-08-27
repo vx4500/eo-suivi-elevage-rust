@@ -41,8 +41,8 @@
   </div></div>{% endif %}
   <div class="rust-menu"><span>Élevage ▾</span><div class="rust-sub">
     <a href="/planning">Planning</a><a href="/quotidien">Quotidien</a><a href="/transferts">Transferts</a>
-    <a href="/effectifs">Effectifs</a><a href="/structure">Structure</a>{% if session.recoit_achats %}<a href="/reception">Réception</a>{% endif %}{% if session.module_genetique %}<a href="/genetique">Génétique</a>{% endif %}{% if session.engraisse and session.module_charcutiers_rfid %}<a href="/charcutiers">Charcutiers RFID</a>{% endif %}{% if session.engraisse and session.module_prestataires %}<a href="/engraissement">Prestataire</a>{% endif %}
-    <a href="/taches">Tâches</a>
+    <a href="/structure">Structure</a>{% if session.recoit_achats %}<a href="/reception">Réception</a>{% endif %}{% if session.module_genetique %}<a href="/genetique">Génétique</a>{% endif %}{% if session.engraisse and session.module_charcutiers_rfid %}<a href="/charcutiers">Charcutiers RFID</a>{% endif %}{% if session.engraisse and session.module_prestataires %}<a href="/engraissement">Prestataire</a>{% endif %}
+    <a href="/taches">Tâches et entretien</a>
   </div></div>
   <div class="rust-menu"><span>Indicateurs ▾</span><div class="rust-sub">
     {% if session.a_truies %}<a href="/gttt">GTTT</a><a href="/productivite">Productivité</a>{% endif %}
@@ -55,7 +55,7 @@
     <a href="/vente-directe">Vente directe</a><a href="/vente-directe/commandes">Commandes clients</a><a href="/vente-directe/bilan">Récapitulatif</a><a href="/vente-directe/sessions">Sessions de vente</a><a href="/vente-directe/communications">Communications clients</a><a href="/commande">Page de commande</a>
   </div></div>{% endif %}
   <div class="rust-menu"><span>Exploitation ▾</span><div class="rust-sub">
-    <a href="/sanitaire">Sanitaire</a><a href="/resolution-problemes">Résolution de problèmes</a><a href="/pharmacie">Pharmacie</a><a href="/entretien">Entretien</a><a href="/imports">Importer un document</a>
+    <a href="/sanitaire">Sanitaire</a><a href="/resolution-problemes">Résolution de problèmes</a><a href="/pharmacie">Pharmacie</a><a href="/imports">Importer un document</a>
   </div></div>
   <button type="button" id="farm-alert-button" class="farm-alert-button" aria-label="Alertes de l’élevage" aria-controls="farm-alert-panel" aria-expanded="false"><span aria-hidden="true">!</span><b id="farm-alert-count">…</b></button>
   <span class="grow"></span>

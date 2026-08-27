@@ -341,7 +341,6 @@ fn version_235_structure_maternite_et_sevrage_sont_tracables() {
     let bands = include_str!("../templates/bandes.html");
     let maternity = include_str!("../templates/maternite.html");
     let structure = include_str!("../templates/structure.html");
-    let effectifs = include_str!("../templates/effectifs.html");
 
     assert!(schema.contains("CREATE TABLE IF NOT EXISTS numeromarquage"));
     assert!(schema.contains("nb_max_porcelets INTEGER"));
@@ -353,5 +352,5 @@ fn version_235_structure_maternite_et_sevrage_sont_tracables() {
     assert!(maternity.contains("Sevrage et transfert vers le post-sevrage"));
     assert!(routes.contains("Sevrage : mouvement de la portée vers le post-sevrage"));
     assert!(routes.contains("SELECT COUNT(*) FROM inventairecase WHERE case_id=?"));
-    assert!(effectifs.contains("<th>Bande(s)</th>"));
+    assert!(!include_str!("../templates/base.html").contains("href=\"/effectifs\""));
 }

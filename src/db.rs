@@ -23,6 +23,8 @@ pub async fn init(pool: &SqlitePool) -> anyhow::Result<()> {
         ),
         ("utilisateur", "bloque_jusqu", "TEXT"),
         ("truie", "num_national", "TEXT"),
+        ("truie", "nb_tetines", "INTEGER CHECK(nb_tetines>=0)"),
+        ("truie", "splayleg", "INTEGER CHECK(splayleg>=0)"),
         ("truie", "bande_code", "TEXT"),
         ("truie", "perf_tx_perte", "REAL"),
         ("truie", "salle_id", "INTEGER"),
@@ -145,6 +147,8 @@ pub async fn init(pool: &SqlitePool) -> anyhow::Result<()> {
     sqlx::query("CREATE UNIQUE INDEX IF NOT EXISTS ux_importjournal_contenu_sha256 ON importjournal(contenu_sha256) WHERE contenu_sha256 IS NOT NULL")
         .execute(pool)
         .await?;
+
+    crate::cleanup::historical_bands(pool).await?;
 
     // Les anciens numéros libres deviennent immédiatement des choix fiables.
     sqlx::query("INSERT OR IGNORE INTO numeromarquage(numero) SELECT DISTINCT upper(trim(num_officiel)) FROM bande WHERE num_officiel IS NOT NULL AND trim(num_officiel)<>''")
