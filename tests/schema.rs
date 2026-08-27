@@ -39,7 +39,8 @@ async fn schema_complet_et_ecritures_compatibles() -> anyhow::Result<()> {
     // affectationfacturebande et affectationfacturecontrole assurent la
     // ventilation multi-bandes des factures sans double comptage. La liste
     // numeromarquage normalise les numéros proposés aux bandes.
-    assert_eq!(tables, 65);
+    // adoptionporcelet conserve les deux extrémités de chaque transfert.
+    assert_eq!(tables, 67);
     let objectives: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM objectif")
         .fetch_one(&pool)
         .await?;

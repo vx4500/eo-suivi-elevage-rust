@@ -1,4 +1,4 @@
-# EO-Suivi Élevage — portage Rust 2.2.41
+# EO-Suivi Élevage — portage Rust 2.2.42
 
 Cette archive reprend la base EO-Suivi 1.65 sous forme d'un serveur Rust. Elle
 n'utilise plus FastAPI, SQLModel, Uvicorn ni Python pour les fonctions déjà
@@ -20,6 +20,8 @@ compatibilité avec les sauvegardes 1.55 à 1.65.
 - tableau professionnel de maternité par bande, avec état de chaque truie,
   mise à jour progressive, pertes jusqu'à J+28 et sevrage vers une case/vanne
   de post-sevrage créant le mouvement d'effectif ;
+- adoptions entre truies et vers une nourrice artificielle, lots rattachés à leur
+  bande, pertes et sevrages tracés sans double comptage ;
 - fiche truie organisée en onglets, mesures et historique modifiables, liaison
   case/vanne, soins de portée et analyse de l'IA probablement fécondante ;
 - file IA/cochettes après sevrage : cochettes, sorties de maternité et

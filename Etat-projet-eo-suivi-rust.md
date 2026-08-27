@@ -1,6 +1,16 @@
 # EO-Suivi Élevage Rust — État du projet
 
-Version actuelle : **2.2.41** — Dernière mise à jour de ce document : 26 août 2026.
+Version actuelle : **2.2.42** — Dernière mise à jour de ce document : 27 août 2026.
+
+### Version 2.2.42 — maternité et nourrice artificielle
+
+Adoptions atomiques vers une truie ou une case de nourrice, suivi des lots avec pertes
+et sevrage vers le post-sevrage, compteurs de vivants et décès séparés des mort-nés et
+momifiés. Les cases peuvent être renommées et leur plafond de porcelets est retiré.
+Nouvelles tables additives `adoptionporcelet` et `sortienourrice`, vues de calcul
+`portee_effectif` et `nourrice_effectif`. Les références d'historique sont protégées
+contre la suppression. Voir la notice utilisateur pour la saisie.
+
 
 Ce fichier fusionne les anciens audits, listings et listes de modifications.
 Les informations devenues obsolètes (anciens comptages de routes, tâches déjà
@@ -516,7 +526,7 @@ l'arrêt déclenche le retour arrière ; la sauvegarde de la base est conservée
 ```bash
 systemctl status eo-suivi-rust --no-pager -l
 journalctl -u eo-suivi-rust -n 80 --no-pager -l -o cat
-curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.41"
+curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.42"
 ```
 
 Puis ouvrir `https://rust-elevage.basse-chevrie.ovh`.

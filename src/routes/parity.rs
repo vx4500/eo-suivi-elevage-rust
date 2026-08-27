@@ -1364,15 +1364,7 @@ pub(super) async fn saisie_rapide(
                     // systématiquement toute perte de porcelet dès qu'une
                     // case était renseignée, avec le message trompeur
                     // « 0 porc(s) présent(s) ».
-                    let alive: i64 = sqlx::query_scalar(
-                        "SELECT MAX(0,COALESCE((SELECT nes_vifs FROM evenement WHERE truie_id=? AND bande_id=? AND type='mise_bas' ORDER BY date DESC,id DESC LIMIT 1),0)-COALESCE((SELECT SUM(nb) FROM perteporcelet WHERE truie_id=? AND bande_id=?),0))",
-                    )
-                    .bind(sow_id)
-                    .bind(band_id)
-                    .bind(sow_id)
-                    .bind(band_id)
-                    .fetch_one(&state.pool)
-                    .await?;
+                    let alive = adoptions::effectif(&state.pool, sow_id, band_id).await?;
                     if number > alive {
                         return Err(AppError::Invalid(format!(
                             "Effectif insuffisant sous la mère : {alive} porcelet(s) présent(s)"

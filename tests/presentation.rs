@@ -44,10 +44,9 @@ fn la_maternite_suit_chaque_truie_jusqua_j28() {
     for marker in [
         "À mettre bas",
         "En cours",
-        "À surveiller",
         "Terminées",
         "Pertes jusqu’à J+28",
-        "porcelets présents estimés",
+        "porcelets présents",
     ] {
         assert!(
             template.contains(marker),
@@ -349,7 +348,8 @@ fn version_235_structure_maternite_et_sevrage_sont_tracables() {
     assert!(bands.contains("Site / zone<select"));
     assert!(bands.contains("N° marquage<select"));
     assert!(structure.contains("Places truies maternité"));
-    assert!(structure.contains("Places porcelets sous la mère"));
+    assert!(!structure.contains("Places porcelets sous la mère"));
+    assert!(structure.contains("aria-label=\"Nom de la case\""));
     assert!(maternity.contains("Sevrage et transfert vers le post-sevrage"));
     assert!(routes.contains("Sevrage : mouvement de la portée vers le post-sevrage"));
     assert!(routes.contains("SELECT COUNT(*) FROM inventairecase WHERE case_id=?"));

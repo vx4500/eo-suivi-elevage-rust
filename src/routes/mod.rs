@@ -23,6 +23,7 @@ use sqlx::{Column, Row, SqlitePool, TypeInfo, ValueRef};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+mod adoptions;
 mod import_historique;
 mod parity;
 
@@ -82,6 +83,14 @@ pub fn router(state: AppState) -> Router {
         .route("/export/mise-bas/{id}", get(export_mise_bas))
         .route("/bande/{id}/fiche-mise-bas", get(fiche_mise_bas))
         .route("/maternite", get(maternite))
+        .route(
+            "/maternite/bande/{band_id}/adoption",
+            post(adoptions::transferer),
+        )
+        .route(
+            "/maternite/bande/{band_id}/nourrice/{adoption_id}/sortie",
+            post(adoptions::sortie_nourrice),
+        )
         .route(
             "/maternite/bande/{band_id}/sevrage",
             post(maternite_sevrage),
@@ -2868,7 +2877,7 @@ async fn maternite(
         .next()
         .ok_or(AppError::NotFound)?;
     let sow_rows = sqlx::query(
-        "WITH sow_ids AS (SELECT id FROM truie WHERE bande_code=(SELECT code FROM bande WHERE id=?) UNION SELECT DISTINCT truie_id FROM evenement WHERE bande_id=? AND truie_id IS NOT NULL) SELECT t.id,t.num_travail,t.rfid,t.rang,t.race,e.id AS mise_bas_id,e.date AS date_mise_bas,COALESCE(e.nes_totaux,0) AS nes_totaux,COALESCE(e.nes_vifs,0) AS nes_vifs,COALESCE(e.mort_nes,0) AS mort_nes,COALESCE(e.momifies,0) AS momifies,COALESCE(e.chetifs,0) AS chetifs,COALESCE(e.ecrases,0) AS ecrases,COALESCE(e.tues_truie,0) AS tues_truie,e.heure_debut,e.heure_fin,COALESCE(e.suivi_actif,0) AS suivi_actif,e.delivrance_ok,e.note,c.num_vanne,c.nom AS case_nom,COALESCE((SELECT COUNT(*) FROM soinportee sp WHERE sp.evenement_id=e.id AND sp.date_realisee IS NULL),0) AS soins_attendus,(SELECT MIN(sp.date_prevue) FROM soinportee sp WHERE sp.evenement_id=e.id AND sp.date_realisee IS NULL) AS prochain_soin,CASE WHEN e.id IS NULL THEN 'a_mettre_bas' WHEN COALESCE(e.heure_debut,'')<>'' AND COALESCE(e.heure_fin,'')='' THEN 'en_cours' WHEN COALESCE(e.suivi_actif,0)=1 OR e.delivrance_ok=0 THEN 'a_surveiller' ELSE 'terminee' END AS statut_code,CASE WHEN e.id IS NULL THEN 'À mettre bas' WHEN COALESCE(e.heure_debut,'')<>'' AND COALESCE(e.heure_fin,'')='' THEN 'En cours' WHEN COALESCE(e.suivi_actif,0)=1 OR e.delivrance_ok=0 THEN 'À surveiller' ELSE 'Terminée' END AS statut_libelle,CASE WHEN e.date IS NOT NULL THEN CAST(julianday('now')-julianday(e.date) AS INTEGER) END AS jour_lactation,CASE WHEN e.date IS NOT NULL THEN date(e.date,'+28 day') END AS fin_suivi,CASE WHEN date('now')<date(e.date) THEN date(e.date) WHEN date('now')>date(e.date,'+28 day') THEN date(e.date,'+28 day') ELSE date('now') END AS date_perte_defaut,COALESCE((SELECT SUM(p.nb) FROM perteporcelet p WHERE p.truie_id=t.id AND p.bande_id=?),0) AS pertes,MAX(0,COALESCE(e.nes_vifs,0)-COALESCE((SELECT SUM(p.nb) FROM perteporcelet p WHERE p.truie_id=t.id AND p.bande_id=?),0)) AS porcelets_presents FROM sow_ids s JOIN truie t ON t.id=s.id LEFT JOIN evenement e ON e.id=(SELECT e2.id FROM evenement e2 WHERE e2.truie_id=t.id AND e2.bande_id=? AND e2.type='mise_bas' ORDER BY e2.date DESC,e2.id DESC LIMIT 1) LEFT JOIN casesalle c ON c.id=COALESCE(e.case_id,t.case_id) ORDER BY CASE WHEN e.id IS NULL THEN 0 WHEN COALESCE(e.heure_debut,'')<>'' AND COALESCE(e.heure_fin,'')='' THEN 1 WHEN COALESCE(e.suivi_actif,0)=1 OR e.delivrance_ok=0 THEN 2 ELSE 3 END,t.num_travail COLLATE NOCASE",
+        "WITH sow_ids AS (SELECT id FROM truie WHERE bande_code=(SELECT code FROM bande WHERE id=?) UNION SELECT DISTINCT truie_id FROM evenement WHERE bande_id=? AND truie_id IS NOT NULL) SELECT t.id,t.num_travail,t.rfid,t.rang,t.race,e.id AS mise_bas_id,e.date AS date_mise_bas,COALESCE(e.nes_totaux,0) AS nes_totaux,COALESCE(e.nes_vifs,0) AS nes_vifs,COALESCE(e.mort_nes,0) AS mort_nes,COALESCE(e.momifies,0) AS momifies,COALESCE(e.chetifs,0) AS chetifs,COALESCE(e.ecrases,0) AS ecrases,COALESCE(e.tues_truie,0) AS tues_truie,e.heure_debut,e.heure_fin,COALESCE(e.suivi_actif,0) AS suivi_actif,e.delivrance_ok,e.note,c.num_vanne,c.nom AS case_nom,COALESCE((SELECT COUNT(*) FROM soinportee sp WHERE sp.evenement_id=e.id AND sp.date_realisee IS NULL),0) AS soins_attendus,(SELECT MIN(sp.date_prevue) FROM soinportee sp WHERE sp.evenement_id=e.id AND sp.date_realisee IS NULL) AS prochain_soin,CASE WHEN e.id IS NULL THEN 'a_mettre_bas' WHEN COALESCE(e.heure_debut,'')<>'' AND COALESCE(e.heure_fin,'')='' THEN 'en_cours' WHEN COALESCE(e.suivi_actif,0)=1 OR e.delivrance_ok=0 THEN 'a_surveiller' ELSE 'terminee' END AS statut_code,CASE WHEN e.id IS NULL THEN 'À mettre bas' WHEN COALESCE(e.heure_debut,'')<>'' AND COALESCE(e.heure_fin,'')='' THEN 'En cours' WHEN COALESCE(e.suivi_actif,0)=1 OR e.delivrance_ok=0 THEN 'À surveiller' ELSE 'Terminée' END AS statut_libelle,CASE WHEN e.date IS NOT NULL THEN CAST(julianday('now')-julianday(e.date) AS INTEGER) END AS jour_lactation,CASE WHEN e.date IS NOT NULL THEN date(e.date,'+28 day') END AS fin_suivi,CASE WHEN date('now')<date(e.date) THEN date(e.date) WHEN date('now')>date(e.date,'+28 day') THEN date(e.date,'+28 day') ELSE date('now') END AS date_perte_defaut,COALESCE((SELECT SUM(p.nb) FROM perteporcelet p WHERE p.truie_id=t.id AND p.bande_id=?),0) AS pertes,COALESCE((SELECT presents FROM portee_effectif pe WHERE pe.id=e.id AND pe.bande_id=?),0) AS porcelets_presents FROM sow_ids s JOIN truie t ON t.id=s.id LEFT JOIN evenement e ON e.id=(SELECT e2.id FROM evenement e2 WHERE e2.truie_id=t.id AND e2.bande_id=? AND e2.type='mise_bas' ORDER BY e2.date DESC,e2.id DESC LIMIT 1) LEFT JOIN casesalle c ON c.id=COALESCE(e.case_id,t.case_id) ORDER BY CASE WHEN e.id IS NULL THEN 0 WHEN COALESCE(e.heure_debut,'')<>'' AND COALESCE(e.heure_fin,'')='' THEN 1 WHEN COALESCE(e.suivi_actif,0)=1 OR e.delivrance_ok=0 THEN 2 ELSE 3 END,t.num_travail COLLATE NOCASE",
     )
     .bind(band_id)
     .bind(band_id)
@@ -2918,6 +2927,13 @@ async fn maternite(
         if status == "a_surveiller" {
             increment(totals_object, "surveillance", 1);
         }
+        for key in ["mort_nes", "momifies"] {
+            increment(
+                totals_object,
+                key,
+                object.get(key).and_then(Value::as_i64).unwrap_or_default(),
+            );
+        }
         increment(
             totals_object,
             "nes_vifs",
@@ -2949,7 +2965,7 @@ async fn maternite(
     )
     .await?;
     let weaning_sows = generic_rows(&state.pool, &format!(
-        "SELECT t.id,t.num_travail,e.date AS date_mise_bas,e.case_id AS case_source_id,c.nom AS case_source,c.num_vanne AS vanne_source,MAX(0,COALESCE(e.nes_vifs,0)-COALESCE((SELECT SUM(p.nb) FROM perteporcelet p WHERE p.truie_id=t.id AND p.bande_id={band_id}),0)) AS porcelets_presents FROM evenement e JOIN truie t ON t.id=e.truie_id LEFT JOIN casesalle c ON c.id=COALESCE(e.case_id,t.case_id) WHERE e.bande_id={band_id} AND e.type='mise_bas' AND e.id=(SELECT e2.id FROM evenement e2 WHERE e2.bande_id={band_id} AND e2.truie_id=t.id AND e2.type='mise_bas' ORDER BY e2.date DESC,e2.id DESC LIMIT 1) AND NOT EXISTS(SELECT 1 FROM evenement sv WHERE sv.bande_id={band_id} AND sv.truie_id=t.id AND sv.type='sevrage' AND sv.date>=e.date) ORDER BY e.date,t.num_travail COLLATE NOCASE"
+        "SELECT t.id,t.num_travail,e.date AS date_mise_bas,e.case_id AS case_source_id,c.nom AS case_source,c.num_vanne AS vanne_source,COALESCE((SELECT presents FROM portee_effectif pe WHERE pe.id=e.id),0) AS porcelets_presents FROM evenement e JOIN truie t ON t.id=e.truie_id LEFT JOIN casesalle c ON c.id=COALESCE(e.case_id,t.case_id) WHERE e.bande_id={band_id} AND e.type='mise_bas' AND e.id=(SELECT e2.id FROM evenement e2 WHERE e2.bande_id={band_id} AND e2.truie_id=t.id AND e2.type='mise_bas' ORDER BY e2.date DESC,e2.id DESC LIMIT 1) AND NOT EXISTS(SELECT 1 FROM evenement sv WHERE sv.bande_id={band_id} AND sv.truie_id=t.id AND sv.type='sevrage' AND sv.date>=e.date) ORDER BY e.date,t.num_travail COLLATE NOCASE"
     )).await?;
     let mut destinations = generic_rows(&state.pool, "SELECT c.id,c.salle_id,c.nom,c.num_vanne,c.nb_max_porcs,s.nom AS salle,COALESCE(si.nom,si.code) AS site FROM casesalle c JOIN salle s ON s.id=c.salle_id JOIN site si ON si.id=s.site_id WHERE lower(COALESCE(s.type,'')) LIKE '%sevr%' OR lower(s.nom) LIKE '%sevr%' ORDER BY COALESCE(si.nom,si.code),s.ordre,c.nom").await?;
     for destination in &mut destinations {
@@ -2965,6 +2981,28 @@ async fn maternite(
                 .unwrap_or(Value::Null),
         );
     }
+    let receveuses = generic_rows(&state.pool, "SELECT e.id,t.num_travail,b.code AS bande,p.presents FROM portee_effectif p JOIN evenement e ON e.id=p.id JOIN truie t ON t.id=e.truie_id JOIN bande b ON b.id=e.bande_id WHERE t.reformee=0 AND NOT EXISTS(SELECT 1 FROM evenement sv WHERE sv.type='sevrage' AND sv.truie_id=t.id AND sv.bande_id=e.bande_id AND sv.date>=e.date) AND e.id=(SELECT e2.id FROM evenement e2 WHERE e2.truie_id=t.id AND e2.type='mise_bas' ORDER BY e2.date DESC,e2.id DESC LIMIT 1) ORDER BY t.num_travail").await?;
+    let adoptions = generic_rows(&state.pool, &format!("SELECT a.date,a.nombre,a.case_nourrice_id,a.note,ts.num_travail AS donneuse,td.num_travail AS receveuse,c.nom AS case_nourrice,s.nom AS salle_nourrice FROM adoptionporcelet a JOIN evenement es ON es.id=a.source_id LEFT JOIN evenement ed ON ed.id=a.destination_id JOIN truie ts ON ts.id=es.truie_id LEFT JOIN truie td ON td.id=ed.truie_id LEFT JOIN casesalle c ON c.id=a.case_nourrice_id LEFT JOIN salle s ON s.id=c.salle_id WHERE es.bande_id={band_id} OR ed.bande_id={band_id} ORDER BY a.date DESC,a.id DESC")).await?;
+    let cases_nourrices = generic_rows(&state.pool, "SELECT c.id,c.nom,s.nom AS salle FROM casesalle c JOIN salle s ON s.id=c.salle_id WHERE lower(COALESCE(s.type,'')) LIKE '%nourri%' OR lower(s.nom) LIKE '%nourri%' OR lower(COALESCE(s.type,'')) LIKE '%matern%' OR lower(s.nom) LIKE '%matern%' ORDER BY s.nom,c.nom").await?;
+    let nourrices = generic_rows(&state.pool, &format!("SELECT n.id,n.date,n.presents,c.nom AS case_nom,s.nom AS salle,t.num_travail AS donneuse FROM nourrice_effectif n JOIN casesalle c ON c.id=n.case_nourrice_id JOIN salle s ON s.id=c.salle_id JOIN truie t ON t.id=n.truie_id WHERE n.bande_id={band_id} ORDER BY s.nom,c.nom,n.date,n.id")).await?;
+    let sorties_nourrices = generic_rows(&state.pool, &format!("SELECT sn.date,sn.type,sn.nombre,sn.cause,c.nom AS case_nom,t.num_travail AS donneuse FROM sortienourrice sn JOIN nourrice_effectif n ON n.id=sn.adoption_id JOIN casesalle c ON c.id=n.case_nourrice_id JOIN truie t ON t.id=n.truie_id WHERE n.bande_id={band_id} ORDER BY sn.date DESC,sn.id DESC")).await?;
+    let presents_nourrice: i64 = nourrices
+        .iter()
+        .map(|n| n.get("presents").and_then(Value::as_i64).unwrap_or(0))
+        .sum();
+    let pertes_nourrice: i64 = sorties_nourrices
+        .iter()
+        .filter(|s| s.get("type").and_then(Value::as_str) == Some("perte"))
+        .map(|s| s.get("nombre").and_then(Value::as_i64).unwrap_or(0))
+        .sum();
+    totals["presents"] = json!(totals["presents"].as_i64().unwrap_or(0) + presents_nourrice);
+    totals["pertes"] = json!(totals["pertes"].as_i64().unwrap_or(0) + pertes_nourrice);
+    totals["nourrice"] = json!(presents_nourrice);
+    ctx.insert("cases_nourrices".into(), Value::Array(cases_nourrices));
+    ctx.insert("nourrices".into(), Value::Array(nourrices));
+    ctx.insert("sorties_nourrices".into(), Value::Array(sorties_nourrices));
+    ctx.insert("receveuses".into(), Value::Array(receveuses));
+    ctx.insert("adoptions".into(), Value::Array(adoptions));
     ctx.insert("bande".into(), band);
     ctx.insert("truies".into(), Value::Array(sows));
     ctx.insert("truies_sevrage".into(), Value::Array(weaning_sows));
@@ -3010,16 +3048,16 @@ async fn maternite_sevrage(
             })?;
         let source: Option<i64> = sqlx::query_scalar("SELECT COALESCE(e.case_id,t.case_id) FROM evenement e JOIN truie t ON t.id=e.truie_id WHERE e.bande_id=? AND e.truie_id=? AND e.type='mise_bas' AND NOT EXISTS(SELECT 1 FROM evenement sv WHERE sv.bande_id=e.bande_id AND sv.truie_id=e.truie_id AND sv.type='sevrage' AND sv.date>=e.date) ORDER BY e.date DESC,e.id DESC LIMIT 1")
             .bind(band_id).bind(sow_id).fetch_optional(&state.pool).await?.flatten();
-        let born: Option<i64> = sqlx::query_scalar("SELECT MAX(0,COALESCE(e.nes_vifs,0)-COALESCE((SELECT SUM(p.nb) FROM perteporcelet p WHERE p.truie_id=e.truie_id AND p.bande_id=e.bande_id),0)) FROM evenement e WHERE e.bande_id=? AND e.truie_id=? AND e.type='mise_bas' AND NOT EXISTS(SELECT 1 FROM evenement sv WHERE sv.bande_id=e.bande_id AND sv.truie_id=e.truie_id AND sv.type='sevrage' AND sv.date>=e.date) ORDER BY e.date DESC,e.id DESC LIMIT 1")
+        let born: Option<i64> = sqlx::query_scalar("SELECT (SELECT presents FROM portee_effectif pe WHERE pe.id=e.id) FROM evenement e WHERE e.bande_id=? AND e.truie_id=? AND e.type='mise_bas' AND NOT EXISTS(SELECT 1 FROM evenement sv WHERE sv.bande_id=e.bande_id AND sv.truie_id=e.truie_id AND sv.type='sevrage' AND sv.date>=e.date) ORDER BY e.date DESC,e.id DESC LIMIT 1")
             .bind(band_id).bind(sow_id).fetch_optional(&state.pool).await?.flatten();
         let present = born.ok_or_else(|| {
             AppError::Invalid(
                 "Cette truie est déjà sevrée ou n’a pas de mise-bas dans la bande".into(),
             )
         })?;
-        if number > present {
+        if number != present {
             return Err(AppError::Invalid(format!(
-                "La truie sélectionnée n’a que {present} porcelet(s) présent(s)"
+                "Sevrez les {present} porcelet(s) présents, ou enregistrez d’abord les adoptions et les décès"
             )));
         }
         let destination_room: Option<i64> = sqlx::query_scalar("SELECT c.salle_id FROM casesalle c JOIN salle s ON s.id=c.salle_id WHERE c.id=? AND (lower(COALESCE(s.type,'')) LIKE '%sevr%' OR lower(s.nom) LIKE '%sevr%')").bind(destination).fetch_optional(&state.pool).await?;
@@ -3045,8 +3083,15 @@ async fn maternite_sevrage(
             return Err(AppError::Invalid(format!("Capacité dépassée dans la case {case_id} : {present} présent(s), {number} ajouté(s), maximum {}", capacity.unwrap_or_default())));
         }
     }
-    let mut tx = state.pool.begin().await?;
+    let mut tx = state.pool.begin_with("BEGIN IMMEDIATE").await?;
     for (sow_id, number, destination, source, room_id) in selections {
+        let present: Option<i64> = sqlx::query_scalar("SELECT presents FROM portee_effectif WHERE truie_id=? AND bande_id=? ORDER BY date DESC,id DESC LIMIT 1")
+            .bind(sow_id).bind(band_id).fetch_optional(&mut *tx).await?;
+        if present != Some(number) {
+            return Err(AppError::Invalid(
+                "L’effectif a changé : rechargez la maternité avant de sevrer".into(),
+            ));
+        }
         sqlx::query("INSERT INTO evenement(type,date,truie_id,bande_id,nb_sevres,note) VALUES('sevrage',?,?,?,?,?)")
             .bind(&date).bind(sow_id).bind(band_id).bind(number).bind("Sevrage depuis le tableau maternité").execute(&mut *tx).await?;
         let source_room: Option<i64> = if let Some(source_id) = source {
@@ -3108,13 +3153,22 @@ async fn maternite_perte(
             "La perte doit être comprise entre la mise-bas et J+28".into(),
         ));
     }
+    let number = form_i64(&form, "nb")
+        .filter(|n| *n > 0)
+        .ok_or_else(|| AppError::Invalid("Nombre entier positif obligatoire".into()))?;
+    let present = adoptions::effectif(&state.pool, sow_id, band_id).await?;
+    if number > present {
+        return Err(AppError::Invalid(format!(
+            "Seulement {present} porcelet(s) vivant(s) présents"
+        )));
+    }
     sqlx::query(
         "INSERT INTO perteporcelet(truie_id,bande_id,age_j,nb,cause,date) VALUES(?,?,?,?,?,?)",
     )
     .bind(sow_id)
     .bind(band_id)
     .bind(age)
-    .bind(form_i64(&form, "nb").unwrap_or(1).max(1))
+    .bind(number)
     .bind(cause)
     .bind(loss_date_raw)
     .execute(&state.pool)
@@ -5764,23 +5818,12 @@ async fn case_pig_count(pool: &SqlitePool, case_id: i64) -> AppResult<i64> {
     Ok(case_pig_count_raw(pool, case_id).await?.max(0))
 }
 
-/// Effectif de porcelets sous la mère réellement présents dans une case de
-/// maternité : somme, pour chaque portée non encore sevrée logée dans cette
-/// case, des nés vifs moins les pertes déjà déclarées. Même requête que
-/// celle utilisée pour l'affichage `porcelets_presents` sur `/structure`,
-/// y compris le repli `COALESCE(e.case_id,t.case_id)` : la case de
-/// mise-bas n'est pas toujours enregistrée sur l'événement lui-même (champ
-/// facultatif à la saisie rapide), auquel cas la case actuelle de la truie
-/// fait foi — sans ce repli, une portée réellement présente aurait été
-/// comptée nulle et aurait reproduit le même faux blocage que celui corrigé
-/// ici, cette fois par absence de lien plutôt que par mauvaise source.
-/// À utiliser à la place de `case_pig_count` (basé sur
-/// `inventairecase`/`transfert`, jamais renseignés pour des porcelets sous
-/// la mère) partout où une case de maternité peut être choisie comme source
-/// d'un mouvement.
+/// Vivants des portées : naissances et adoptions reçues, moins les sorties et
+/// les décès déclarés. Les portées sevrées ne sont plus présentes. La vue commune
+/// évite de diverger entre Structure, Maternité et les contrôles de mouvements.
 async fn case_litter_count(pool: &SqlitePool, case_id: i64) -> AppResult<i64> {
     sqlx::query_scalar(
-        "SELECT CAST(COALESCE(SUM(MAX(0,COALESCE(e.nes_vifs,0)-COALESCE((SELECT SUM(p.nb) FROM perteporcelet p WHERE p.evenement_id=e.id OR (p.evenement_id IS NULL AND p.truie_id=e.truie_id AND p.bande_id=e.bande_id)),0))),0) AS INTEGER) FROM evenement e JOIN truie t ON t.id=e.truie_id WHERE e.type='mise_bas' AND COALESCE(e.case_id,t.case_id)=? AND NOT EXISTS(SELECT 1 FROM evenement sv WHERE sv.type='sevrage' AND sv.truie_id=e.truie_id AND sv.bande_id=e.bande_id AND sv.date>=e.date)",
+        "SELECT CAST(COALESCE((SELECT SUM(p.presents) FROM portee_effectif p JOIN evenement e ON e.id=p.id JOIN truie t ON t.id=p.truie_id WHERE COALESCE(e.case_id,t.case_id)=?1),0)+COALESCE((SELECT SUM(n.presents) FROM nourrice_effectif n WHERE n.case_nourrice_id=?1),0) AS INTEGER)",
     )
     .bind(case_id)
     .fetch_one(pool)
@@ -9079,20 +9122,15 @@ async fn structure(
             .get("truies_presentes")
             .and_then(Value::as_i64)
             .unwrap_or(0);
-        let piglets = object
-            .get("porcelets_presents")
-            .and_then(Value::as_i64)
-            .unwrap_or(0);
+        let id = object.get("id").and_then(Value::as_i64).unwrap_or_default();
+        let piglets = case_litter_count(&state.pool, id).await?;
+        object.insert("porcelets_presents".into(), json!(piglets));
         let sow_places = object
             .get("nb_max_truies")
             .and_then(Value::as_i64)
             .map(|v| (v - sows).max(0));
-        let piglet_places = object
-            .get("nb_max_porcelets")
-            .and_then(Value::as_i64)
-            .map(|v| (v - piglets).max(0));
         object.insert("places_truies_dispo".into(), json!(sow_places));
-        object.insert("places_porcelets_dispo".into(), json!(piglet_places));
+        object.insert("places_porcelets_dispo".into(), Value::Null);
     }
     let mut ctx = context(&session);
     ctx.insert("sites".into(), Value::Array(sites));
@@ -9173,7 +9211,7 @@ async fn structure_case(
     .bind(form_text(&form, "rfid"))
     .bind(form_i64(&form, "nb_max_porcs"))
     .bind(form_i64(&form, "nb_max_truies"))
-    .bind(form_i64(&form, "nb_max_porcelets"))
+    .bind(None::<i64>)
     .bind(form_text(&form, "num_vanne"))
     .execute(&state.pool)
     .await?;
@@ -9251,12 +9289,13 @@ async fn structure_case_rfid(
 ) -> AppResult<Response> {
     require_writer(&session)?;
     verify_csrf(&session, &form)?;
-    sqlx::query("UPDATE casesalle SET rfid=?,num_vanne=?,nb_max_porcs=?,nb_max_truies=?,nb_max_porcelets=? WHERE id=?")
+    sqlx::query("UPDATE casesalle SET rfid=?,num_vanne=?,nb_max_porcs=?,nb_max_truies=?,nb_max_porcelets=?,nom=COALESCE(?,nom) WHERE id=?")
         .bind(form_text(&form, "rfid"))
         .bind(form_text(&form, "num_vanne"))
         .bind(form_i64(&form, "nb_max_porcs"))
         .bind(form_i64(&form, "nb_max_truies"))
-        .bind(form_i64(&form, "nb_max_porcelets"))
+        .bind(None::<i64>)
+        .bind(form_text(&form, "nom"))
         .bind(id)
         .execute(&state.pool)
         .await?;
@@ -9271,6 +9310,16 @@ async fn structure_case_supprimer(
 ) -> AppResult<Response> {
     require_writer(&session)?;
     verify_csrf(&session, &form)?;
+    let nursery_history: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM adoptionporcelet WHERE case_nourrice_id=?")
+            .bind(id)
+            .fetch_one(&state.pool)
+            .await?;
+    if nursery_history > 0 {
+        return Err(AppError::Invalid(
+            "Cette case possède un historique de nourrice artificielle".into(),
+        ));
+    }
     let used: i64 = sqlx::query_scalar("SELECT (SELECT COUNT(*) FROM transfert WHERE case_source_id=? OR case_dest_id=?)+(SELECT COUNT(*) FROM declarationmort WHERE case_id=?)+(SELECT COUNT(*) FROM truie WHERE case_id=?)+(SELECT COUNT(*) FROM evenement WHERE case_id=?)+(SELECT COUNT(*) FROM inventairecase WHERE case_id=?)+(SELECT COUNT(*) FROM receptionachat WHERE case_id=?)")
         .bind(id).bind(id).bind(id).bind(id).bind(id).bind(id).bind(id).fetch_one(&state.pool).await?;
     if used > 0 {

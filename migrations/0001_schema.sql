@@ -995,3 +995,86 @@ WITH defaults(libelle) AS (VALUES
 INSERT INTO causeperte(libelle)
 SELECT d.libelle FROM defaults d
 WHERE NOT EXISTS(SELECT 1 FROM causeperte c WHERE lower(c.libelle)=lower(d.libelle));
+
+-- Une adoption associe toujours une portée source et exactement une destination.
+CREATE TABLE IF NOT EXISTS adoptionporcelet (
+    id INTEGER PRIMARY KEY,
+    date TEXT NOT NULL,
+    source_id INTEGER NOT NULL REFERENCES evenement(id) ON DELETE RESTRICT,
+    destination_id INTEGER REFERENCES evenement(id) ON DELETE RESTRICT,
+    case_nourrice_id INTEGER REFERENCES casesalle(id) ON DELETE RESTRICT,
+    nombre INTEGER NOT NULL CHECK(nombre > 0),
+    note TEXT,
+    CHECK(source_id <> destination_id),
+    CHECK((destination_id IS NOT NULL) + (case_nourrice_id IS NOT NULL) = 1)
+);
+CREATE INDEX IF NOT EXISTS adoption_source ON adoptionporcelet(source_id);
+CREATE INDEX IF NOT EXISTS adoption_destination ON adoptionporcelet(destination_id);
+CREATE VIEW IF NOT EXISTS portee_effectif AS
+SELECT e.id,e.truie_id,e.bande_id,e.date,
+    CASE WHEN EXISTS(SELECT 1 FROM evenement s WHERE s.type='sevrage' AND s.truie_id=e.truie_id AND s.bande_id=e.bande_id AND s.date>=e.date) THEN 0 ELSE COALESCE(e.nes_vifs,0)
+    + COALESCE((SELECT SUM(a.nombre) FROM adoptionporcelet a WHERE a.destination_id=e.id),0)
+    - COALESCE((SELECT SUM(a.nombre) FROM adoptionporcelet a WHERE a.source_id=e.id),0)
+    - COALESCE((SELECT SUM(p.nb) FROM perteporcelet p WHERE p.truie_id=e.truie_id AND p.bande_id=e.bande_id),0)
+    END AS presents
+FROM evenement e WHERE e.type='mise_bas';
+
+-- Les autres écrans ne peuvent pas rendre négative une portée adoptée.
+CREATE TRIGGER IF NOT EXISTS adoption_perte_coherente
+BEFORE INSERT ON perteporcelet
+WHEN EXISTS(SELECT 1 FROM evenement e JOIN adoptionporcelet a ON a.source_id=e.id OR a.destination_id=e.id WHERE e.truie_id=NEW.truie_id AND e.bande_id=NEW.bande_id)
+BEGIN
+    SELECT CASE WHEN NEW.nb <= 0 OR NEW.nb > (SELECT presents FROM portee_effectif WHERE truie_id=NEW.truie_id AND bande_id=NEW.bande_id ORDER BY date DESC,id DESC LIMIT 1)
+        THEN RAISE(ABORT,'Effectif insuffisant après adoption') END;
+    SELECT CASE WHEN NEW.evenement_id IS NULL AND NEW.date < (SELECT MAX(a.date) FROM adoptionporcelet a JOIN evenement e ON e.id=a.source_id OR e.id=a.destination_id WHERE e.truie_id=NEW.truie_id AND e.bande_id=NEW.bande_id)
+        THEN RAISE(ABORT,'La perte ne peut pas précéder la dernière adoption') END;
+END;
+CREATE TRIGGER IF NOT EXISTS adoption_sevrage_complet
+BEFORE INSERT ON evenement
+WHEN NEW.type='sevrage' AND EXISTS(SELECT 1 FROM evenement e JOIN adoptionporcelet a ON a.source_id=e.id OR a.destination_id=e.id WHERE e.truie_id=NEW.truie_id AND e.bande_id=NEW.bande_id)
+BEGIN
+    SELECT CASE WHEN NEW.nb_sevres IS NULL OR NEW.nb_sevres <> (SELECT presents FROM portee_effectif WHERE truie_id=NEW.truie_id AND bande_id=NEW.bande_id ORDER BY date DESC,id DESC LIMIT 1)
+        THEN RAISE(ABORT,'Sevrer tous les porcelets présents après adoption') END;
+    SELECT CASE WHEN NEW.date < (SELECT MAX(a.date) FROM adoptionporcelet a JOIN evenement e ON e.id=a.source_id OR e.id=a.destination_id WHERE e.truie_id=NEW.truie_id AND e.bande_id=NEW.bande_id)
+        THEN RAISE(ABORT,'Le sevrage ne peut pas précéder la dernière adoption') END;
+END;
+CREATE TRIGGER IF NOT EXISTS adoption_mise_bas_protegee
+BEFORE UPDATE ON evenement
+WHEN EXISTS(SELECT 1 FROM adoptionporcelet WHERE source_id=OLD.id OR destination_id=OLD.id)
+BEGIN
+    SELECT CASE WHEN NEW.type IS NOT OLD.type OR NEW.truie_id IS NOT OLD.truie_id OR NEW.bande_id IS NOT OLD.bande_id OR NEW.date IS NOT OLD.date
+        THEN RAISE(ABORT,'Cette mise-bas est liée à des adoptions') END;
+    SELECT CASE WHEN COALESCE(NEW.nes_vifs,0) - COALESCE(NEW.chetifs,0) - COALESCE(NEW.ecrases,0) - COALESCE(NEW.tues_truie,0)
+        + COALESCE((SELECT SUM(nombre) FROM adoptionporcelet WHERE destination_id=OLD.id),0)
+        - COALESCE((SELECT SUM(nombre) FROM adoptionporcelet WHERE source_id=OLD.id),0)
+        - COALESCE((SELECT SUM(nb) FROM perteporcelet WHERE truie_id=OLD.truie_id AND bande_id=OLD.bande_id AND evenement_id IS NULL),0)
+        - COALESCE((SELECT SUM(nb_sevres) FROM evenement WHERE type='sevrage' AND truie_id=OLD.truie_id AND bande_id=OLD.bande_id),0) < 0
+        THEN RAISE(ABORT,'La modification ferait disparaître des porcelets déjà transférés') END;
+END;
+
+CREATE INDEX IF NOT EXISTS adoption_case_nourrice ON adoptionporcelet(case_nourrice_id);
+CREATE TABLE IF NOT EXISTS sortienourrice (
+    id INTEGER PRIMARY KEY,
+    adoption_id INTEGER NOT NULL REFERENCES adoptionporcelet(id) ON DELETE RESTRICT,
+    date TEXT NOT NULL,
+    type TEXT NOT NULL CHECK(type IN ('perte','sevrage')),
+    nombre INTEGER NOT NULL CHECK(nombre > 0),
+    cause TEXT,
+    evenement_id INTEGER REFERENCES evenement(id) ON DELETE RESTRICT,
+    transfert_id INTEGER REFERENCES transfert(id) ON DELETE RESTRICT,
+    CHECK((type='perte' AND cause IS NOT NULL AND evenement_id IS NULL AND transfert_id IS NULL)
+        OR (type='sevrage' AND evenement_id IS NOT NULL AND transfert_id IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS sortie_nourrice_adoption ON sortienourrice(adoption_id);
+CREATE VIEW IF NOT EXISTS nourrice_effectif AS
+SELECT a.id,a.date,a.source_id,a.case_nourrice_id,e.bande_id,e.truie_id,
+    a.nombre-COALESCE((SELECT SUM(s.nombre) FROM sortienourrice s WHERE s.adoption_id=a.id),0) AS presents
+FROM adoptionporcelet a JOIN evenement e ON e.id=a.source_id
+WHERE a.case_nourrice_id IS NOT NULL;
+CREATE TRIGGER IF NOT EXISTS sortie_nourrice_coherente
+BEFORE INSERT ON sortienourrice
+BEGIN
+    SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM nourrice_effectif n WHERE n.id=NEW.adoption_id AND n.presents>=NEW.nombre AND NEW.date>=n.date)
+        OR NEW.date < (SELECT MAX(date) FROM sortienourrice WHERE adoption_id=NEW.adoption_id)
+        THEN RAISE(ABORT,'Sortie de nourrice incohérente') END;
+END;

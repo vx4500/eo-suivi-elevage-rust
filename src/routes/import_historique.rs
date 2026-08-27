@@ -100,12 +100,75 @@ pub(super) async fn modele_csv() -> Response {
     // Une ligne d'exemple correspondant à un seul cycle ; un même n° de
     // travail peut apparaître sur plusieurs lignes (une par bande/cycle).
     let example = [
-        "T001", "FR000000001", "Large White", "-", "-", "250000000001", "B1.26", "1", "Non",
-        "01/01/2026", "2", "-", "-", "-", "114", "23/01/2026", "P", "-", "-", "-", "-", "-",
-        "25/04/2026", "24/04/2026", "-", "MATERNITE / M1", "14", "0", "14", "0", "0", "0",
-        "0,00", "-", "-", "-", "-", "0,00", "0,00", "20/05/2026", "NORMAL", "12", "-", "-", "-",
-        "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-",
-        "-", "-", "-", "-", "Non", "Exemple à supprimer",
+        "T001",
+        "FR000000001",
+        "Large White",
+        "-",
+        "-",
+        "250000000001",
+        "B1.26",
+        "1",
+        "Non",
+        "01/01/2026",
+        "2",
+        "-",
+        "-",
+        "-",
+        "114",
+        "23/01/2026",
+        "P",
+        "-",
+        "-",
+        "-",
+        "-",
+        "-",
+        "25/04/2026",
+        "24/04/2026",
+        "-",
+        "MATERNITE / M1",
+        "14",
+        "0",
+        "14",
+        "0",
+        "0",
+        "0",
+        "0,00",
+        "-",
+        "-",
+        "-",
+        "-",
+        "0,00",
+        "0,00",
+        "20/05/2026",
+        "NORMAL",
+        "12",
+        "-",
+        "-",
+        "-",
+        "-",
+        "-",
+        "-",
+        "-",
+        "-",
+        "-",
+        "-",
+        "-",
+        "-",
+        "-",
+        "-",
+        "-",
+        "-",
+        "-",
+        "-",
+        "-",
+        "-",
+        "-",
+        "-",
+        "-",
+        "-",
+        "-",
+        "Non",
+        "Exemple à supprimer",
     ];
     body.push_str(&example.join(";"));
     body.push_str("\r\n");
@@ -121,7 +184,11 @@ pub(super) async fn modele_csv() -> Response {
     (headers, body).into_response()
 }
 
-fn cell<'a>(index: &HashMap<String, usize>, record: &'a csv::StringRecord, key: &str) -> Option<&'a str> {
+fn cell<'a>(
+    index: &HashMap<String, usize>,
+    record: &'a csv::StringRecord,
+    key: &str,
+) -> Option<&'a str> {
     let position = *index.get(&normalize_header(key))?;
     record
         .get(position)
@@ -133,7 +200,11 @@ fn normalize_header(raw: &str) -> String {
     raw.trim().trim_start_matches('\u{feff}').to_lowercase()
 }
 
-fn cell_date(index: &HashMap<String, usize>, record: &csv::StringRecord, key: &str) -> Option<String> {
+fn cell_date(
+    index: &HashMap<String, usize>,
+    record: &csv::StringRecord,
+    key: &str,
+) -> Option<String> {
     cell(index, record, key).and_then(parse_date_fr)
 }
 
@@ -340,7 +411,11 @@ pub(super) async fn importer(
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();
-        let action = if number.is_empty() { "erreur" } else { "ajouter" };
+        let action = if number.is_empty() {
+            "erreur"
+        } else {
+            "ajouter"
+        };
         let anomaly = number
             .is_empty()
             .then(|| "Numéro de travail manquant".to_string());
@@ -386,13 +461,20 @@ fn motif_sortie(type_reforme: Option<&str>, cause: Option<&str>) -> &'static str
     // examinée.
     let cause = cause.unwrap_or_default().to_lowercase();
     let type_reforme = type_reforme.unwrap_or_default().to_lowercase();
-    if cause.contains("utérus") || cause.contains("uterus") || cause.contains("rectum") || cause.contains("prolapsus") {
+    if cause.contains("utérus")
+        || cause.contains("uterus")
+        || cause.contains("rectum")
+        || cause.contains("prolapsus")
+    {
         "Prolapsus"
     } else if cause.contains("locomot") || cause.contains("boit") {
         "Boiterie / appareil locomoteur"
     } else if cause.contains("génétique") || cause.contains("genetique") {
         "Performances insuffisantes"
-    } else if type_reforme.contains("mort") || cause.contains("mort") || type_reforme.contains("euthanas") {
+    } else if type_reforme.contains("mort")
+        || cause.contains("mort")
+        || type_reforme.contains("euthanas")
+    {
         "Mortalité de cause indéterminée"
     } else if type_reforme.contains("vente") || type_reforme.contains("transfert") {
         "Vente / transfert"
@@ -492,24 +574,24 @@ async fn apply_row(
     let mut mesures = 0_i64;
     let mut reforme = false;
     let str_field = |key: &str| data.get(key).and_then(Value::as_str);
-        let num_field = |key: &str| data.get(key).and_then(Value::as_f64);
-        let int_field = |key: &str| data.get(key).and_then(Value::as_i64);
-        let bool_field = |key: &str| data.get(key).and_then(Value::as_bool).unwrap_or(false);
-        let number = str_field("num_travail")
-            .ok_or_else(|| AppError::Invalid(format!("Numéro absent à la ligne {line}")))?;
+    let num_field = |key: &str| data.get(key).and_then(Value::as_f64);
+    let int_field = |key: &str| data.get(key).and_then(Value::as_i64);
+    let bool_field = |key: &str| data.get(key).and_then(Value::as_bool).unwrap_or(false);
+    let number = str_field("num_travail")
+        .ok_or_else(|| AppError::Invalid(format!("Numéro absent à la ligne {line}")))?;
 
-        // 1) Truie : créée si absente, sinon identité complétée uniquement
-        //    là où elle est encore vide, pour ne jamais écraser une valeur
-        //    déjà correcte saisie depuis dans l'application.
-        let sow_id: i64 = if let Some(id) = sqlx::query_scalar::<_, i64>(
-            "SELECT id FROM truie WHERE lower(trim(num_travail))=lower(trim(?))",
-        )
-        .bind(number)
-        .fetch_optional(&mut **tx)
-        .await?
-        {
-            sqlx::query(
-                "UPDATE truie SET \
+    // 1) Truie : créée si absente, sinon identité complétée uniquement
+    //    là où elle est encore vide, pour ne jamais écraser une valeur
+    //    déjà correcte saisie depuis dans l'application.
+    let sow_id: i64 = if let Some(id) = sqlx::query_scalar::<_, i64>(
+        "SELECT id FROM truie WHERE lower(trim(num_travail))=lower(trim(?))",
+    )
+    .bind(number)
+    .fetch_optional(&mut **tx)
+    .await?
+    {
+        sqlx::query(
+            "UPDATE truie SET \
                  num_national=COALESCE(NULLIF(num_national,''),?), \
                  race=COALESCE(NULLIF(race,''),?), \
                  rfid=COALESCE(NULLIF(rfid,''),?), \
@@ -520,22 +602,22 @@ async fn apply_row(
                  mere_cochette=CASE WHEN ?=1 THEN 1 ELSE mere_cochette END, \
                  updated_at=CURRENT_TIMESTAMP \
                  WHERE id=?",
-            )
-            .bind(str_field("num_national"))
-            .bind(str_field("race"))
-            .bind(str_field("rfid"))
-            .bind(str_field("pere_national"))
-            .bind(str_field("mere_national"))
-            .bind(str_field("bande_code"))
-            .bind(int_field("rang").unwrap_or(0))
-            .bind(int_field("rang").unwrap_or(0))
-            .bind(bool_field("mere_cochette") as i64)
-            .bind(id)
-            .execute(&mut **tx)
-            .await?;
-            id
-        } else {
-            sqlx::query(
+        )
+        .bind(str_field("num_national"))
+        .bind(str_field("race"))
+        .bind(str_field("rfid"))
+        .bind(str_field("pere_national"))
+        .bind(str_field("mere_national"))
+        .bind(str_field("bande_code"))
+        .bind(int_field("rang").unwrap_or(0))
+        .bind(int_field("rang").unwrap_or(0))
+        .bind(bool_field("mere_cochette") as i64)
+        .bind(id)
+        .execute(&mut **tx)
+        .await?;
+        id
+    } else {
+        sqlx::query(
                 "INSERT INTO truie(num_travail,num_national,race,rfid,pere_national,mere_national,bande_code,rang,mere_cochette,statut,reformee,source_import_id) \
                  VALUES(?,?,?,?,?,?,?,?,?,'active',0,?)",
             )
@@ -552,20 +634,22 @@ async fn apply_row(
             .execute(&mut **tx)
             .await?
             .last_insert_rowid()
-        };
+    };
 
-        let band_id: Option<i64> = match str_field("bande_code") {
-            Some(code) => sqlx::query_scalar("SELECT id FROM bande WHERE code=?")
+    let band_id: Option<i64> = match str_field("bande_code") {
+        Some(code) => {
+            sqlx::query_scalar("SELECT id FROM bande WHERE code=?")
                 .bind(code)
                 .fetch_optional(&mut **tx)
-                .await?,
-            None => None,
-        };
+                .await?
+        }
+        None => None,
+    };
 
-        // 2) Événements de reproduction — un INSERT par type de fait daté
-        //    présent sur la ligne, ignoré s'il existe déjà (même truie,
-        //    même type, même date) pour rester rejouable sans dupliquer.
-        macro_rules! insert_event {
+    // 2) Événements de reproduction — un INSERT par type de fait daté
+    //    présent sur la ligne, ignoré s'il existe déjà (même truie,
+    //    même type, même date) pour rester rejouable sans dupliquer.
+    macro_rules! insert_event {
             ($type_evt:expr, $date:expr, $sql:expr, $($binds:expr),* $(,)?) => {
                 if let Some(date) = $date {
                     let existing: i64 = sqlx::query_scalar(
@@ -591,7 +675,7 @@ async fn apply_row(
             };
         }
 
-        insert_event!(
+    insert_event!(
             "ia",
             str_field("date_ia").map(str::to_string),
             "INSERT INTO evenement(type,date,truie_id,bande_id,produit,nb_doses,note) VALUES(?,?,?,?,?,?,?)",
@@ -599,37 +683,41 @@ async fn apply_row(
             int_field("nb_doses"),
             str_field("commentaire_ia"),
         );
-        let echo_resultat = str_field("resultat_echo").map(|value| match value {
-            "P" => "pleine",
-            "N" => "vide",
-            _ => "douteuse",
-        });
-        insert_event!(
-            "echo",
-            str_field("date_echo").map(str::to_string),
-            "INSERT INTO evenement(type,date,truie_id,bande_id,resultat) VALUES(?,?,?,?,?)",
-            echo_resultat,
-        );
-        insert_event!(
-            "retour",
-            str_field("date_retour").map(str::to_string),
-            "INSERT INTO evenement(type,date,truie_id,bande_id,resultat,note) VALUES(?,?,?,?,?,?)",
-            str_field("type_retour"),
-            str_field("commentaire_retour"),
-        );
-        insert_event!(
-            "avortement",
-            str_field("date_avortement").map(str::to_string),
-            "INSERT INTO evenement(type,date,truie_id,bande_id,note) VALUES(?,?,?,?,?)",
-            str_field("commentaire_avortement"),
-        );
-        let mise_bas_note = [str_field("structure"), str_field("commentaire_mise_bas"), str_field("pertes")]
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>()
-            .join(" · ");
-        let mise_bas_note = (!mise_bas_note.is_empty()).then_some(mise_bas_note);
-        insert_event!(
+    let echo_resultat = str_field("resultat_echo").map(|value| match value {
+        "P" => "pleine",
+        "N" => "vide",
+        _ => "douteuse",
+    });
+    insert_event!(
+        "echo",
+        str_field("date_echo").map(str::to_string),
+        "INSERT INTO evenement(type,date,truie_id,bande_id,resultat) VALUES(?,?,?,?,?)",
+        echo_resultat,
+    );
+    insert_event!(
+        "retour",
+        str_field("date_retour").map(str::to_string),
+        "INSERT INTO evenement(type,date,truie_id,bande_id,resultat,note) VALUES(?,?,?,?,?,?)",
+        str_field("type_retour"),
+        str_field("commentaire_retour"),
+    );
+    insert_event!(
+        "avortement",
+        str_field("date_avortement").map(str::to_string),
+        "INSERT INTO evenement(type,date,truie_id,bande_id,note) VALUES(?,?,?,?,?)",
+        str_field("commentaire_avortement"),
+    );
+    let mise_bas_note = [
+        str_field("structure"),
+        str_field("commentaire_mise_bas"),
+        str_field("pertes"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" · ");
+    let mise_bas_note = (!mise_bas_note.is_empty()).then_some(mise_bas_note);
+    insert_event!(
             "mise_bas",
             str_field("date_mise_bas").map(str::to_string),
             "INSERT INTO evenement(type,date,truie_id,bande_id,nes_totaux,nes_vifs,mort_nes,momifies,adoptes,retires,note) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
@@ -641,17 +729,17 @@ async fn apply_row(
             int_field("re"),
             mise_bas_note.as_deref(),
         );
-        let poids_moyen = match (num_field("poids_portee_sevrage"), int_field("nb_sevres")) {
-            (Some(total), Some(count)) if count > 0 => Some(total / count as f64),
-            _ => None,
-        };
-        let sevrage_note = [str_field("type_sevrage"), str_field("commentaire_sevrage")]
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>()
-            .join(" · ");
-        let sevrage_note = (!sevrage_note.is_empty()).then_some(sevrage_note);
-        insert_event!(
+    let poids_moyen = match (num_field("poids_portee_sevrage"), int_field("nb_sevres")) {
+        (Some(total), Some(count)) if count > 0 => Some(total / count as f64),
+        _ => None,
+    };
+    let sevrage_note = [str_field("type_sevrage"), str_field("commentaire_sevrage")]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" · ");
+    let sevrage_note = (!sevrage_note.is_empty()).then_some(sevrage_note);
+    insert_event!(
             "sevrage",
             str_field("date_dernier_sevrage").map(str::to_string),
             "INSERT INTO evenement(type,date,truie_id,bande_id,nb_sevres,poids_moyen,note) VALUES(?,?,?,?,?,?,?)",
@@ -660,10 +748,10 @@ async fn apply_row(
             sevrage_note.as_deref(),
         );
 
-        // 3) Mesures ELD/poids — une ligne mesuretruie par étape présente,
-        //    ignorée si une mesure identique (même truie/date/période)
-        //    existe déjà.
-        macro_rules! insert_mesure {
+    // 3) Mesures ELD/poids — une ligne mesuretruie par étape présente,
+    //    ignorée si une mesure identique (même truie/date/période)
+    //    existe déjà.
+    macro_rules! insert_mesure {
             ($periode:expr, $date:expr, $eld:expr, $poids:expr) => {
                 if let Some(date) = $date {
                     if $eld.is_some() || $poids.is_some() {
@@ -692,68 +780,67 @@ async fn apply_row(
                 }
             };
         }
-        insert_mesure!(
-            "Entrée quarantaine",
-            str_field("date_entree_quarantaine").map(str::to_string),
-            num_field("eld_entree_quarantaine"),
-            num_field("poids_entree_quarantaine")
-        );
-        insert_mesure!(
-            "Sortie quarantaine",
-            str_field("date_sortie_quarantaine").map(str::to_string),
-            num_field("eld_sortie_quarantaine"),
-            num_field("poids_sortie_quarantaine")
-        );
-        insert_mesure!(
-            "IA/Régumate",
-            str_field("date_eld_ia_regumate").map(str::to_string),
-            num_field("eld_ia_regumate"),
-            None::<f64>
-        );
-        insert_mesure!(
-            "Gestante",
-            str_field("date_eld_gestante").map(str::to_string),
-            num_field("eld_gestante"),
-            None::<f64>
-        );
-        insert_mesure!(
-            "Entrée maternité",
-            str_field("date_eld_entree_mater").map(str::to_string),
-            num_field("eld_entree_mater"),
-            None::<f64>
-        );
-        insert_mesure!(
-            "Sortie maternité",
-            str_field("date_eld_sortie_mater").map(str::to_string),
-            num_field("eld_sortie_mater"),
-            None::<f64>
-        );
-        insert_mesure!(
-            "Autre",
-            str_field("date_eld_autre").map(str::to_string),
-            num_field("eld_autre"),
-            None::<f64>
-        );
+    insert_mesure!(
+        "Entrée quarantaine",
+        str_field("date_entree_quarantaine").map(str::to_string),
+        num_field("eld_entree_quarantaine"),
+        num_field("poids_entree_quarantaine")
+    );
+    insert_mesure!(
+        "Sortie quarantaine",
+        str_field("date_sortie_quarantaine").map(str::to_string),
+        num_field("eld_sortie_quarantaine"),
+        num_field("poids_sortie_quarantaine")
+    );
+    insert_mesure!(
+        "IA/Régumate",
+        str_field("date_eld_ia_regumate").map(str::to_string),
+        num_field("eld_ia_regumate"),
+        None::<f64>
+    );
+    insert_mesure!(
+        "Gestante",
+        str_field("date_eld_gestante").map(str::to_string),
+        num_field("eld_gestante"),
+        None::<f64>
+    );
+    insert_mesure!(
+        "Entrée maternité",
+        str_field("date_eld_entree_mater").map(str::to_string),
+        num_field("eld_entree_mater"),
+        None::<f64>
+    );
+    insert_mesure!(
+        "Sortie maternité",
+        str_field("date_eld_sortie_mater").map(str::to_string),
+        num_field("eld_sortie_mater"),
+        None::<f64>
+    );
+    insert_mesure!(
+        "Autre",
+        str_field("date_eld_autre").map(str::to_string),
+        num_field("eld_autre"),
+        None::<f64>
+    );
 
-        // 4) Réforme — met à jour la truie une fois pour toutes si une date
-        //    de réforme est présente sur cette ligne, sans jamais revenir
-        //    en arrière sur une réforme déjà enregistrée par ailleurs.
-        if let Some(date_reforme) = str_field("date_reforme") {
-            let deja_reformee: i64 =
-                sqlx::query_scalar("SELECT reformee FROM truie WHERE id=?")
-                    .bind(sow_id)
-                    .fetch_one(&mut **tx)
-                    .await?;
-            if deja_reformee == 0 {
-                let motif = motif_sortie(str_field("type_reforme"), str_field("cause_reforme"));
-                let note_cause = str_field("cause_reforme").map(|cause| {
-                    format!(
-                        "Import historique — cause d'origine : {} ({})",
-                        cause,
-                        str_field("type_reforme").unwrap_or("-")
-                    )
-                });
-                sqlx::query(
+    // 4) Réforme — met à jour la truie une fois pour toutes si une date
+    //    de réforme est présente sur cette ligne, sans jamais revenir
+    //    en arrière sur une réforme déjà enregistrée par ailleurs.
+    if let Some(date_reforme) = str_field("date_reforme") {
+        let deja_reformee: i64 = sqlx::query_scalar("SELECT reformee FROM truie WHERE id=?")
+            .bind(sow_id)
+            .fetch_one(&mut **tx)
+            .await?;
+        if deja_reformee == 0 {
+            let motif = motif_sortie(str_field("type_reforme"), str_field("cause_reforme"));
+            let note_cause = str_field("cause_reforme").map(|cause| {
+                format!(
+                    "Import historique — cause d'origine : {} ({})",
+                    cause,
+                    str_field("type_reforme").unwrap_or("-")
+                )
+            });
+            sqlx::query(
                     "UPDATE truie SET reformee=1,statut='sortie',date_reforme=?,motif_sortie=?,note=NULLIF(TRIM(COALESCE(NULLIF(note,'')||' / ','')||COALESCE(?,'')),''),updated_at=CURRENT_TIMESTAMP WHERE id=?",
                 )
                 .bind(date_reforme)
@@ -762,9 +849,9 @@ async fn apply_row(
                 .bind(sow_id)
                 .execute(&mut **tx)
                 .await?;
-                reforme = true;
-            }
+            reforme = true;
         }
+    }
 
     Ok(RowOutcome {
         num_travail: number.to_string(),
@@ -936,7 +1023,10 @@ mod tests {
         tx2.commit().await.unwrap();
         assert_eq!(second.evenements, 0);
         assert_eq!(second.mesures, 0);
-        assert!(!second.reforme, "la réforme déjà enregistrée ne doit pas être rejouée");
+        assert!(
+            !second.reforme,
+            "la réforme déjà enregistrée ne doit pas être rejouée"
+        );
 
         let truies: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM truie")
             .fetch_one(&pool)

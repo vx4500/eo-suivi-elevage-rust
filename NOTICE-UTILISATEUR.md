@@ -185,3 +185,28 @@ Pour chaque mise à jour du logiciel :
 3. corriger les procédures concernées, pas seulement la liste des nouveautés ;
 4. faire relire la notice pendant la revue de code ;
 5. conserver dans Git la notice avec le code de la même version.
+
+
+## Adoptions et nourrice artificielle (2.2.42)
+
+Dans **Maternité / Mise-bas**, choisissez la bande, puis **Adoptions après mise-bas**.
+Sélectionnez la truie donneuse, le nombre de porcelets vivants, la date et une destination :
+une autre truie en allaitement ou une **case de nourrice artificielle**. La sortie et
+l’arrivée sont enregistrées ensemble ; une destination vide ou un effectif insuffisant
+empêche le transfert. Pour corriger le sens d'une adoption entre truies, saisissez un
+transfert inverse à la date de correction.
+
+Pour une machine à lait, créez une salle de type **Nourrice**, puis ses cases dans
+**Salles, cases et vannes**. Une case de maternité peut également servir de destination.
+Les cases n'imposent aucun plafond de porcelets sous la mère ou en nourrice ; leur nom
+peut être modifié sur la ligne de la case.
+
+La section **Nourrices artificielles** conserve chaque lot et sa bande d'origine.
+Enregistrez ses décès avec une cause, ou sevrez tout ou partie du lot vers une case de
+post-sevrage. Un sevrage crée automatiquement le mouvement et conserve le reliquat
+dans la nourrice. Ne déclarez pas une seconde fois ces décès sous la truie donneuse.
+Les dates doivent suivre l'entrée et les opérations déjà enregistrées.
+
+Les **porcelets présents** comprennent les vivants sous les truies et dans les nourrices
+rattachés à la bande affichée. Les **pertes enregistrées** incluent les décès déclarés en
+nourrice, mais jamais les mort-nés ni les momifiés. Les sevrés quittent ce compteur.
