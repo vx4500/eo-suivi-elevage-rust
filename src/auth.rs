@@ -12,6 +12,7 @@ const SALARIE_DEFAUT: &[&str] = &["planning", "bandes", "truies", "charcutiers",
 
 const SALARIE_HORS_SECTION_OK: &[&str] = &[
     "/apropos",
+    "/documents-obligatoires",
     "/correctifs",
     "/mon-compte",
     "/api",
@@ -261,6 +262,7 @@ pub async fn guard(State(state): State<AppState>, mut request: Request, next: Ne
             return Redirect::to("/mon-compte/mdp?force=1").into_response();
         }
         if session.role == "engraisseur"
+            && path != "/documents-obligatoires"
             && path != "/"
             && !path.starts_with("/engraissement")
             && !path.starts_with("/declaration")

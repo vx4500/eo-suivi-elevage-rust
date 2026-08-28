@@ -29,6 +29,10 @@ pub fn build() -> anyhow::Result<Environment<'static>> {
         "solutions_terrain.html",
         include_str!("../templates/solutions_terrain.html"),
     )?;
+    env.add_template(
+        "documents_obligatoires.html",
+        include_str!("../templates/documents_obligatoires.html"),
+    )?;
     env.add_global("app_version", env!("CARGO_PKG_VERSION"));
     env.add_template("base.html", include_str!("../templates/base.html"))?;
     env.add_template("login.html", include_str!("../templates/login.html"))?;
@@ -295,6 +299,30 @@ mod tests {
                 "template non enregistré dans build() : {filename}"
             );
         }
+    }
+
+    #[test]
+    fn documents_pdf_complets_et_rendus_sans_erreur() {
+        let groups: Vec<serde_json::Value> =
+            serde_json::from_str(include_str!("../resources/documents-elevage.json")).unwrap();
+        assert_eq!(groups.len(), 10);
+        assert_eq!(
+            groups
+                .iter()
+                .map(|g| g["items"].as_array().unwrap().len())
+                .sum::<usize>(),
+            65
+        );
+        let html = super::build()
+            .unwrap()
+            .get_template("documents_obligatoires.html")
+            .unwrap()
+            .render(minijinja::context! { document_groups => groups })
+            .unwrap();
+        assert_eq!(html.matches("class=\"doc-label\"").count(), 65);
+        assert!(html.contains("Justificatif de dérogation TATOUPA"));
+        assert!(html.contains("Bordereau de pesée du groupement"));
+        assert!(html.contains("ne stocke pas vos justificatifs"));
     }
 
     #[test]

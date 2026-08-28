@@ -485,6 +485,7 @@ pub fn router(state: AppState) -> Router {
         .route("/parametres", get(parametres))
         .route("/parametres/conduite-bandes", post(conduite_bandes_maj))
         .route("/correctifs", get(correctifs))
+        .route("/documents-obligatoires", get(documents_obligatoires))
         .route("/apropos", get(apropos))
         .route("/contact", get(contact))
         // Compatibilité complète avec les URL de la version Python 1.65.
@@ -11427,6 +11428,18 @@ async fn correctifs(
 ) -> AppResult<Html<String>> {
     render(&state, "correctifs.html", Value::Object(context(&session)))
 }
+async fn documents_obligatoires(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+) -> AppResult<Html<String>> {
+    let groups: Vec<serde_json::Value> =
+        serde_json::from_str(include_str!("../../resources/documents-elevage.json"))
+            .map_err(anyhow::Error::from)?;
+    let mut ctx = context(&session);
+    ctx.insert("document_groups".into(), serde_json::json!(groups));
+    render(&state, "documents_obligatoires.html", Value::Object(ctx))
+}
+
 async fn apropos(
     State(state): State<AppState>,
     Extension(session): Extension<SessionData>,

@@ -1,0 +1,322 @@
+[
+  {
+    "title": "Contrats",
+    "note": "Selon vos contrats, certifications, formations et salariés.",
+    "items": [
+      {
+        "name": "Contrat d’adhésion à un groupement",
+        "registre": false
+      },
+      {
+        "name": "Convention Qualification Élevage",
+        "registre": false
+      },
+      {
+        "name": "Déclaration MSA",
+        "registre": false
+      },
+      {
+        "name": "Contrat d’embauche / fiche de paie",
+        "registre": false
+      },
+      {
+        "name": "Attestations de formation (BEA, Certiphyto…)",
+        "registre": false
+      },
+      {
+        "name": "Cahier des charges éleveurs",
+        "registre": false
+      }
+    ]
+  },
+  {
+    "title": "Suivi technique",
+    "note": "Conserver les suivis et comptes rendus correspondant à votre élevage.",
+    "items": [
+      {
+        "name": "Registre de visites",
+        "registre": false
+      },
+      {
+        "name": "Comptes rendus de visites (technicien d’élevage, audit qualité, organisme externe, hygiène / nutrition)",
+        "registre": true
+      },
+      {
+        "name": "GTE et/ou résultats de lots",
+        "registre": false
+      },
+      {
+        "name": "GTTT",
+        "registre": false
+      },
+      {
+        "name": "Plan Progrès (PSA, LR, MEO…)",
+        "registre": false
+      },
+      {
+        "name": "Résultat qualité trimestriel",
+        "registre": false
+      },
+      {
+        "name": "Guide de bonnes pratiques d’hygiène",
+        "registre": false
+      },
+      {
+        "name": "Fiches de suivi des bandes et des truies",
+        "registre": true
+      },
+      {
+        "name": "Registre des traitements vétérinaires",
+        "registre": true
+      },
+      {
+        "name": "Plan d’alimentation",
+        "registre": false
+      },
+      {
+        "name": "Compte rendu des entretiens des installations (machine à soupe…)",
+        "registre": false
+      }
+    ]
+  },
+  {
+    "title": "Sécurité",
+    "note": "DUERP dès le premier salarié ; autres pièces selon vos installations et opérations.",
+    "items": [
+      {
+        "name": "Document unique d’évaluation des risques professionnels (DUERP)",
+        "registre": false
+      },
+      {
+        "name": "Plan d’évacuation",
+        "registre": false
+      },
+      {
+        "name": "Numéros d’urgence",
+        "registre": false
+      },
+      {
+        "name": "Protocole de sécurité déchargement / chargement",
+        "registre": false
+      },
+      {
+        "name": "Contrôle de l’installation électrique",
+        "registre": false
+      }
+    ]
+  },
+  {
+    "title": "Environnement et bâtiment",
+    "note": "Applicabilité selon le régime ICPE, les effluents, les surfaces et les aides demandées.",
+    "items": [
+      {
+        "name": "Études environnementales",
+        "registre": false
+      },
+      {
+        "name": "Contrat ou convention de traitement du lisier",
+        "registre": false
+      },
+      {
+        "name": "Dossier ICPE (autorisation d’exploiter, dérogations)",
+        "registre": true
+      },
+      {
+        "name": "Résultats d’analyses des effluents d’élevage",
+        "registre": false
+      },
+      {
+        "name": "Plan d’épandage",
+        "registre": false
+      },
+      {
+        "name": "Cahier de fertilisation",
+        "registre": false
+      },
+      {
+        "name": "Plan de fumure",
+        "registre": false
+      },
+      {
+        "name": "Déclaration PAC",
+        "registre": false
+      },
+      {
+        "name": "Bon de reprise des effluents d’élevage",
+        "registre": false
+      }
+    ]
+  },
+  {
+    "title": "Économie, juridique, fiscal et social",
+    "note": "Études à conserver lorsqu’elles existent ; ne remplace pas les obligations comptables et sociales.",
+    "items": [
+      {
+        "name": "Études économiques",
+        "registre": false
+      },
+      {
+        "name": "Études juridiques, fiscales et sociales",
+        "registre": false
+      }
+    ]
+  },
+  {
+    "title": "Sanitaire",
+    "note": "Pièces sanitaires et justificatifs des interventions et produits utilisés.",
+    "items": [
+      {
+        "name": "Justificatif de désignation du vétérinaire sanitaire",
+        "registre": true
+      },
+      {
+        "name": "Ordonnances",
+        "registre": true
+      },
+      {
+        "name": "Bordereau de suivi DASRI",
+        "registre": false
+      },
+      {
+        "name": "Compte rendu de visite du vétérinaire",
+        "registre": true
+      },
+      {
+        "name": "Bons de livraison / de sortie des produits vétérinaires",
+        "registre": true
+      },
+      {
+        "name": "Protocole de dératisation, avis de passage ou factures de dératisation",
+        "registre": true
+      },
+      {
+        "name": "Factures de désinfectant",
+        "registre": false
+      },
+      {
+        "name": "Programme sanitaire d’élevage (PSE), bilan sanitaire d’élevage (BSE)",
+        "registre": true
+      },
+      {
+        "name": "Résultats des contrôles abattoirs",
+        "registre": true
+      },
+      {
+        "name": "Comptes rendus d’analyses (sérologie, SDRP, autopsie…)",
+        "registre": true
+      },
+      {
+        "name": "Attestation sanitaire (Corée / Japon…)",
+        "registre": false
+      }
+    ]
+  },
+  {
+    "title": "Alimentation",
+    "note": "Les trois documents FAF concernent la fabrication d’aliments à la ferme.",
+    "items": [
+      {
+        "name": "Bons de livraison et étiquettes des aliments",
+        "registre": true
+      },
+      {
+        "name": "Résultats d’analyses d’eau",
+        "registre": true
+      },
+      {
+        "name": "Résultats d’analyses de soupe",
+        "registre": true
+      },
+      {
+        "name": "Résultats d’analyses des matières premières",
+        "registre": true
+      },
+      {
+        "name": "Résultats d’analyses des produits finis",
+        "registre": true
+      },
+      {
+        "name": "FAF — compte rendu de visite du technicien, audit FAF",
+        "registre": true
+      },
+      {
+        "name": "FAF — bon de livraison complémentaire",
+        "registre": true
+      },
+      {
+        "name": "FAF — bordereau de collecte des matières premières",
+        "registre": true
+      }
+    ]
+  },
+  {
+    "title": "Génétique",
+    "note": "Selon les achats et enlèvements de reproducteurs et de semence.",
+    "items": [
+      {
+        "name": "Bons de livraison des futurs reproducteurs",
+        "registre": true
+      },
+      {
+        "name": "Bons de livraison de semence",
+        "registre": true
+      },
+      {
+        "name": "Bons d’enlèvement des futurs reproducteurs",
+        "registre": true
+      },
+      {
+        "name": "Bons d’enlèvement de semence",
+        "registre": true
+      }
+    ]
+  },
+  {
+    "title": "Mouvements d’animaux",
+    "note": "Rassembler les justificatifs des entrées, sorties et enlèvements.",
+    "items": [
+      {
+        "name": "Bons de livraison des porcelets / laitons",
+        "registre": true
+      },
+      {
+        "name": "Bons d’enlèvement des porcelets / laitons",
+        "registre": true
+      },
+      {
+        "name": "Justificatif de dérogation TATOUPA",
+        "registre": true
+      },
+      {
+        "name": "Bon d’équarrissage",
+        "registre": false
+      },
+      {
+        "name": "Guide de transportabilité",
+        "registre": false
+      },
+      {
+        "name": "Bons d’enlèvement Uniporc (porcs charcutiers)",
+        "registre": true
+      },
+      {
+        "name": "Bons d’enlèvement Uniporc (réformes)",
+        "registre": true
+      }
+    ]
+  },
+  {
+    "title": "Abattoir",
+    "note": "Pièces des pesées et résultats de livraison.",
+    "items": [
+      {
+        "name": "Bordereau de pesée OPC (Uniporc)",
+        "registre": false
+      },
+      {
+        "name": "Bordereau de pesée du groupement",
+        "registre": false
+      }
+    ]
+  }
+]
