@@ -40,7 +40,7 @@ async fn schema_complet_et_ecritures_compatibles() -> anyhow::Result<()> {
     // ventilation multi-bandes des factures sans double comptage. La liste
     // numeromarquage normalise les numéros proposés aux bandes.
     // adoptionporcelet conserve les deux extrémités de chaque transfert.
-    assert_eq!(tables, 68);
+    assert_eq!(tables, 69);
     let objectives: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM objectif")
         .fetch_one(&pool)
         .await?;

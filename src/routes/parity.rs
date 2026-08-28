@@ -1,5 +1,4 @@
 use super::*;
-use serde_json::Value as JsonValue;
 use std::path::{Path as FsPath, PathBuf};
 
 fn require_admin(session: &SessionData) -> AppResult<()> {
@@ -601,13 +600,7 @@ economy_simple_update!(
     |f: &HashMap<String, String>| form_i64(f, "bande_id"),
     "/economique"
 );
-economy_simple_update!(
-    economique_vente_bande,
-    "venteapport",
-    "bande_id",
-    |f: &HashMap<String, String>| form_i64(f, "bande_id"),
-    "/economique"
-);
+
 economy_simple_update!(
     economique_veto_bande,
     "achatveto",
@@ -666,42 +659,10 @@ pub(super) async fn economique_semence_montant(
     Ok(Redirect::to("/economique").into_response())
 }
 
-pub(super) async fn economique_vente_lot_bande(
-    State(state): State<AppState>,
-    Extension(session): Extension<SessionData>,
-    Path((id, index)): Path<(i64, usize)>,
-    Form(form): Form<HashMap<String, String>>,
-) -> AppResult<Response> {
-    require_writer(&session)?;
-    verify_csrf(&session, &form)?;
-    let raw: Option<String> = sqlx::query_scalar("SELECT lots_json FROM venteapport WHERE id=?")
-        .bind(id)
-        .fetch_optional(&state.pool)
-        .await?
-        .flatten();
-    let mut lots: JsonValue = raw
-        .as_deref()
-        .and_then(|v| serde_json::from_str(v).ok())
-        .unwrap_or_else(|| json!([]));
-    let array = lots
-        .as_array_mut()
-        .ok_or_else(|| AppError::Invalid("Lots invalides".into()))?;
-    let lot = array.get_mut(index).ok_or(AppError::NotFound)?;
-    lot["bande_id"] = form_i64(&form, "bande_id")
-        .map(JsonValue::from)
-        .unwrap_or(JsonValue::Null);
-    sqlx::query("UPDATE venteapport SET lots_json=? WHERE id=?")
-        .bind(serde_json::to_string(&lots).map_err(|e| AppError::Internal(e.into()))?)
-        .bind(id)
-        .execute(&state.pool)
-        .await?;
-    Ok(Redirect::to("/economique").into_response())
-}
-
 async fn auto_link_economy(pool: &SqlitePool, include_sales: bool) -> AppResult<u64> {
     let mut changed = db::auto_assign_economic_invoices(pool).await?;
     if include_sales {
-        changed+=sqlx::query("UPDATE venteapport AS v SET bande_id=(SELECT b.id FROM bande b WHERE b.date_mb IS NOT NULL AND v.date IS NOT NULL AND julianday(v.date)-julianday(b.date_mb) BETWEEN 150 AND 225 ORDER BY ABS((julianday(v.date)-julianday(b.date_mb))-185) LIMIT 1) WHERE v.bande_id IS NULL AND v.date IS NOT NULL").execute(pool).await?.rows_affected();
+        changed += super::ventes::auto_assign(pool).await?;
     }
     Ok(changed)
 }

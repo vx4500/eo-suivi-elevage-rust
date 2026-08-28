@@ -26,8 +26,10 @@ use std::sync::Arc;
 mod adoptions;
 mod ameliorations;
 mod demo_portal;
+mod documents;
 mod import_historique;
 mod parity;
+mod ventes;
 
 fn contenu_sha256(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
@@ -485,7 +487,19 @@ pub fn router(state: AppState) -> Router {
         .route("/parametres", get(parametres))
         .route("/parametres/conduite-bandes", post(conduite_bandes_maj))
         .route("/correctifs", get(correctifs))
-        .route("/documents-obligatoires", get(documents_obligatoires))
+        .route("/documents-obligatoires", get(documents::page))
+        .route(
+            "/documents-obligatoires/{key}/importer",
+            post(documents::upload).layer(DefaultBodyLimit::max(9 * 1024 * 1024)),
+        )
+        .route(
+            "/documents-obligatoires/fichier/{id}",
+            get(documents::download),
+        )
+        .route(
+            "/documents-obligatoires/fichier/{id}/supprimer",
+            post(documents::delete),
+        )
         .route("/apropos", get(apropos))
         .route("/contact", get(contact))
         // Compatibilité complète avec les URL de la version Python 1.65.
@@ -538,13 +552,10 @@ pub fn router(state: AppState) -> Router {
             "/economique/semence/{id}/montant",
             post(parity::economique_semence_montant),
         )
-        .route(
-            "/economique/vente/{id}/bande",
-            post(parity::economique_vente_bande),
-        )
+        .route("/economique/vente/{id}/bande", post(ventes::direct))
         .route(
             "/economique/vente/{id}/lot/{lot_index}/bande",
-            post(parity::economique_vente_lot_bande),
+            post(ventes::lot),
         )
         .route(
             "/economique/veto/{id}/bande",
@@ -6967,10 +6978,10 @@ async fn economique(
     .await?;
     let band_results = generic_rows(
         &state.pool,
-        "WITH ventes AS (SELECT bande_id,SUM(COALESCE(nb_porcs,0)) AS porcs,SUM(COALESCE(poids_total,0)) AS poids,SUM(COALESCE(montant_ht,0)) AS recettes FROM venteapport GROUP BY bande_id),nb AS (SELECT categorie,facture_id,COUNT(*) AS n FROM affectationfacturebande GROUP BY categorie,facture_id),aliment AS (SELECT af.bande_id,SUM(COALESCE(x.montant_ht,0)/nb.n) AS cout FROM livraisonaliment x JOIN affectationfacturebande af ON af.categorie='aliment' AND af.facture_id=x.id JOIN nb ON nb.categorie=af.categorie AND nb.facture_id=af.facture_id GROUP BY af.bande_id),veto AS (SELECT af.bande_id,SUM(COALESCE(x.montant_ht,0)/nb.n) AS cout FROM achatveto x JOIN affectationfacturebande af ON af.categorie='veto' AND af.facture_id=x.id JOIN nb ON nb.categorie=af.categorie AND nb.facture_id=af.facture_id GROUP BY af.bande_id),semence AS (SELECT af.bande_id,SUM(COALESCE(x.montant_ht,0)/nb.n) AS cout FROM achatsemence x JOIN affectationfacturebande af ON af.categorie='semence' AND af.facture_id=x.id JOIN nb ON nb.categorie=af.categorie AND nb.facture_id=af.facture_id GROUP BY af.bande_id),genetique AS (SELECT af.bande_id,SUM(COALESCE(x.montant_ht,0)/nb.n) AS cout FROM achatgenetique x JOIN affectationfacturebande af ON af.categorie='genetique' AND af.facture_id=x.id JOIN nb ON nb.categorie=af.categorie AND nb.facture_id=af.facture_id GROUP BY af.bande_id) SELECT b.id,b.code,b.site,CAST(COALESCE(v.porcs,0) AS INTEGER) AS porcs,ROUND(COALESCE(v.poids,0),1) AS poids,ROUND(COALESCE(v.recettes,0),2) AS recettes,ROUND(COALESCE(a.cout,0),2) AS aliment,ROUND(COALESCE(vt.cout,0),2) AS veto,ROUND(COALESCE(se.cout,0),2) AS semence,ROUND(COALESCE(g.cout,0),2) AS genetique,ROUND(COALESCE(v.recettes,0)-COALESCE(a.cout,0)-COALESCE(vt.cout,0)-COALESCE(se.cout,0)-COALESCE(g.cout,0),2) AS marge,ROUND((COALESCE(a.cout,0)+COALESCE(vt.cout,0)+COALESCE(se.cout,0)+COALESCE(g.cout,0))/NULLIF(v.porcs,0),2) AS cout_par_porc,ROUND(COALESCE(v.recettes,0)/NULLIF(v.poids,0),3) AS prix_ht_kg FROM bande b LEFT JOIN ventes v ON v.bande_id=b.id LEFT JOIN aliment a ON a.bande_id=b.id LEFT JOIN veto vt ON vt.bande_id=b.id LEFT JOIN semence se ON se.bande_id=b.id LEFT JOIN genetique g ON g.bande_id=b.id WHERE v.porcs IS NOT NULL OR a.cout IS NOT NULL OR vt.cout IS NOT NULL OR se.cout IS NOT NULL OR g.cout IS NOT NULL ORDER BY b.date_mb IS NULL,b.date_mb,b.id",
+        "WITH ventes AS (SELECT bande_id,SUM(COALESCE(nb_porcs,0)) AS porcs,SUM(COALESCE(poids_total,0)) AS poids,SUM(COALESCE(montant_ht,0)) AS recettes FROM ventelot GROUP BY bande_id),nb AS (SELECT categorie,facture_id,COUNT(*) AS n FROM affectationfacturebande GROUP BY categorie,facture_id),aliment AS (SELECT af.bande_id,SUM(COALESCE(x.montant_ht,0)/nb.n) AS cout FROM livraisonaliment x JOIN affectationfacturebande af ON af.categorie='aliment' AND af.facture_id=x.id JOIN nb ON nb.categorie=af.categorie AND nb.facture_id=af.facture_id GROUP BY af.bande_id),veto AS (SELECT af.bande_id,SUM(COALESCE(x.montant_ht,0)/nb.n) AS cout FROM achatveto x JOIN affectationfacturebande af ON af.categorie='veto' AND af.facture_id=x.id JOIN nb ON nb.categorie=af.categorie AND nb.facture_id=af.facture_id GROUP BY af.bande_id),semence AS (SELECT af.bande_id,SUM(COALESCE(x.montant_ht,0)/nb.n) AS cout FROM achatsemence x JOIN affectationfacturebande af ON af.categorie='semence' AND af.facture_id=x.id JOIN nb ON nb.categorie=af.categorie AND nb.facture_id=af.facture_id GROUP BY af.bande_id),genetique AS (SELECT af.bande_id,SUM(COALESCE(x.montant_ht,0)/nb.n) AS cout FROM achatgenetique x JOIN affectationfacturebande af ON af.categorie='genetique' AND af.facture_id=x.id JOIN nb ON nb.categorie=af.categorie AND nb.facture_id=af.facture_id GROUP BY af.bande_id) SELECT b.id,b.code,b.site,CAST(COALESCE(v.porcs,0) AS INTEGER) AS porcs,ROUND(COALESCE(v.poids,0),1) AS poids,ROUND(COALESCE(v.recettes,0),2) AS recettes,ROUND(COALESCE(a.cout,0),2) AS aliment,ROUND(COALESCE(vt.cout,0),2) AS veto,ROUND(COALESCE(se.cout,0),2) AS semence,ROUND(COALESCE(g.cout,0),2) AS genetique,ROUND(COALESCE(v.recettes,0)-COALESCE(a.cout,0)-COALESCE(vt.cout,0)-COALESCE(se.cout,0)-COALESCE(g.cout,0),2) AS marge,ROUND((COALESCE(a.cout,0)+COALESCE(vt.cout,0)+COALESCE(se.cout,0)+COALESCE(g.cout,0))/NULLIF(v.porcs,0),2) AS cout_par_porc,ROUND(COALESCE(v.recettes,0)/NULLIF(v.poids,0),3) AS prix_ht_kg FROM bande b LEFT JOIN ventes v ON v.bande_id=b.id LEFT JOIN aliment a ON a.bande_id=b.id LEFT JOIN veto vt ON vt.bande_id=b.id LEFT JOIN semence se ON se.bande_id=b.id LEFT JOIN genetique g ON g.bande_id=b.id WHERE v.porcs IS NOT NULL OR a.cout IS NOT NULL OR vt.cout IS NOT NULL OR se.cout IS NOT NULL OR g.cout IS NOT NULL ORDER BY b.date_mb IS NULL,b.date_mb,b.id",
     )
     .await?;
-    let ventes = generic_rows(&state.pool,"WITH legacy AS (SELECT v.id,v.date,v.num_apport,CAST(json_extract(j.value,'$.nb_porcs') AS INTEGER) AS nb_porcs,CAST(json_extract(j.value,'$.poids') AS REAL) AS poids_total,CAST(json_extract(j.value,'$.montant_ht') AS REAL) AS montant_ht,CAST(json_extract(j.value,'$.muscle_lot') AS REAL) AS tmp,json_extract(j.value,'$.ref') AS lot_ref,1 AS is_legacy FROM venteapport v,json_each(v.lots_json) j WHERE json_valid(v.lots_json) AND json_type(v.lots_json)='array' AND json_array_length(v.lots_json)>1 AND v.nb_porcs=(SELECT SUM(CAST(json_extract(x.value,'$.nb_porcs') AS INTEGER)) FROM json_each(v.lots_json) x)), direct AS (SELECT id,date,num_apport,nb_porcs,poids_total,montant_ht,tmp,frappe AS lot_ref,0 AS is_legacy FROM venteapport v WHERE NOT (json_valid(v.lots_json) AND json_type(v.lots_json)='array' AND json_array_length(v.lots_json)>1 AND v.nb_porcs=(SELECT SUM(CAST(json_extract(x.value,'$.nb_porcs') AS INTEGER)) FROM json_each(v.lots_json) x))) SELECT id,date,num_apport,lot_ref,nb_porcs,poids_total,ROUND(montant_ht/NULLIF(poids_total,0),3) AS prix_ht_kg,montant_ht,tmp,is_legacy FROM (SELECT * FROM legacy UNION ALL SELECT * FROM direct) ORDER BY date DESC,id DESC LIMIT 100").await?;
+    let ventes = ventes::rows(&state.pool).await?;
     let achats = generic_rows(&state.pool,"SELECT id,date,'aliment' AS categorie,produit AS libelle,tonnage AS quantite,montant_ht FROM livraisonaliment UNION ALL SELECT id,date,'vétérinaire',produit,quantite,montant_ht FROM achatveto UNION ALL SELECT id,date,'semence',designation,nb_doses,montant_ht FROM achatsemence UNION ALL SELECT id,date,'génétique',designation,nb_animaux,montant_ht FROM achatgenetique ORDER BY date DESC,id DESC LIMIT 50").await?;
     let genetiques = generic_rows(&state.pool,"SELECT a.id,a.date,a.num_facture,a.fournisseur,a.designation,a.nb_animaux,a.poids_total,a.montant_ht,CASE WHEN a.montant_ht IS NULL THEN 1 ELSE 0 END AS ht_manquant,COALESCE((SELECT GROUP_CONCAT(b.code,', ') FROM affectationfacturebande af JOIN bande b ON b.id=af.bande_id WHERE af.categorie='genetique' AND af.facture_id=a.id),'Non affecté') AS bandes_affectees,COALESCE((SELECT GROUP_CONCAT(af.bande_id) FROM affectationfacturebande af WHERE af.categorie='genetique' AND af.facture_id=a.id),'') AS bandes_ids,EXISTS(SELECT 1 FROM affectationfacturebande af WHERE af.categorie='genetique' AND af.facture_id=a.id AND af.automatique=1) AS affectation_auto FROM achatgenetique a ORDER BY a.date DESC,a.id DESC LIMIT 250").await?;
     let aliments = generic_rows(&state.pool,"SELECT a.id,a.date,a.num_facture,a.fournisseur,a.produit,a.tonnage,a.montant_ht,COALESCE((SELECT GROUP_CONCAT(b.code,', ') FROM affectationfacturebande af JOIN bande b ON b.id=af.bande_id WHERE af.categorie='aliment' AND af.facture_id=a.id),'Non affecté') AS bandes_affectees,COALESCE((SELECT GROUP_CONCAT(af.bande_id) FROM affectationfacturebande af WHERE af.categorie='aliment' AND af.facture_id=a.id),'') AS bandes_ids,EXISTS(SELECT 1 FROM affectationfacturebande af WHERE af.categorie='aliment' AND af.facture_id=a.id AND af.automatique=1) AS affectation_auto FROM livraisonaliment a ORDER BY a.date DESC,a.id DESC LIMIT 250").await?;
@@ -7081,7 +7092,7 @@ async fn gte(
          CAST(COALESCE(a.tonnes,0) AS REAL),CAST(COALESCE(a.cout,0) AS REAL),\
          CAST(COALESCE(t.truies,0) AS INTEGER) \
          FROM bande b \
-         LEFT JOIN (SELECT bande_id,SUM(COALESCE(nb_porcs,0)) AS porcs,SUM(COALESCE(poids_total,0)) AS poids,SUM(COALESCE(montant_ht,0)) AS recettes FROM venteapport GROUP BY bande_id) v ON v.bande_id=b.id \
+         LEFT JOIN (SELECT bande_id,SUM(COALESCE(nb_porcs,0)) AS porcs,SUM(COALESCE(poids_total,0)) AS poids,SUM(COALESCE(montant_ht,0)) AS recettes FROM ventelot GROUP BY bande_id) v ON v.bande_id=b.id \
          LEFT JOIN (SELECT af.bande_id,SUM(COALESCE(l.tonnage,0)/(SELECT COUNT(*) FROM affectationfacturebande n WHERE n.categorie='aliment' AND n.facture_id=l.id)) AS tonnes,SUM(COALESCE(l.montant_ht,0)/(SELECT COUNT(*) FROM affectationfacturebande n WHERE n.categorie='aliment' AND n.facture_id=l.id)) AS cout FROM livraisonaliment l JOIN affectationfacturebande af ON af.categorie='aliment' AND af.facture_id=l.id GROUP BY af.bande_id) a ON a.bande_id=b.id \
          LEFT JOIN (SELECT bande_code,COUNT(*) AS truies FROM truie WHERE reformee=0 GROUP BY bande_code) t ON t.bande_code=b.code \
          WHERE b.active=1 AND (v.porcs IS NOT NULL OR a.cout IS NOT NULL OR t.truies IS NOT NULL) \
@@ -7371,22 +7382,23 @@ async fn economique_import_apercu(
     }
     let stored = sqlx::query_as::<_,(i64,String,Option<String>,String)>("SELECT numero_ligne,action,anomalie,donnees_json FROM importligne WHERE token=? ORDER BY numero_ligne")
         .bind(&token).fetch_all(&state.pool).await?;
+    let bands = ventes::bands(&state.pool).await?;
     let mut rows = Vec::new();
     for (number, action, anomaly, raw) in stored {
         let line: ImportLine =
             serde_json::from_str(&raw).map_err(|error| AppError::Internal(error.into()))?;
-        rows.push(json!({"ligne":number,"action":action,"anomalie":anomaly,"type":line.kind,"date":line.date,"reference":line.reference,"libelle":line.label,"quantite":line.quantity,"prix_unitaire":line.unit_price,"montant":line.amount}));
+        let (suggested_band, suggestion_note) = if line.kind == "vente" {
+            ventes::suggestion(import_detail_str(&line, "frappe"), &bands)
+        } else {
+            (None, "")
+        };
+        rows.push(json!({"suggested_band":suggested_band,"suggestion_note":suggestion_note,"lot_ref":import_detail_str(&line,"frappe"),"ligne":number,"action":action,"anomalie":anomaly,"type":line.kind,"date":line.date,"reference":line.reference,"libelle":line.label,"quantite":line.quantity,"prix_unitaire":line.unit_price,"montant":line.amount}));
     }
     let summary = journal
         .2
         .as_deref()
         .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
         .unwrap_or_else(|| json!({}));
-    let bands = generic_rows(
-        &state.pool,
-        "SELECT id,code,date_mb,site FROM bande ORDER BY active DESC,date_mb IS NULL,date_mb,id",
-    )
-    .await?;
     let mut ctx = context(&session);
     ctx.insert("token".into(), json!(token));
     ctx.insert(
@@ -7428,9 +7440,16 @@ async fn synchronise_sortie_abattoir(
     let mut allocations = Vec::<(i64, i64)>::new();
     if let Some(raw) = lots_json {
         if let Ok(Value::Array(lots)) = serde_json::from_str::<Value>(raw) {
-            for lot in lots {
+            let is_aggregate = lots.len() > 1
+                && number
+                    == lots
+                        .iter()
+                        .map(|lot| lot["nb_porcs"].as_i64())
+                        .collect::<Option<Vec<_>>>()
+                        .map(|counts| counts.iter().sum());
+            for lot in lots.into_iter().filter(|_| is_aggregate) {
                 if let (Some(band), Some(count)) = (
-                    lot.get("bande_id").and_then(Value::as_i64),
+                    lot.get("bande_id").and_then(Value::as_i64).or(band_id),
                     lot.get("nb_porcs").and_then(Value::as_i64),
                 ) {
                     if count > 0 {
@@ -7450,7 +7469,7 @@ async fn synchronise_sortie_abattoir(
         .unwrap_or_else(|| Local::now().date_naive().format("%Y-%m-%d").to_string());
     for (band, count) in allocations {
         let cases: Vec<(i64, i64)> = sqlx::query_as(
-            "SELECT c.id,CAST(COALESCE(SUM(CASE WHEN t.case_dest_id=c.id THEN COALESCE(t.nombre,0) WHEN t.id IN (SELECT transfert_id FROM sortienourrice WHERE transfert_id IS NOT NULL) THEN 0 ELSE -COALESCE(t.nombre,0) END),0) AS INTEGER) AS disponible FROM casesalle c JOIN transfert t ON (t.case_dest_id=c.id OR t.case_source_id=c.id) WHERE t.espece='porc' AND t.bande_id=? AND t.vente_apport_id IS NULL GROUP BY c.id HAVING disponible>0 ORDER BY MAX(t.date),c.id",
+            "SELECT c.id,CAST(COALESCE(SUM(CASE WHEN t.case_dest_id=c.id THEN COALESCE(t.nombre,0) WHEN t.id IN (SELECT transfert_id FROM sortienourrice WHERE transfert_id IS NOT NULL) THEN 0 ELSE -COALESCE(t.nombre,0) END),0) AS INTEGER) AS disponible FROM casesalle c JOIN transfert t ON (t.case_dest_id=c.id OR t.case_source_id=c.id) WHERE t.espece='porc' AND t.bande_id=? GROUP BY c.id HAVING disponible>0 ORDER BY MAX(t.date),c.id",
         )
         .bind(band)
         .fetch_all(&mut **tx)
@@ -7530,7 +7549,14 @@ async fn economique_import_confirmer(
     for (number, line) in &lines {
         // La bande globale reste un raccourci, mais chaque ligne (et donc
         // chaque lot d'un apport) peut être ventilée indépendamment.
-        let band_id = form_i64(&form, &format!("bande_ligne_{number}")).or(band_id);
+        let band_id =
+            match form_text(&form, &format!("bande_ligne_{number}")).as_deref() {
+                Some("none") => None,
+                None | Some("default") => band_id,
+                Some(value) => Some(value.parse::<i64>().ok().filter(|id| *id > 0).ok_or_else(
+                    || AppError::Invalid(format!("Bande invalide à la ligne {number}")),
+                )?),
+            };
         let band_code: Option<String> = if let Some(id) = band_id {
             Some(
                 sqlx::query_scalar("SELECT code FROM bande WHERE id=?")
@@ -10815,7 +10841,7 @@ async fn abattoir(
             .await?;
     let synthesis = generic_rows(
         &state.pool,
-        "WITH v AS (SELECT bande_id,SUM(COALESCE(nb_porcs,0)) AS porcs,SUM(COALESCE(poids_total,0)) AS poids,SUM(COALESCE(montant_ht,0)) AS ht,SUM(COALESCE(tmp,0)*COALESCE(nb_porcs,0))/NULLIF(SUM(COALESCE(nb_porcs,0)),0) AS tmp FROM venteapport GROUP BY bande_id),s AS (SELECT bande_code,SUM(COALESCE(nombre,0)) AS saisies FROM saisieabattoir GROUP BY bande_code) SELECT b.id,b.code,CAST(COALESCE(v.porcs,0) AS INTEGER) AS porcs,ROUND(v.poids/NULLIF(v.porcs,0),1) AS poids_moyen,ROUND(v.tmp,2) AS tmp,ROUND(v.ht/NULLIF(v.poids,0),3) AS prix_ht_kg,ROUND(v.ht,2) AS ht,CAST(COALESCE(s.saisies,0) AS INTEGER) AS saisies FROM bande b LEFT JOIN v ON v.bande_id=b.id LEFT JOIN s ON s.bande_code=b.code WHERE v.porcs IS NOT NULL OR s.saisies IS NOT NULL ORDER BY b.date_mb DESC,b.id DESC",
+        "WITH v AS (SELECT bande_id,SUM(COALESCE(nb_porcs,0)) AS porcs,SUM(COALESCE(poids_total,0)) AS poids,SUM(COALESCE(montant_ht,0)) AS ht,SUM(COALESCE(tmp,0)*COALESCE(nb_porcs,0))/NULLIF(SUM(COALESCE(nb_porcs,0)),0) AS tmp FROM ventelot GROUP BY bande_id),s AS (SELECT bande_code,SUM(COALESCE(nombre,0)) AS saisies FROM saisieabattoir GROUP BY bande_code) SELECT b.id,b.code,CAST(COALESCE(v.porcs,0) AS INTEGER) AS porcs,ROUND(v.poids/NULLIF(v.porcs,0),1) AS poids_moyen,ROUND(v.tmp,2) AS tmp,ROUND(v.ht/NULLIF(v.poids,0),3) AS prix_ht_kg,ROUND(v.ht,2) AS ht,CAST(COALESCE(s.saisies,0) AS INTEGER) AS saisies FROM bande b LEFT JOIN v ON v.bande_id=b.id LEFT JOIN s ON s.bande_code=b.code WHERE v.porcs IS NOT NULL OR s.saisies IS NOT NULL ORDER BY b.date_mb DESC,b.id DESC",
     )
     .await?;
     let seizure_causes = generic_rows(
@@ -11428,18 +11454,6 @@ async fn correctifs(
 ) -> AppResult<Html<String>> {
     render(&state, "correctifs.html", Value::Object(context(&session)))
 }
-async fn documents_obligatoires(
-    State(state): State<AppState>,
-    Extension(session): Extension<SessionData>,
-) -> AppResult<Html<String>> {
-    let groups: Vec<serde_json::Value> =
-        serde_json::from_str(include_str!("../../resources/documents-elevage.json"))
-            .map_err(anyhow::Error::from)?;
-    let mut ctx = context(&session);
-    ctx.insert("document_groups".into(), serde_json::json!(groups));
-    render(&state, "documents_obligatoires.html", Value::Object(ctx))
-}
-
 async fn apropos(
     State(state): State<AppState>,
     Extension(session): Extension<SessionData>,

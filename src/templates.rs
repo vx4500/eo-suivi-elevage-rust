@@ -322,7 +322,7 @@ mod tests {
         assert_eq!(html.matches("class=\"doc-label\"").count(), 65);
         assert!(html.contains("Justificatif de dérogation TATOUPA"));
         assert!(html.contains("Bordereau de pesée du groupement"));
-        assert!(html.contains("ne stocke pas vos justificatifs"));
+        assert!(!html.contains("Ce que cette liste couvre"));
     }
 
     #[test]

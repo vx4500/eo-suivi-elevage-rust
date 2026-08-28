@@ -1086,3 +1086,16 @@ CREATE TABLE IF NOT EXISTS archive_nettoyage (
  motif TEXT NOT NULL, archive_le TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  PRIMARY KEY(table_source,ligne_id)
 );
+
+-- Justificatifs privés, inclus dans la sauvegarde SQLite.
+CREATE TABLE IF NOT EXISTS documentjustificatif (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ document_key TEXT NOT NULL,
+ nom TEXT NOT NULL,
+ mime TEXT NOT NULL,
+ contenu BLOB NOT NULL CHECK(length(contenu)>0 AND length(contenu)<=8388608),
+ sha256 TEXT NOT NULL,
+ cree_par INTEGER REFERENCES utilisateur(id) ON DELETE SET NULL,
+ cree_le TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE(document_key,sha256)
+);

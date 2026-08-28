@@ -148,6 +148,10 @@ pub async fn init(pool: &SqlitePool) -> anyhow::Result<()> {
     ] {
         ensure_column(pool, table, column, definition).await?;
     }
+    // Après les colonnes additives : compatible avec les bases anciennes.
+    sqlx::raw_sql(include_str!("../migrations/0002_ventelot.sql"))
+        .execute(pool)
+        .await?;
     sqlx::query("CREATE UNIQUE INDEX IF NOT EXISTS ux_importjournal_contenu_sha256 ON importjournal(contenu_sha256) WHERE contenu_sha256 IS NOT NULL")
         .execute(pool)
         .await?;

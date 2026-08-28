@@ -5,27 +5,33 @@
     "items": [
       {
         "name": "Contrat d’adhésion à un groupement",
-        "registre": false
+        "registre": false,
+        "id": "doc-01-01"
       },
       {
         "name": "Convention Qualification Élevage",
-        "registre": false
+        "registre": false,
+        "id": "doc-01-02"
       },
       {
         "name": "Déclaration MSA",
-        "registre": false
+        "registre": false,
+        "id": "doc-01-03"
       },
       {
         "name": "Contrat d’embauche / fiche de paie",
-        "registre": false
+        "registre": false,
+        "id": "doc-01-04"
       },
       {
         "name": "Attestations de formation (BEA, Certiphyto…)",
-        "registre": false
+        "registre": false,
+        "id": "doc-01-05"
       },
       {
         "name": "Cahier des charges éleveurs",
-        "registre": false
+        "registre": false,
+        "id": "doc-01-06"
       }
     ]
   },
@@ -35,47 +41,58 @@
     "items": [
       {
         "name": "Registre de visites",
-        "registre": false
+        "registre": false,
+        "id": "doc-02-01"
       },
       {
         "name": "Comptes rendus de visites (technicien d’élevage, audit qualité, organisme externe, hygiène / nutrition)",
-        "registre": true
+        "registre": true,
+        "id": "doc-02-02"
       },
       {
         "name": "GTE et/ou résultats de lots",
-        "registre": false
+        "registre": false,
+        "id": "doc-02-03"
       },
       {
         "name": "GTTT",
-        "registre": false
+        "registre": false,
+        "id": "doc-02-04"
       },
       {
         "name": "Plan Progrès (PSA, LR, MEO…)",
-        "registre": false
+        "registre": false,
+        "id": "doc-02-05"
       },
       {
         "name": "Résultat qualité trimestriel",
-        "registre": false
+        "registre": false,
+        "id": "doc-02-06"
       },
       {
         "name": "Guide de bonnes pratiques d’hygiène",
-        "registre": false
+        "registre": false,
+        "id": "doc-02-07"
       },
       {
         "name": "Fiches de suivi des bandes et des truies",
-        "registre": true
+        "registre": true,
+        "id": "doc-02-08"
       },
       {
         "name": "Registre des traitements vétérinaires",
-        "registre": true
+        "registre": true,
+        "id": "doc-02-09"
       },
       {
         "name": "Plan d’alimentation",
-        "registre": false
+        "registre": false,
+        "id": "doc-02-10"
       },
       {
         "name": "Compte rendu des entretiens des installations (machine à soupe…)",
-        "registre": false
+        "registre": false,
+        "id": "doc-02-11"
       }
     ]
   },
@@ -85,23 +102,28 @@
     "items": [
       {
         "name": "Document unique d’évaluation des risques professionnels (DUERP)",
-        "registre": false
+        "registre": false,
+        "id": "doc-03-01"
       },
       {
         "name": "Plan d’évacuation",
-        "registre": false
+        "registre": false,
+        "id": "doc-03-02"
       },
       {
         "name": "Numéros d’urgence",
-        "registre": false
+        "registre": false,
+        "id": "doc-03-03"
       },
       {
         "name": "Protocole de sécurité déchargement / chargement",
-        "registre": false
+        "registre": false,
+        "id": "doc-03-04"
       },
       {
         "name": "Contrôle de l’installation électrique",
-        "registre": false
+        "registre": false,
+        "id": "doc-03-05"
       }
     ]
   },
@@ -111,39 +133,48 @@
     "items": [
       {
         "name": "Études environnementales",
-        "registre": false
+        "registre": false,
+        "id": "doc-04-01"
       },
       {
         "name": "Contrat ou convention de traitement du lisier",
-        "registre": false
+        "registre": false,
+        "id": "doc-04-02"
       },
       {
         "name": "Dossier ICPE (autorisation d’exploiter, dérogations)",
-        "registre": true
+        "registre": true,
+        "id": "doc-04-03"
       },
       {
         "name": "Résultats d’analyses des effluents d’élevage",
-        "registre": false
+        "registre": false,
+        "id": "doc-04-04"
       },
       {
         "name": "Plan d’épandage",
-        "registre": false
+        "registre": false,
+        "id": "doc-04-05"
       },
       {
         "name": "Cahier de fertilisation",
-        "registre": false
+        "registre": false,
+        "id": "doc-04-06"
       },
       {
         "name": "Plan de fumure",
-        "registre": false
+        "registre": false,
+        "id": "doc-04-07"
       },
       {
         "name": "Déclaration PAC",
-        "registre": false
+        "registre": false,
+        "id": "doc-04-08"
       },
       {
         "name": "Bon de reprise des effluents d’élevage",
-        "registre": false
+        "registre": false,
+        "id": "doc-04-09"
       }
     ]
   },
@@ -153,11 +184,13 @@
     "items": [
       {
         "name": "Études économiques",
-        "registre": false
+        "registre": false,
+        "id": "doc-05-01"
       },
       {
         "name": "Études juridiques, fiscales et sociales",
-        "registre": false
+        "registre": false,
+        "id": "doc-05-02"
       }
     ]
   },
@@ -167,47 +200,58 @@
     "items": [
       {
         "name": "Justificatif de désignation du vétérinaire sanitaire",
-        "registre": true
+        "registre": true,
+        "id": "doc-06-01"
       },
       {
         "name": "Ordonnances",
-        "registre": true
+        "registre": true,
+        "id": "doc-06-02"
       },
       {
         "name": "Bordereau de suivi DASRI",
-        "registre": false
+        "registre": false,
+        "id": "doc-06-03"
       },
       {
         "name": "Compte rendu de visite du vétérinaire",
-        "registre": true
+        "registre": true,
+        "id": "doc-06-04"
       },
       {
         "name": "Bons de livraison / de sortie des produits vétérinaires",
-        "registre": true
+        "registre": true,
+        "id": "doc-06-05"
       },
       {
         "name": "Protocole de dératisation, avis de passage ou factures de dératisation",
-        "registre": true
+        "registre": true,
+        "id": "doc-06-06"
       },
       {
         "name": "Factures de désinfectant",
-        "registre": false
+        "registre": false,
+        "id": "doc-06-07"
       },
       {
         "name": "Programme sanitaire d’élevage (PSE), bilan sanitaire d’élevage (BSE)",
-        "registre": true
+        "registre": true,
+        "id": "doc-06-08"
       },
       {
         "name": "Résultats des contrôles abattoirs",
-        "registre": true
+        "registre": true,
+        "id": "doc-06-09"
       },
       {
         "name": "Comptes rendus d’analyses (sérologie, SDRP, autopsie…)",
-        "registre": true
+        "registre": true,
+        "id": "doc-06-10"
       },
       {
         "name": "Attestation sanitaire (Corée / Japon…)",
-        "registre": false
+        "registre": false,
+        "id": "doc-06-11"
       }
     ]
   },
@@ -217,35 +261,43 @@
     "items": [
       {
         "name": "Bons de livraison et étiquettes des aliments",
-        "registre": true
+        "registre": true,
+        "id": "doc-07-01"
       },
       {
         "name": "Résultats d’analyses d’eau",
-        "registre": true
+        "registre": true,
+        "id": "doc-07-02"
       },
       {
         "name": "Résultats d’analyses de soupe",
-        "registre": true
+        "registre": true,
+        "id": "doc-07-03"
       },
       {
         "name": "Résultats d’analyses des matières premières",
-        "registre": true
+        "registre": true,
+        "id": "doc-07-04"
       },
       {
         "name": "Résultats d’analyses des produits finis",
-        "registre": true
+        "registre": true,
+        "id": "doc-07-05"
       },
       {
         "name": "FAF — compte rendu de visite du technicien, audit FAF",
-        "registre": true
+        "registre": true,
+        "id": "doc-07-06"
       },
       {
         "name": "FAF — bon de livraison complémentaire",
-        "registre": true
+        "registre": true,
+        "id": "doc-07-07"
       },
       {
         "name": "FAF — bordereau de collecte des matières premières",
-        "registre": true
+        "registre": true,
+        "id": "doc-07-08"
       }
     ]
   },
@@ -255,19 +307,23 @@
     "items": [
       {
         "name": "Bons de livraison des futurs reproducteurs",
-        "registre": true
+        "registre": true,
+        "id": "doc-08-01"
       },
       {
         "name": "Bons de livraison de semence",
-        "registre": true
+        "registre": true,
+        "id": "doc-08-02"
       },
       {
         "name": "Bons d’enlèvement des futurs reproducteurs",
-        "registre": true
+        "registre": true,
+        "id": "doc-08-03"
       },
       {
         "name": "Bons d’enlèvement de semence",
-        "registre": true
+        "registre": true,
+        "id": "doc-08-04"
       }
     ]
   },
@@ -277,31 +333,38 @@
     "items": [
       {
         "name": "Bons de livraison des porcelets / laitons",
-        "registre": true
+        "registre": true,
+        "id": "doc-09-01"
       },
       {
         "name": "Bons d’enlèvement des porcelets / laitons",
-        "registre": true
+        "registre": true,
+        "id": "doc-09-02"
       },
       {
         "name": "Justificatif de dérogation TATOUPA",
-        "registre": true
+        "registre": true,
+        "id": "doc-09-03"
       },
       {
         "name": "Bon d’équarrissage",
-        "registre": false
+        "registre": false,
+        "id": "doc-09-04"
       },
       {
         "name": "Guide de transportabilité",
-        "registre": false
+        "registre": false,
+        "id": "doc-09-05"
       },
       {
         "name": "Bons d’enlèvement Uniporc (porcs charcutiers)",
-        "registre": true
+        "registre": true,
+        "id": "doc-09-06"
       },
       {
         "name": "Bons d’enlèvement Uniporc (réformes)",
-        "registre": true
+        "registre": true,
+        "id": "doc-09-07"
       }
     ]
   },
@@ -311,11 +374,13 @@
     "items": [
       {
         "name": "Bordereau de pesée OPC (Uniporc)",
-        "registre": false
+        "registre": false,
+        "id": "doc-10-01"
       },
       {
         "name": "Bordereau de pesée du groupement",
-        "registre": false
+        "registre": false,
+        "id": "doc-10-02"
       }
     ]
   }

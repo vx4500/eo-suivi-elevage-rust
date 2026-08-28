@@ -1,24 +1,19 @@
 {% extends "base.html" %}
-{% block title %}Aperçu import économique · EO-Suivi{% endblock %}
-{% block content %}
-<h1>Intégration économique</h1>
-<p><b>Fichier :</b> {{ nom_fichier }} · <b>Type détecté :</b> {{ type_document }}</p>
-{% if resume.avertissements %}<div class="card"><h3>Points à vérifier</h3><ul>{% for avertissement in resume.avertissements %}<li>{{ avertissement }}</li>{% endfor %}</ul></div>{% endif %}
-<div class="rust-grid">
-  <div class="card kpi"><div class="v">{{ resume.ajouter or 0 }}</div><div class="l">À ajouter</div></div>
-  <div class="card kpi"><div class="v">{{ resume.mettre_a_jour or 0 }}</div><div class="l">À mettre à jour</div></div>
-  <div class="card kpi"><div class="v">{{ resume.remplacer or 0 }}</div><div class="l">À remplacer</div></div>
-  <div class="card kpi"><div class="v">{{ resume.ignorer or 0 }}</div><div class="l">À ignorer</div></div>
-  <div class="card kpi"><div class="v">{{ resume.erreur or 0 }}</div><div class="l">Erreurs</div></div>
-</div>
+{% block title %}Vérifier l’import · EO-Suivi{% endblock %}
+{% block content %}{% include "workflow_ui.html" %}
+<div class="workflow">
+<header class="hero"><h1>Vérifier puis importer</h1><p>{{ nom_fichier }} · {{ type_document }} · Étape 2 sur 2</p></header>
+{% if resume.avertissements %}<section class="card"><h2>Points à vérifier</h2><ul>{% for avertissement in resume.avertissements %}<li>{{ avertissement }}</li>{% endfor %}</ul></section>{% endif %}
+<p><strong>{{ resume.ajouter or 0 }} ligne(s) à ajouter</strong>{% if resume.erreur %} · <strong class="danger">{{ resume.erreur }} erreur(s) à corriger avant import</strong>{% endif %}. Rien n’est enregistré définitivement avant votre validation.</p>
 <form method="post" action="/economique/import/{{ token }}/confirmer">
-  <input type="hidden" name="csrf_token" value="{{ session.csrf }}">
-  <div class="card"><h2>Ventilation et validation</h2><p>Chaque ligne ou lot peut être affecté à sa propre bande. Les calculs utilisent exclusivement les montants HT.</p><label>Bande par défaut<select name="bande_id"><option value="">Non affecté</option>{% for bande in bandes %}<option value="{{ bande.id }}">{{ bande.code }}{% if bande.site %} · {{ bande.site }}{% endif %}</option>{% endfor %}</select></label></div>
-  <div class="rust-scroll"><table><thead><tr><th>Ligne</th><th>Action</th><th>Type</th><th>Date</th><th>Référence</th><th>Libellé / lot</th><th>Quantité</th><th>Prix HT unitaire</th><th>Montant HT</th><th>Bande</th><th>Anomalie</th></tr></thead><tbody>
-  {% for ligne in lignes %}<tr><td>{{ ligne.ligne }}</td><td><span class="rust-badge{% if ligne.action == 'erreur' %} danger{% endif %}">{{ ligne.action|replace('_',' ') }}</span></td><td>{{ ligne.type }}</td><td>{{ ligne.date|date_fr if ligne.date else '—' }}</td><td>{{ ligne.reference or '—' }}</td><td>{{ ligne.libelle }}</td><td>{% if ligne.quantite is not none %}{{ ligne.quantite|decimal2 }}{% else %}—{% endif %}</td><td>{% if ligne.prix_unitaire is not none %}{{ ligne.prix_unitaire|decimal3 }} €{% else %}—{% endif %}</td><td>{% if ligne.montant is not none %}{{ ligne.montant|euro }}{% else %}—{% endif %}</td><td><select name="bande_ligne_{{ ligne.ligne }}"><option value="">Bande par défaut</option>{% for bande in bandes %}<option value="{{ bande.id }}">{{ bande.code }}</option>{% endfor %}</select></td><td>{{ ligne.anomalie or '—' }}</td></tr>
-  {% else %}<tr><td colspan="11">Aucune ligne exploitable</td></tr>{% endfor %}
-  </tbody></table></div>
-  <button {% if resume.erreur %}disabled title="Une erreur bloque la confirmation"{% endif %}>Valider et intégrer toutes les lignes</button>
+<input type="hidden" name="csrf_token" value="{{ session.csrf }}">
+<section class="card"><h2>Choisir les bandes</h2><p>Une bande par lot : un même apport peut donc être lié à plusieurs bandes. La proposition utilise le numéro de lot et le code ou numéro de marquage de la bande. En cas d’ambiguïté, choisissez vous-même. Le montant HT de chaque lot reste propre à sa bande.</p><details><summary>Appliquer une bande par défaut aux lignes sans choix</summary><label>Bande par défaut<select name="bande_id"><option value="">Aucune</option>{% for bande in bandes %}<option value="{{ bande.id }}">{{ bande.code }}{% if bande.site %} · {{ bande.site }}{% endif %}</option>{% endfor %}</select></label></details></section>
+<div class="cards" style="margin:18px 0">
+{% for ligne in lignes %}<section class="card"><div class="section-head"><h2>{{ ligne.libelle }}</h2><span class="rust-badge{% if ligne.action == 'erreur' %} danger{% endif %}">{{ ligne.action|replace('_',' ') }}</span></div><p>{{ ligne.date|date_fr if ligne.date else 'Date absente' }} · Référence {{ ligne.reference or 'absente' }}{% if ligne.lot_ref %} · <strong>Lot {{ ligne.lot_ref }}</strong>{% endif %}</p><p><strong>{{ ligne.montant|euro if ligne.montant is not none else 'HT manquant' }}</strong> HT{% if ligne.quantite is not none %} · Quantité {{ ligne.quantite|decimal2 }}{% endif %}{% if ligne.prix_unitaire is not none %} · {{ ligne.prix_unitaire|decimal3 }} € / unité{% endif %}</p>
+{% if ligne.anomalie %}<p class="danger">{{ ligne.anomalie }}</p>{% endif %}
+{% if ligne.type not in ['valorisation','retenue'] %}<label for="band-line-{{ ligne.ligne }}">Bande de la ligne {{ ligne.ligne }}<select id="band-line-{{ ligne.ligne }}" name="bande_ligne_{{ ligne.ligne }}"><option value="default">Choisir / bande par défaut</option><option value="none">Laisser sans bande</option>{% for bande in bandes %}<option value="{{ bande.id }}" {% if ligne.suggested_band == bande.id %}selected{% endif %}>{{ bande.code }}{% if bande.num_officiel %} · n° {{ bande.num_officiel }}{% endif %}{% if bande.site %} · {{ bande.site }}{% endif %}{% if bande.date_mb %} · {{ bande.date_mb|date_fr }}{% endif %}</option>{% endfor %}</select></label>{% if ligne.suggestion_note %}<p class="help">{{ ligne.suggestion_note }}</p>{% endif %}{% else %}<p class="help">Complément financier de l’apport ; ne crée pas de sortie d’animaux.</p>{% endif %}</section>
+{% else %}<p>Aucune ligne exploitable.</p>{% endfor %}</div>
+<button {% if resume.erreur or not lignes %}disabled{% endif %}>Confirmer l’import</button>
 </form>
-<form method="post" action="/economique/import/{{ token }}/annuler"><input type="hidden" name="csrf_token" value="{{ session.csrf }}"><button class="ghost">Annuler sans modifier la base</button></form>
-{% endblock %}
+<form method="post" action="/economique/import/{{ token }}/annuler" style="margin-top:12px"><input type="hidden" name="csrf_token" value="{{ session.csrf }}"><button class="ghost">Annuler cet import</button></form>
+</div>{% endblock %}
