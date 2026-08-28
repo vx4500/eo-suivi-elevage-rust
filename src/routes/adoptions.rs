@@ -86,7 +86,10 @@ pub(super) async fn transferer(
     sqlx::query("INSERT INTO adoptionporcelet(date,source_id,destination_id,case_nourrice_id,nombre,note) VALUES(?,?,?,?,?,?)")
         .bind(date).bind(source).bind(destination).bind(case_nourrice).bind(nombre).bind(form_text(&form,"note")).execute(&mut *tx).await?;
     tx.commit().await?;
-    Ok(Redirect::to(&format!("/maternite?bande_id={band_id}#adoptions")).into_response())
+    Ok(Redirect::to(&format!(
+        "/maternite?bande_id={band_id}&vue=adoptions#adoptions"
+    ))
+    .into_response())
 }
 
 pub(super) async fn effectif(pool: &SqlitePool, sow_id: i64, band_id: i64) -> AppResult<i64> {
@@ -190,7 +193,10 @@ pub(super) async fn sortie_nourrice(
             .bind(band_id).bind(band_id).execute(&mut *tx).await?;
     }
     tx.commit().await?;
-    Ok(Redirect::to(&format!("/maternite?bande_id={band_id}#nourrices")).into_response())
+    Ok(Redirect::to(&format!(
+        "/maternite?bande_id={band_id}&vue=nourrices#nourrices"
+    ))
+    .into_response())
 }
 
 #[cfg(test)]
@@ -277,7 +283,8 @@ mod tests {
         )
         .await?
         .0;
-        assert!(html.contains("Adoptions après mise-bas"));
+        assert!(!html.contains("Adoptions après mise-bas"));
+        assert!(html.contains("&amp;vue=adoptions"));
         assert!(html.contains("nés vivants"));
         assert!(!html.contains("présents estimés"));
         Ok(())
@@ -443,6 +450,16 @@ mod tests {
         .await?
         .0;
         assert!(html.contains("<b>22</b><span>porcelets présents"));
+        let html = maternite(
+            State(state.clone()),
+            Extension(session()),
+            Query(HashMap::from([
+                ("bande_id".into(), "1".into()),
+                ("vue".into(), "nourrices".into()),
+            ])),
+        )
+        .await?
+        .0;
         assert!(html.contains("Nourrice A"));
         assert!(html.contains("/nourrice/1/sortie"));
         sortie_nourrice(
@@ -462,6 +479,16 @@ mod tests {
         .await?
         .0;
         assert!(html.contains("<b>20</b><span>porcelets présents"));
+        let html = maternite(
+            State(state.clone()),
+            Extension(session()),
+            Query(HashMap::from([
+                ("bande_id".into(), "1".into()),
+                ("vue".into(), "bilan".into()),
+            ])),
+        )
+        .await?
+        .0;
         assert!(html.contains("<b>2</b><span>pertes enregistrées"));
         sortie_nourrice(
             State(state.clone()),

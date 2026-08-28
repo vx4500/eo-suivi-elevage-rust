@@ -121,7 +121,12 @@ pub fn parse_document(text: &str) -> Result<ImportDocument, String> {
         .replace(['\u{2212}', '\u{2013}', '\u{2014}'], "-")
         .replace('\u{00a0}', " ");
     let upper = normalized.to_uppercase();
-    if upper.contains("AUTORENOUVELLEMENT") || is_semence(&upper) {
+    if (upper.contains("AUTORENOUVELLEMENT") || is_semence(&upper))
+        && !upper
+            .split_whitespace()
+            .collect::<String>()
+            .contains("ANIMAUXREPRODUCTEURS")
+    {
         return parse_semence(&normalized);
     }
     if upper.contains("SYNTHESE DES INDICES")
@@ -185,7 +190,8 @@ fn captures_all(text: &str, pattern: &str, group: usize) -> Vec<String> {
 fn number(raw: &str) -> Option<f64> {
     let mut value = raw
         .trim()
-        .replace(['\u{00a0}', '\u{202f}', ' '], "")
+        .replace(['\u{00a0}', '\u{202f}', ' ', '\t'], "")
+        .replace(['\u{2212}', '\u{2013}', '\u{2014}'], "-")
         .replace(['(', ')'], "");
     let negative = value.starts_with('-') || value.ends_with('-') || raw.trim().starts_with('(');
     value = value.trim_matches('-').to_string();
@@ -563,13 +569,18 @@ fn parse_genetique(text: &str) -> Result<ImportDocument, String> {
     // commençait pas par des chiffres suivis d'un espace et n'était jamais
     // reconnue : un avoir donnait 0 animal et 0 kg, quelle que soit sa
     // taille réelle.
-    let animals = Regex::new(r"(?m)^\s*([0-9]+)-?\s+COCHETTE\s+\w+\s+[0-9]+\s+([0-9.,]+)-?")
-        .map_err(|error| format!("analyse génétique indisponible: {error}"))?;
+    let animals =
+        Regex::new(r"(?m)^[ \t]*-?[ \t]*([0-9]+)[ \t]*-?\s+(COCHETTE|VERRAT)\s+.+?\s+[0-9]+\s+-?[ \t]*([0-9.,]+)[ \t]*-?")
+            .map_err(|error| format!("analyse génétique indisponible: {error}"))?;
     let mut count = 0_i64;
     let mut weight = 0.0;
+    let mut boars = 0_i64;
     for row in animals.captures_iter(text) {
         count += integer(&row[1]).unwrap_or_default();
-        weight += number(&row[2]).unwrap_or_default();
+        weight += number(&row[3]).unwrap_or_default();
+        if &row[2] == "VERRAT" {
+            boars += integer(&row[1]).unwrap_or_default();
+        }
     }
     let average = capture(
         text,
@@ -585,14 +596,14 @@ fn parse_genetique(text: &str) -> Result<ImportDocument, String> {
     // dur comme avant, qui ne fonctionnait de toute façon plus depuis que
     // la référence n'était jamais extraite.
     let recap_regex = Regex::new(
-        r"(?m)^\s*([0-9.,]+-?)\s+[0-9]\s+[0-9]+[,.][0-9]+%\s+([0-9.,]+-?)\s+([0-9.,]+-?)",
+        r"(?m)^[ \t]*(-?[ \t]*[0-9][0-9.,]*(?:[ \t]*-)?)\s+[0-9]\s+[0-9]+[,.][0-9]+%\s+(-?[ \t]*[0-9][0-9.,]*(?:[ \t]*-)?)\s+(-?[ \t]*[0-9][0-9.,]*(?:[ \t]*-)?)",
     )
     .map_err(|e| e.to_string())?;
     let recaps: Vec<_> = recap_regex.captures_iter(text).collect();
     let ht = if recaps.is_empty() {
         capture(
             text,
-            r"(?i)(?:TOTAL\s+HORS\s+TAXES|TOTAL\s+H\.?\s*T\.?)\s*:?\s*([0-9.,]+-?)",
+            r"(?i)(?:TOTAL\s+HORS\s+TAXES|TOTAL\s+H\.?\s*T\.?)\s*:?\s*(-?[ \t]*[0-9][0-9.,]*(?:[ \t]*-)?)",
             1,
         )
         .and_then(|v| number(&v))
@@ -610,7 +621,9 @@ fn parse_genetique(text: &str) -> Result<ImportDocument, String> {
     // reste conservé dans les détails pour contrôle de facture, jamais comme
     // solution de repli silencieuse.
     let amount = ht.map(|value| value.abs() * sign);
-    let base_label = if count > 0 {
+    let base_label = if boars > 0 && boars == count {
+        format!("{count} verrat(s)")
+    } else if count > 0 {
         format!("{count} cochettes")
     } else {
         "Cochettes / reproducteurs".into()
@@ -631,7 +644,8 @@ fn parse_genetique(text: &str) -> Result<ImportDocument, String> {
         details: json!({
             "fournisseur": "Cooperl",
             "designation": label,
-            "nb_animaux": (count > 0).then_some(count),
+            "nb_animaux": (count > 0).then_some(count * sign as i64),
+            "toutes_bandes": boars > 0 && boars == count,
             "poids_total": (weight != 0.0).then_some((weight.abs() * 10.0).round() / 10.0 * sign),
             "prix_moyen": average,
             "montant_ht": amount,
@@ -1567,6 +1581,48 @@ mod tests {
         assert!(parsed.lines[0].label.starts_with("AVOIR"));
     }
 
+    #[test]
+    fn genetique_moins_avant_apres_et_espaces_sans_mot_avoir() {
+        for (ht, tva, ttc) in [
+            ("-100,00", "-5,50", "-105,50"),
+            ("100,00-", "5,50-", "105,50-"),
+            ("- 100,00", "- 5,50", "- 105,50"),
+            ("100,00 -", "5,50 -", "105,50 -"),
+            ("−100,00", "−5,50", "−105,50"),
+        ] {
+            let text=format!("ANIMAUX REPRODUCTEURS\nSemaine N° 26.01 14.99999\nLE 2/01/26\n-1 VERRAT TEST 2 -100,000 1,00 -100,00\n{ht} 2 5,5% {tva} {ttc}");
+            let doc = parse_document(&text).unwrap();
+            let line = &doc.lines[0];
+            assert_eq!(line.amount, Some(-100.0), "{text}");
+            assert_eq!(line.quantity, Some(-1.0));
+            assert_eq!(line.details["montant_net"], -105.5);
+            assert_eq!(line.details["poids_total"], -100.0);
+            assert_eq!(line.details["avoir"], true);
+            let fallback=format!("ANIMAUX REPRODUCTEURS\nSemaine N° 26.01 14.99999\nLE 2/01/26\nTOTAL HORS TAXES {ht}");
+            assert_eq!(
+                parse_document(&fallback).unwrap().lines[0].amount,
+                Some(-100.0)
+            );
+        }
+    }
+    #[test]
+    fn genetique_une_remise_ne_change_pas_le_signe_du_total() {
+        let text="ANIMAUX REPRODUCTEURS\nSemaine N° 26.01 14.99999\nLE 2/01/26\nREMISE -20,00\n100,00 2 5,5% 5,50 105,50";
+        let doc = parse_document(text).unwrap();
+        assert_eq!(doc.lines[0].amount, Some(100.0));
+        assert_eq!(doc.lines[0].details["avoir"], false);
+    }
+
+    #[test]
+    fn verrat_souffleur_et_prime_ne_comptent_qu_un_animal() {
+        let doc=parse_document("ANIMAUX REPRODUCTEURS\nSemaine N° 25.27 14.41384\nLE 8/07/25\n1 VERRAT VIGOR SOUFFLEUR 2 132,000 1,42 187,44\n1 PRIME VERRAT VIGOR SOUFFLEUR 2 450,00 450,00\n1 SERVICE VERRAT 2 60,00 60,00\n697,44 2 5,5% 38,36 735,80").unwrap();
+        let l = &doc.lines[0];
+        assert_eq!(l.amount, Some(697.44));
+        assert_eq!(l.quantity, Some(1.0));
+        assert_eq!(l.details["poids_total"], 132.0);
+        assert_eq!(l.details["toutes_bandes"], true);
+        assert!(l.label.contains("verrat"));
+    }
     #[test]
     fn genetique_reconnait_une_vraie_facture() {
         // Texte réel (extrait via extract_pdf_text) d'une facture Cooperl

@@ -40,11 +40,6 @@
     "note": "Conserver les suivis et comptes rendus correspondant à votre élevage.",
     "items": [
       {
-        "name": "Registre de visites",
-        "registre": false,
-        "id": "doc-02-01"
-      },
-      {
         "name": "Comptes rendus de visites (technicien d’élevage, audit qualité, organisme externe, hygiène / nutrition)",
         "registre": true,
         "id": "doc-02-02"

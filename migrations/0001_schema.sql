@@ -321,6 +321,7 @@ CREATE TABLE IF NOT EXISTS livraisonaliment (
     site TEXT,
     date_reference TEXT,
     sites_json TEXT NOT NULL DEFAULT '[]',
+    stade_aliment TEXT NOT NULL DEFAULT 'auto',
     bande_id INTEGER REFERENCES bande(id),
     bandes TEXT
 );
@@ -395,6 +396,7 @@ CREATE TABLE IF NOT EXISTS achatgenetique (
     prix_moyen REAL,
     montant_ht REAL,
     ht_manuel INTEGER NOT NULL DEFAULT 0,
+    toutes_bandes INTEGER NOT NULL DEFAULT 0,
     montant_net REAL,
     bande_code TEXT,
     note TEXT

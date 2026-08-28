@@ -16,6 +16,10 @@ pub fn build() -> anyhow::Result<Environment<'static>> {
         "workflow_ui.html",
         include_str!("../templates/workflow_ui.html"),
     )?;
+    env.add_template(
+        "feuille_mise_bas.html",
+        include_str!("../templates/feuille_mise_bas.html"),
+    )?;
     env.add_global("demo_portal", crate::demo_portal::enabled());
     env.add_template(
         "demo_acces.html",
@@ -302,6 +306,17 @@ mod tests {
     }
 
     #[test]
+    fn verrat_toutes_bandes_reste_lisible() {
+        let html=super::build().unwrap().get_template("economique.html").unwrap().render(minijinja::context! {
+            secteur=>"genetique", session=>serde_json::json!({"role":"admin","peut_modifier":true,"csrf":"test"}),
+            genetiques=>serde_json::json!([{"id":1,"toutes_bandes":1,"montant_ht":697.44,"bandes_affectees":"B1, B2, B3","bandes_ids":"1,2,3"}])
+        }).unwrap();
+        assert!(html.contains("Toutes les bandes · verrat"));
+        assert!(html.contains("Supprimer la facture"));
+        assert!(!html.contains("<b>B1, B2, B3</b>"));
+    }
+
+    #[test]
     fn documents_pdf_complets_et_rendus_sans_erreur() {
         let groups: Vec<serde_json::Value> =
             serde_json::from_str(include_str!("../resources/documents-elevage.json")).unwrap();
@@ -311,7 +326,7 @@ mod tests {
                 .iter()
                 .map(|g| g["items"].as_array().unwrap().len())
                 .sum::<usize>(),
-            65
+            64
         );
         let html = super::build()
             .unwrap()
@@ -319,10 +334,54 @@ mod tests {
             .unwrap()
             .render(minijinja::context! { document_groups => groups })
             .unwrap();
-        assert_eq!(html.matches("class=\"doc-label\"").count(), 65);
+        assert_eq!(html.matches("class=\"doc-label\"").count(), 64);
         assert!(html.contains("Justificatif de dérogation TATOUPA"));
         assert!(html.contains("Bordereau de pesée du groupement"));
         assert!(!html.contains("Ce que cette liste couvre"));
+        assert!(!html.contains("Registre de visites"));
+    }
+
+    #[test]
+    fn maternite_affiche_une_seule_rubrique_et_preserve_la_saisie() {
+        let env = super::build().unwrap();
+        for vue in ["mises-bas", "adoptions", "nourrices", "sevrage", "bilan"] {
+            for editable in [true, false] {
+                let html = env.get_template("maternite.html").unwrap().render(minijinja::context! {
+                    vue => vue,
+                    truies_sevrage => serde_json::json!([]),
+                    session => serde_json::json!({"peut_modifier":editable,"csrf":"test"}),
+                    bande => serde_json::json!({"id":1,"code":"B1"}),
+                    totaux => serde_json::json!({"truies":1,"mises_bas":1,"restantes":0,"en_cours":1,"presents":12,"nourrice":0}),
+                    truies => serde_json::json!([{"id":7,"num_travail":"123","mise_bas_id":8,"statut_code":"en_cours","statut_libelle":"En cours","porcelets_presents":12,"delivrance_ok":0,"soins_attendus":1}])
+                }).unwrap();
+                assert!(html.contains(&format!("name=\"vue\" value=\"{vue}\"")));
+                assert_eq!(
+                    html.split("aria-label=\"Rubriques maternité\"")
+                        .nth(1)
+                        .unwrap()
+                        .split("</nav>")
+                        .next()
+                        .unwrap()
+                        .matches("aria-current=\"page\"")
+                        .count(),
+                    1
+                );
+                assert_eq!(html.contains("id=\"mat-search\""), vue == "mises-bas");
+                for panel in ["adoptions", "nourrices", "sevrage"] {
+                    assert_eq!(html.contains(&format!("id=\"{panel}\"")), vue == panel);
+                }
+                assert_eq!(
+                    html.contains("action=\"/truie/7/misebas\""),
+                    vue == "mises-bas" && editable
+                );
+                if vue == "mises-bas" {
+                    assert!(html.contains("<details class=\"mat-sow\" id=\"truie-7\""));
+                    assert!(html.contains("Délivrance NOK"));
+                    assert!(html.contains("1 soin(s) attendu(s)"));
+                    assert!(html.contains("hashchange"));
+                }
+            }
+        }
     }
 
     #[test]

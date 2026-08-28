@@ -165,7 +165,7 @@ pub(super) async fn delete(
 }
 
 #[cfg(test)]
-pub(super) mod tests {
+pub(crate) mod tests {
     use super::*;
     pub(crate) fn session() -> SessionData {
         SessionData {
@@ -333,7 +333,7 @@ pub(super) mod tests {
             .flat_map(|g| g["items"].as_array().unwrap())
             .map(|i| i["id"].as_str().unwrap())
             .collect();
-        assert_eq!(keys.iter().collect::<HashSet<_>>().len(), 65);
+        assert_eq!(keys.iter().collect::<HashSet<_>>().len(), 64);
         assert!(valid_item(keys[0]).is_ok());
         assert!(valid_item("../unknown").is_err());
     }

@@ -31,18 +31,112 @@ pub async fn selected_sites(
     Ok(ids)
 }
 
+pub fn feed_stage(product: &str) -> &'static str {
+    let p = product.to_uppercase();
+    let stages = [
+        ("gestation", p.contains("GESTA")),
+        ("lactation", p.contains("LACTA")),
+        ("croissance", p.contains("CROISSANCE")),
+        ("finition", p.contains("FINITION")),
+        (
+            "ps",
+            p.contains("POST-SEVRAGE")
+                || p.contains("POST SEVRAGE")
+                || p.contains("2EME AGE")
+                || p.contains("2ÈME ÂGE"),
+        ),
+    ];
+    let found: Vec<_> = stages.into_iter().filter(|(_, yes)| *yes).collect();
+    if found.len() == 1 {
+        found[0].0
+    } else {
+        "inconnu"
+    }
+}
+pub fn valid_stage(stage: &str) -> bool {
+    matches!(
+        stage,
+        "auto" | "gestation" | "lactation" | "ps" | "croissance" | "finition" | "tous" | "inconnu"
+    )
+}
+fn stage_matches(stage: &str, age: i64, s: crate::routes::BandSchedule) -> bool {
+    match stage {
+        "gestation" => (-s.gestation..-s.maternity_before_farrowing).contains(&age),
+        "lactation" => (-s.maternity_before_farrowing..s.weaning).contains(&age),
+        "ps" => (s.weaning..s.transfer_finishing).contains(&age),
+        "croissance" => (s.transfer_finishing..s.finishing_feed).contains(&age),
+        "finition" => (s.finishing_feed..s.departure).contains(&age),
+        "tous" => true,
+        _ => false,
+    }
+}
+/// Les mouvements priment ; à défaut, le cycle daté et le site de la bande
+/// donnent une présence prévisionnelle. Aucun rapprochement entre sites par similarité.
+pub async fn cycle_present(
+    pool: &SqlitePool,
+    date: &str,
+    sites: &[i64],
+    stage: &str,
+) -> anyhow::Result<Vec<i64>> {
+    let day = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")?;
+    let schedule = crate::routes::load_band_schedule(pool).await?;
+    let mut result = present(pool, date, sites).await?;
+    let rows:Vec<(i64,Option<String>,i64,i64)>=sqlx::query_as("SELECT b.id,b.date_mb,EXISTS(SELECT 1 FROM transfert t WHERE t.bande_id=b.id AND date(t.date)<=date(?)),EXISTS(SELECT 1 FROM site s WHERE s.id IN(SELECT value FROM json_each(?)) AND (lower(trim(b.site))=lower(trim(s.code)) OR lower(trim(b.site))=lower(trim(s.nom)))) FROM bande b").bind(date).bind(serde_json::to_string(sites)?).fetch_all(pool).await?;
+    for (id, mb, has_history, site_matches) in rows {
+        let age = mb
+            .and_then(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok())
+            .map(|d| (day - d).num_days());
+        if has_history == 0
+            && (sites.is_empty() || site_matches == 1)
+            && age.is_some_and(|a| (-schedule.gestation..schedule.departure).contains(&a))
+        {
+            result.push(id);
+        }
+        if stage != "tous" && !age.is_some_and(|a| stage_matches(stage, a, schedule)) {
+            result.retain(|x| *x != id);
+        }
+    }
+    result.sort_unstable();
+    result.dedup();
+    Ok(result)
+}
+pub async fn boars(pool: &SqlitePool) -> anyhow::Result<u64> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM affectationfacturebande WHERE categorie='genetique' AND facture_id IN(SELECT id FROM achatgenetique WHERE toutes_bandes=1)").execute(&mut *tx).await?;
+    let changed=sqlx::query("INSERT INTO affectationfacturebande(categorie,facture_id,bande_id,automatique) SELECT 'genetique',g.id,b.id,1 FROM achatgenetique g CROSS JOIN bande b WHERE g.toutes_bandes=1").execute(&mut *tx).await?.rows_affected();
+    tx.commit().await?;
+    Ok(changed)
+}
 pub async fn refresh(pool: &SqlitePool, category: &str, table: &str) -> anyhow::Result<u64> {
-    let rows:Vec<(i64,Option<String>,String,Option<String>)>=sqlx::query_as(&format!("SELECT id,COALESCE(date_reference,date),sites_json,site FROM {table} x WHERE NOT EXISTS(SELECT 1 FROM affectationfacturecontrole c WHERE c.categorie=? AND c.facture_id=x.id AND c.verrou_manuel=1) AND NOT EXISTS(SELECT 1 FROM affectationfacturebande a WHERE a.categorie=? AND a.facture_id=x.id AND a.automatique=0)")).bind(category).bind(category).fetch_all(pool).await?;
+    let extra = if category == "aliment" {
+        "stade_aliment"
+    } else {
+        "'tous'"
+    };
+    type InvoiceContext = (
+        i64,
+        Option<String>,
+        String,
+        Option<String>,
+        Option<String>,
+        String,
+    );
+    let rows:Vec<InvoiceContext>=sqlx::query_as(&format!("SELECT id,COALESCE(date_reference,date),sites_json,site,produit,{extra} FROM {table} x WHERE NOT EXISTS(SELECT 1 FROM affectationfacturecontrole c WHERE c.categorie=? AND c.facture_id=x.id AND c.verrou_manuel=1) AND NOT EXISTS(SELECT 1 FROM affectationfacturebande a WHERE a.categorie=? AND a.facture_id=x.id AND a.automatique=0)")).bind(category).bind(category).fetch_all(pool).await?;
     let mut count = 0;
-    for (id, date, raw, site) in rows {
+    for (id, date, raw, site, product, stage) in rows {
         let sites = selected_sites(pool, &raw, site.as_deref()).await?;
+        let stage = if stage == "auto" {
+            feed_stage(product.as_deref().unwrap_or_default())
+        } else {
+            &stage
+        };
         let bands = if let Some(date) =
             date.filter(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").is_ok())
         {
-            if category == "aliment" && sites.is_empty() {
+            if category == "aliment" && (sites.is_empty() || stage == "inconnu") {
                 vec![]
             } else {
-                present(pool, &date, &sites).await?
+                cycle_present(pool, &date, &sites, stage).await?
             }
         } else {
             vec![]
@@ -61,6 +155,78 @@ pub async fn refresh(pool: &SqlitePool, category: &str, table: &str) -> anyhow::
 mod tests {
     use super::*;
     #[tokio::test]
+    async fn stades_et_sites_selon_le_cycle() -> anyhow::Result<()> {
+        let state = crate::routes::documents::tests::state().await;
+        let p = &state.pool;
+        sqlx::raw_sql("INSERT INTO site(id,code,nom) VALUES(1,'A','Site A'),(2,'B','Site B'); INSERT INTO bande(id,code,site,date_mb) VALUES(1,'GEST','A','2026-08-01'),(2,'LACT','A','2026-06-20'),(3,'PS','A','2026-05-15'),(4,'CROISS','A','2026-04-01'),(5,'FIN','A','2026-01-15'),(6,'AUTRESITE','B','2026-08-01');").execute(p).await?;
+        for (product, id) in [
+            ("GESTA PLUS FE", 1),
+            ("LACTA SAFE FE", 2),
+            ("POST SEVRAGE", 3),
+            ("MULTI BE CROISSANCE B", 4),
+            ("MULTI BE FINITION C", 5),
+        ] {
+            assert_eq!(
+                cycle_present(p, "2026-07-01", &[1], feed_stage(product)).await?,
+                vec![id]
+            );
+        }
+        assert_eq!(
+            cycle_present(p, "2026-07-01", &[1, 2], "gestation").await?,
+            vec![1, 6]
+        );
+        assert_eq!(
+            cycle_present(p, "2026-07-01", &[], "tous").await?,
+            vec![1, 2, 3, 4, 5, 6]
+        );
+        assert!(
+            cycle_present(p, "2026-07-01", &[1], feed_stage("ACTI PLUS B"))
+                .await?
+                .is_empty()
+        );
+        sqlx::query("INSERT OR REPLACE INTO reglage(cle,valeur,libelle) VALUES('aliment_finition',80,'Finition')")
+            .execute(p)
+            .await?;
+        assert_eq!(
+            cycle_present(p, "2026-07-01", &[1], "finition").await?,
+            vec![4, 5]
+        );
+        // Un départ enregistré prime sur le calendrier prévisionnel.
+        sqlx::raw_sql("INSERT INTO salle(id,site_id,nom) VALUES(1,1,'R'); INSERT INTO transfert(date,bande_id,salle_dest_id,nombre) VALUES('2026-06-01',4,1,10); INSERT INTO transfert(date,bande_id,salle_source_id,nombre) VALUES('2026-06-30',4,1,10);").execute(p).await?;
+        assert_eq!(
+            cycle_present(p, "2026-07-01", &[1], "finition").await?,
+            vec![5]
+        );
+        Ok(())
+    }
+    #[tokio::test]
+    async fn verrat_reparti_sans_multiplier_le_ht() -> anyhow::Result<()> {
+        let state = crate::routes::documents::tests::state().await;
+        let p = &state.pool;
+        sqlx::raw_sql("INSERT INTO bande(id,code) VALUES(1,'B1'),(2,'B2'); INSERT INTO achatgenetique(id,num_facture,montant_ht,toutes_bandes) VALUES(1,'VERRAT',697.44,1);").execute(p).await?;
+        crate::db::auto_assign_economic_invoices(p).await?;
+        crate::db::auto_assign_economic_invoices(p).await?;
+        let n: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM affectationfacturebande WHERE categorie='genetique'",
+        )
+        .fetch_one(p)
+        .await?;
+        assert_eq!(n, 2);
+        sqlx::query("INSERT INTO bande(id,code) VALUES(3,'B3')")
+            .execute(p)
+            .await?;
+        boars(p).await?;
+        let n: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM affectationfacturebande WHERE categorie='genetique'",
+        )
+        .fetch_one(p)
+        .await?;
+        assert_eq!(n, 3);
+        let total:f64=sqlx::query_scalar("SELECT SUM(g.montant_ht/(SELECT COUNT(*) FROM affectationfacturebande z WHERE z.categorie='genetique' AND z.facture_id=g.id)) FROM achatgenetique g JOIN affectationfacturebande a ON a.categorie='genetique' AND a.facture_id=g.id").fetch_one(p).await?;
+        assert!((total - 697.44).abs() < 0.001);
+        Ok(())
+    }
+    #[tokio::test]
     async fn plusieurs_sites_presence_historique_et_sortie() -> anyhow::Result<()> {
         let p = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(1)
@@ -76,7 +242,7 @@ mod tests {
         assert_eq!(present(&p, "2026-02-15", &[2]).await?, vec![1, 3]);
         assert_eq!(present(&p, "2026-03-15", &[]).await?, vec![2, 3]);
         assert!(present(&p, "2025-12-31", &[]).await?.is_empty());
-        sqlx::query("INSERT INTO livraisonaliment(id,date,montant_ht,sites_json) VALUES(1,'2026-01-15',300,'[1,2]'),(2,'2026-01-15',100,'[]')").execute(&p).await?;
+        sqlx::query("INSERT INTO livraisonaliment(id,date,montant_ht,sites_json,stade_aliment) VALUES(1,'2026-01-15',300,'[1,2]','tous'),(2,'2026-01-15',100,'[]','tous')").execute(&p).await?;
         crate::db::auto_assign_economic_invoices(&p).await?;
         crate::db::auto_assign_economic_invoices(&p).await?;
         let count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM affectationfacturebande WHERE categorie='aliment' AND facture_id=1 AND automatique=1").fetch_one(&p).await?;

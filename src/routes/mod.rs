@@ -26,8 +26,9 @@ use std::sync::Arc;
 mod adoptions;
 mod ameliorations;
 mod demo_portal;
-mod documents;
+pub(crate) mod documents;
 mod factures;
+mod feuille_mise_bas;
 mod import_historique;
 mod parity;
 mod ventes;
@@ -93,6 +94,7 @@ pub fn router(state: AppState) -> Router {
         .route("/bande/{id}/imprimer", get(bande_imprimer))
         .route("/export/mise-bas/{id}", get(export_mise_bas))
         .route("/bande/{id}/fiche-mise-bas", get(fiche_mise_bas))
+        .route("/bande/{id}/feuille-mise-bas", get(feuille_mise_bas::page))
         .route("/maternite", get(maternite))
         .route(
             "/maternite/bande/{band_id}/adoption",
@@ -1633,14 +1635,14 @@ struct BandView {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct BandSchedule {
-    gestation: i64,
-    echo_after_ia: i64,
-    maternity_before_farrowing: i64,
-    weaning: i64,
-    transfer_finishing: i64,
-    finishing_feed: i64,
-    departure: i64,
+pub(crate) struct BandSchedule {
+    pub(crate) gestation: i64,
+    pub(crate) echo_after_ia: i64,
+    pub(crate) maternity_before_farrowing: i64,
+    pub(crate) weaning: i64,
+    pub(crate) transfer_finishing: i64,
+    pub(crate) finishing_feed: i64,
+    pub(crate) departure: i64,
 }
 
 impl Default for BandSchedule {
@@ -1705,7 +1707,7 @@ impl BandSchedule {
     }
 }
 
-async fn load_band_schedule(pool: &SqlitePool) -> AppResult<BandSchedule> {
+pub(crate) async fn load_band_schedule(pool: &SqlitePool) -> AppResult<BandSchedule> {
     let mut schedule = BandSchedule::default();
     for row in sqlx::query(
         "SELECT cle,valeur FROM reglage WHERE cle IN ('gestation','echo_j','passage_maternite_j','sevrage','transfert_engr','aliment_finition','depart')",
@@ -2951,6 +2953,16 @@ async fn maternite(
         .await?
     };
     let mut ctx = context(&session);
+    let vue = query
+        .get("vue")
+        .or_else(|| query.get("onglet"))
+        .map(String::as_str)
+        .unwrap_or("mises-bas");
+    let vue = match vue {
+        "adoptions" | "nourrices" | "sevrage" | "bilan" => vue,
+        _ => "mises-bas",
+    };
+    ctx.insert("vue".into(), json!(vue));
     ctx.insert("bandes".into(), Value::Array(bands));
     ctx.insert("today".into(), json!(today_iso()));
     let Some(band_id) = selected_id else {
@@ -3208,7 +3220,7 @@ async fn maternite_sevrage(
         "/maternite",
     )
     .await;
-    Ok(Redirect::to(&format!("/maternite?bande_id={band_id}&onglet=sevrage")).into_response())
+    Ok(Redirect::to(&format!("/maternite?bande_id={band_id}&vue=sevrage")).into_response())
 }
 
 async fn maternite_perte(
@@ -6989,8 +7001,8 @@ async fn economique(
     .await?;
     let ventes = ventes::rows(&state.pool).await?;
     let achats = generic_rows(&state.pool,"SELECT id,date,'aliment' AS categorie,produit AS libelle,tonnage AS quantite,montant_ht FROM livraisonaliment UNION ALL SELECT id,date,'vétérinaire',produit,quantite,montant_ht FROM achatveto UNION ALL SELECT id,date,'semence',designation,nb_doses,montant_ht FROM achatsemence UNION ALL SELECT id,date,'génétique',designation,nb_animaux,montant_ht FROM achatgenetique ORDER BY date DESC,id DESC LIMIT 50").await?;
-    let genetiques = generic_rows(&state.pool,"SELECT a.id,a.date,a.num_facture,a.fournisseur,a.designation,a.nb_animaux,a.poids_total,a.montant_ht,CASE WHEN a.montant_ht IS NULL THEN 1 ELSE 0 END AS ht_manquant,COALESCE((SELECT GROUP_CONCAT(b.code,', ') FROM affectationfacturebande af JOIN bande b ON b.id=af.bande_id WHERE af.categorie='genetique' AND af.facture_id=a.id),'Non affecté') AS bandes_affectees,COALESCE((SELECT GROUP_CONCAT(af.bande_id) FROM affectationfacturebande af WHERE af.categorie='genetique' AND af.facture_id=a.id),'') AS bandes_ids,EXISTS(SELECT 1 FROM affectationfacturebande af WHERE af.categorie='genetique' AND af.facture_id=a.id AND af.automatique=1) AS affectation_auto FROM achatgenetique a ORDER BY a.date DESC,a.id DESC LIMIT 250").await?;
-    let aliments = generic_rows(&state.pool,"SELECT a.id,a.date,COALESCE(a.date_reference,a.date) AS date_reference,a.site,a.sites_json,replace(replace(a.sites_json,'[',''),']','') AS sites_ids,a.num_facture,a.fournisseur,a.produit,a.tonnage,a.montant_ht,COALESCE((SELECT GROUP_CONCAT(b.code,', ') FROM affectationfacturebande af JOIN bande b ON b.id=af.bande_id WHERE af.categorie='aliment' AND af.facture_id=a.id),'Non affecté') AS bandes_affectees,COALESCE((SELECT GROUP_CONCAT(af.bande_id) FROM affectationfacturebande af WHERE af.categorie='aliment' AND af.facture_id=a.id),'') AS bandes_ids,EXISTS(SELECT 1 FROM affectationfacturebande af WHERE af.categorie='aliment' AND af.facture_id=a.id AND af.automatique=1) AS affectation_auto FROM livraisonaliment a ORDER BY a.date DESC,a.id DESC LIMIT 250").await?;
+    let genetiques = generic_rows(&state.pool,"SELECT a.id,a.date,a.toutes_bandes,a.num_facture,a.fournisseur,a.designation,a.nb_animaux,a.poids_total,a.montant_ht,CASE WHEN a.montant_ht IS NULL THEN 1 ELSE 0 END AS ht_manquant,COALESCE((SELECT GROUP_CONCAT(b.code,', ') FROM affectationfacturebande af JOIN bande b ON b.id=af.bande_id WHERE af.categorie='genetique' AND af.facture_id=a.id),'Non affecté') AS bandes_affectees,COALESCE((SELECT GROUP_CONCAT(af.bande_id) FROM affectationfacturebande af WHERE af.categorie='genetique' AND af.facture_id=a.id),'') AS bandes_ids,EXISTS(SELECT 1 FROM affectationfacturebande af WHERE af.categorie='genetique' AND af.facture_id=a.id AND af.automatique=1) AS affectation_auto FROM achatgenetique a ORDER BY a.date DESC,a.id DESC LIMIT 250").await?;
+    let aliments = generic_rows(&state.pool,"SELECT a.id,a.date,a.stade_aliment,COALESCE(a.date_reference,a.date) AS date_reference,a.site,a.sites_json,replace(replace(a.sites_json,'[',''),']','') AS sites_ids,a.num_facture,a.fournisseur,a.produit,a.tonnage,a.montant_ht,COALESCE((SELECT GROUP_CONCAT(b.code,', ') FROM affectationfacturebande af JOIN bande b ON b.id=af.bande_id WHERE af.categorie='aliment' AND af.facture_id=a.id),'Non affecté') AS bandes_affectees,COALESCE((SELECT GROUP_CONCAT(af.bande_id) FROM affectationfacturebande af WHERE af.categorie='aliment' AND af.facture_id=a.id),'') AS bandes_ids,EXISTS(SELECT 1 FROM affectationfacturebande af WHERE af.categorie='aliment' AND af.facture_id=a.id AND af.automatique=1) AS affectation_auto FROM livraisonaliment a ORDER BY a.date DESC,a.id DESC LIMIT 250").await?;
     let veterinaires = generic_rows(&state.pool,"SELECT a.id,a.date,COALESCE(a.date_reference,a.date) AS date_reference,a.site,a.sites_json,replace(replace(a.sites_json,'[',''),']','') AS sites_ids,a.num_facture,a.fournisseur,a.produit,a.quantite,a.montant_ht,COALESCE((SELECT GROUP_CONCAT(b.code,', ') FROM affectationfacturebande af JOIN bande b ON b.id=af.bande_id WHERE af.categorie='veto' AND af.facture_id=a.id),'Non affecté') AS bandes_affectees,COALESCE((SELECT GROUP_CONCAT(af.bande_id) FROM affectationfacturebande af WHERE af.categorie='veto' AND af.facture_id=a.id),'') AS bandes_ids,EXISTS(SELECT 1 FROM affectationfacturebande af WHERE af.categorie='veto' AND af.facture_id=a.id AND af.automatique=1) AS affectation_auto FROM achatveto a ORDER BY a.date DESC,a.id DESC LIMIT 250").await?;
     let semences = generic_rows(&state.pool,"SELECT a.id,a.date,a.num_facture,a.fournisseur,a.designation,a.nb_doses,a.montant_ht,COALESCE((SELECT GROUP_CONCAT(b.code,', ') FROM affectationfacturebande af JOIN bande b ON b.id=af.bande_id WHERE af.categorie='semence' AND af.facture_id=a.id),'Non affecté') AS bandes_affectees,COALESCE((SELECT GROUP_CONCAT(af.bande_id) FROM affectationfacturebande af WHERE af.categorie='semence' AND af.facture_id=a.id),'') AS bandes_ids,EXISTS(SELECT 1 FROM affectationfacturebande af WHERE af.categorie='semence' AND af.facture_id=a.id AND af.automatique=1) AS affectation_auto FROM achatsemence a ORDER BY a.date DESC,a.id DESC LIMIT 250").await?;
     let valuations = generic_rows(&state.pool,"SELECT id,num_apport,date,libelle,montant,categorie,CASE WHEN lower(COALESCE(categorie,''))='retenue' THEN 1 ELSE 0 END AS est_retenue FROM valorisationapport ORDER BY date DESC,id DESC LIMIT 200").await?;
@@ -7621,6 +7633,20 @@ async fn economique_import_confirmer(
                     sqlx::query("INSERT INTO achatveto(date,produit,quantite,pu_ht,montant_ht,num_facture,fournisseur,bande_id,date_reference,sites_json) VALUES(?,?,?,?,?,?,?,?,?,?)")
                         .bind(line.date.as_deref()).bind(import_detail_str(line,"produit")).bind(import_detail_f64(line,"quantite")).bind(import_detail_f64(line,"pu_ht")).bind(line.amount).bind(reference).bind(import_detail_str(line,"fournisseur")).bind(band_id).bind(reference_date).bind(json!(sites).to_string()).execute(&mut *transaction).await?.last_insert_rowid()
                 };
+                if line.kind == "aliment" {
+                    let stage = form
+                        .get(&format!("stade_aliment_{number}"))
+                        .map(String::as_str)
+                        .unwrap_or("auto");
+                    if !crate::affectation::valid_stage(stage) {
+                        return Err(AppError::Invalid("Stade d'aliment invalide.".into()));
+                    }
+                    sqlx::query("UPDATE livraisonaliment SET stade_aliment=? WHERE id=?")
+                        .bind(stage)
+                        .bind(inserted)
+                        .execute(&mut *transaction)
+                        .await?;
+                }
                 if form
                     .get(&format!("bande_ligne_{number}"))
                     .map(String::as_str)
@@ -7647,6 +7673,12 @@ async fn economique_import_confirmer(
                 } else {
                     sqlx::query("INSERT INTO achatgenetique(date,num_facture,fournisseur,designation,nb_animaux,poids_total,prix_moyen,montant_ht,montant_net,bande_code) VALUES(?,?,?,?,?,?,?,?,?,?)")
                         .bind(line.date.as_deref()).bind(reference).bind(import_detail_str(line,"fournisseur")).bind(import_detail_str(line,"designation")).bind(import_detail_i64(line,"nb_animaux")).bind(import_detail_f64(line,"poids_total")).bind(import_detail_f64(line,"prix_moyen")).bind(import_detail_f64(line,"montant_ht")).bind(import_detail_f64(line,"montant_net")).bind(band_code.as_deref()).execute(&mut *transaction).await?;
+                }
+                if line.details["toutes_bandes"].as_bool() == Some(true) {
+                    sqlx::query("UPDATE achatgenetique SET toutes_bandes=1 WHERE num_facture=?")
+                        .bind(reference)
+                        .execute(&mut *transaction)
+                        .await?;
                 }
             }
             "vente" => {
@@ -7884,28 +7916,21 @@ async fn economique_valorisation(
 }
 
 macro_rules! delete_handler {
-    ($name:ident,$table:literal) => {
+    ($name:ident,$category:literal) => {
         async fn $name(
-            State(state): State<AppState>,
-            Extension(session): Extension<SessionData>,
+            state: State<AppState>,
+            session: Extension<SessionData>,
             Path(id): Path<i64>,
-            Form(form): Form<HashMap<String, String>>,
+            form: Form<HashMap<String, String>>,
         ) -> AppResult<Response> {
-            require_writer(&session)?;
-            verify_csrf(&session, &form)?;
-            sqlx::query(concat!("DELETE FROM ", $table, " WHERE id=?"))
-                .bind(id)
-                .execute(&state.pool)
-                .await?;
-            Ok(Redirect::to("/economique").into_response())
+            factures::remove(state, session, Path(($category.into(), id)), form).await
         }
     };
 }
-delete_handler!(economique_aliment_supprimer, "livraisonaliment");
-delete_handler!(economique_veto_supprimer, "achatveto");
-
-delete_handler!(economique_semence_supprimer, "achatsemence");
-delete_handler!(economique_genetique_supprimer, "achatgenetique");
+delete_handler!(economique_aliment_supprimer, "aliment");
+delete_handler!(economique_veto_supprimer, "veto");
+delete_handler!(economique_semence_supprimer, "semence");
+delete_handler!(economique_genetique_supprimer, "genetique");
 
 async fn economique_valorisation_supprimer(
     State(state): State<AppState>,

@@ -539,12 +539,17 @@ pub(super) async fn economique_facture_affectations(
                 .await?;
         }
         "genetique" => {
-            sqlx::query("UPDATE achatgenetique SET bande_code=(SELECT code FROM bande WHERE id=?) WHERE id=?")
-                .bind(primary).bind(id).execute(&mut *tx).await?;
+            sqlx::query("UPDATE achatgenetique SET bande_code=(SELECT code FROM bande WHERE id=?),toutes_bandes=? WHERE id=?")
+                .bind(primary).bind(form.contains_key("toutes_bandes")).bind(id).execute(&mut *tx).await?;
         }
         _ => unreachable!(),
     }
     tx.commit().await?;
+    if category == "genetique" {
+        crate::affectation::boars(&state.pool)
+            .await
+            .map_err(AppError::Internal)?;
+    }
     Ok(Redirect::to(&format!(
         "/economique?secteur={redirect}#facture-{category}-{id}"
     ))
