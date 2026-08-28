@@ -148,6 +148,7 @@ pub(super) async fn direct(
     verify_csrf(&session, &form)?;
     let mut tx = state.pool.begin().await?;
     assign(&mut tx, id, -1, selected(&form)?).await?;
+    rename_lot(&mut tx, id, -1, &form).await?;
     tx.commit().await?;
     Ok(Redirect::to("/economique?secteur=abattoir").into_response())
 }
@@ -164,6 +165,7 @@ pub(super) async fn lot(
     }
     let mut tx = state.pool.begin().await?;
     assign(&mut tx, id, index, selected(&form)?).await?;
+    rename_lot(&mut tx, id, index, &form).await?;
     tx.commit().await?;
     Ok(Redirect::to("/economique?secteur=abattoir").into_response())
 }
@@ -184,6 +186,120 @@ pub(super) async fn auto_assign(pool: &SqlitePool) -> AppResult<u64> {
     }
     tx.commit().await?;
     Ok(count)
+}
+
+async fn rename_lot(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    id: i64,
+    index: i64,
+    form: &HashMap<String, String>,
+) -> AppResult<()> {
+    let Some(reference) = form.get("lot_ref") else {
+        return Ok(());
+    };
+    let reference = reference.trim().to_uppercase();
+    if reference.is_empty() || reference.len() > 80 {
+        return Err(AppError::Invalid(
+            "Numéro de lot obligatoire (80 caractères maximum).".into(),
+        ));
+    }
+    let old: String =
+        sqlx::query_scalar("SELECT COALESCE(lot_ref,'') FROM ventelot WHERE id=? AND lot_index=?")
+            .bind(id)
+            .bind(index)
+            .fetch_one(&mut **tx)
+            .await?;
+    if normalize(&old) == normalize(&reference) {
+        return Ok(());
+    }
+    let duplicate:i64=sqlx::query_scalar("SELECT COUNT(*) FROM ventelot WHERE num_apport=(SELECT num_apport FROM venteapport WHERE id=?) AND upper(trim(lot_ref))=? AND NOT(id=? AND lot_index=?)").bind(id).bind(&reference).bind(id).bind(index).fetch_one(&mut **tx).await?;
+    if duplicate > 0 {
+        return Err(AppError::Invalid(
+            "Ce numéro de lot existe déjà dans cet apport.".into(),
+        ));
+    }
+    if index < 0 {
+        sqlx::query("UPDATE venteapport SET frappe=? WHERE id=?")
+            .bind(&reference)
+            .bind(id)
+            .execute(&mut **tx)
+            .await?;
+    } else {
+        let raw: String = sqlx::query_scalar("SELECT lots_json FROM venteapport WHERE id=?")
+            .bind(id)
+            .fetch_one(&mut **tx)
+            .await?;
+        let mut lots: Vec<Value> =
+            serde_json::from_str(&raw).map_err(|e| AppError::Internal(e.into()))?;
+        let lot = lots.get_mut(index as usize).ok_or(AppError::NotFound)?;
+        if lot["ref_originale"].is_null() {
+            lot["ref_originale"] = json!(old);
+        }
+        lot["ref"] = json!(reference);
+        sqlx::query("UPDATE venteapport SET lots_json=? WHERE id=?")
+            .bind(json!(lots).to_string())
+            .bind(id)
+            .execute(&mut **tx)
+            .await?;
+    }
+    Ok(())
+}
+
+pub(super) async fn remove_apport(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Path(id): Path<i64>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_economic_import(&session)?;
+    verify_csrf(&session, &form)?;
+    let mut tx = state.pool.begin().await?;
+    let reference: Option<String> =
+        sqlx::query_scalar("SELECT num_apport FROM venteapport WHERE id=?")
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or(AppError::NotFound)?;
+    let ids: Vec<i64> = if let Some(reference) = reference.as_ref().filter(|r| !r.trim().is_empty())
+    {
+        sqlx::query_scalar("SELECT id FROM venteapport WHERE num_apport=?")
+            .bind(reference)
+            .fetch_all(&mut *tx)
+            .await?
+    } else {
+        vec![id]
+    };
+    for sale in &ids {
+        sqlx::query("DELETE FROM transfert WHERE vente_apport_id=?")
+            .bind(sale)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM venteapport WHERE id=?")
+            .bind(sale)
+            .execute(&mut *tx)
+            .await?;
+    }
+    if let Some(reference) = reference.as_ref().filter(|r| !r.trim().is_empty()) {
+        sqlx::query("DELETE FROM valorisationapport WHERE num_apport=?")
+            .bind(reference)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    db::journal(
+        &state.pool,
+        &session.identifiant,
+        "suppression",
+        "apport",
+        &format!(
+            "Apport {} : {} lots et sorties annulés",
+            reference.unwrap_or_default(),
+            ids.len()
+        ),
+        "/economique",
+    )
+    .await;
+    Ok(Redirect::to("/economique?secteur=abattoir").into_response())
 }
 
 #[cfg(test)]
@@ -262,6 +378,71 @@ mod tests {
         assert!(page.contains("Bande du lot"));
         assert!(page.contains("B1"));
         assert!(page.contains("B2"));
+        Ok(())
+    }
+    #[tokio::test]
+    async fn reclassement_et_suppression_restituent_les_effectifs() -> anyhow::Result<()> {
+        use super::super::documents::tests::{session, state};
+        let state = state().await;
+        sqlx::raw_sql("INSERT INTO bande(id,code) VALUES(1,'A'),(2,'B'); INSERT INTO site(id,code) VALUES(1,'S'); INSERT INTO salle(id,site_id,nom) VALUES(1,1,'R'); INSERT INTO casesalle(id,salle_id,nom) VALUES(1,1,'C1'),(2,1,'C2'); INSERT INTO transfert(date,bande_id,case_dest_id,nombre) VALUES('2026-01-01',1,1,50),('2026-01-01',2,2,40); INSERT INTO venteapport(id,date,num_apport,frappe,nb_porcs,montant_ht) VALUES(1,'2026-02-01','AP','ERREUR',10,2000),(2,'2026-02-01','AP','LOT2',5,1000);").execute(&state.pool).await?;
+        let mut tx = state.pool.begin().await?;
+        assign(&mut tx, 1, -1, Some(1)).await?;
+        assign(&mut tx, 2, -1, Some(2)).await?;
+        tx.commit().await?;
+        let form = HashMap::from([
+            ("csrf_token".into(), "test".into()),
+            ("bande_id".into(), "2".into()),
+            ("lot_ref".into(), "LOT1".into()),
+        ]);
+        direct(
+            State(state.clone()),
+            Extension(session()),
+            Path(1),
+            Form(form),
+        )
+        .await?;
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM transfert WHERE vente_apport_id=1 AND bande_id=1",
+        )
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(count, 0);
+        let sold: i64 = sqlx::query_scalar(
+            "SELECT SUM(nombre) FROM transfert WHERE vente_apport_id IS NOT NULL AND bande_id=2",
+        )
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(sold, 15);
+        let reference: String = sqlx::query_scalar("SELECT frappe FROM venteapport WHERE id=1")
+            .fetch_one(&state.pool)
+            .await?;
+        assert_eq!(reference, "LOT1");
+        assert!(remove_apport(
+            State(state.clone()),
+            Extension(session()),
+            Path(1),
+            Form(HashMap::new())
+        )
+        .await
+        .is_err());
+        remove_apport(
+            State(state.clone()),
+            Extension(session()),
+            Path(1),
+            Form(HashMap::from([("csrf_token".into(), "test".into())])),
+        )
+        .await?;
+        let sales: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM venteapport")
+            .fetch_one(&state.pool)
+            .await?;
+        assert_eq!(sales, 0);
+        let out: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM transfert WHERE vente_apport_id IS NOT NULL")
+                .fetch_one(&state.pool)
+                .await?;
+        assert_eq!(out, 0);
+        let stock:i64=sqlx::query_scalar("SELECT SUM(CASE WHEN case_dest_id=2 THEN nombre ELSE -nombre END) FROM transfert WHERE case_source_id=2 OR case_dest_id=2").fetch_one(&state.pool).await?;
+        assert_eq!(stock, 40);
         Ok(())
     }
     #[test]

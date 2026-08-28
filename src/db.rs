@@ -10,6 +10,15 @@ pub async fn init(pool: &SqlitePool) -> anyhow::Result<()> {
     // Migrations additives pour les bases anciennes 1.55–1.65. Une colonne déjà
     // présente est volontairement ignorée afin de rendre le démarrage idempotent.
     for (table, column, definition) in [
+        ("livraisonaliment", "date_reference", "TEXT"),
+        (
+            "livraisonaliment",
+            "sites_json",
+            "TEXT NOT NULL DEFAULT '[]'",
+        ),
+        ("achatveto", "date_reference", "TEXT"),
+        ("achatveto", "sites_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("achatgenetique", "ht_manuel", "INTEGER NOT NULL DEFAULT 0"),
         ("controlequotidien", "salle_nom", "TEXT"),
         ("controlequotidien", "element", "TEXT"),
         ("controlequotidien", "utilisateur", "TEXT"),
@@ -196,6 +205,7 @@ pub async fn init(pool: &SqlitePool) -> anyhow::Result<()> {
         .execute(pool)
         .await?;
 
+    repair_genetic_ht(pool).await?;
     auto_assign_economic_invoices(pool).await?;
 
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM utilisateur")
@@ -219,26 +229,25 @@ pub async fn init(pool: &SqlitePool) -> anyhow::Result<()> {
 /// verrouillée et ne sera jamais écrasée au prochain démarrage.
 pub async fn auto_assign_economic_invoices(pool: &SqlitePool) -> anyhow::Result<u64> {
     let mut changed = 0;
+    for (category, table) in [("aliment", "livraisonaliment"), ("veto", "achatveto")] {
+        let sql = format!("INSERT OR IGNORE INTO affectationfacturebande(categorie,facture_id,bande_id,automatique) SELECT '{category}',x.id,CAST(j.value AS INTEGER),0 FROM {table} x,json_each('['||x.bandes||']') j WHERE x.bandes IS NOT NULL AND NOT EXISTS(SELECT 1 FROM affectationfacturebande a WHERE a.categorie='{category}' AND a.facture_id=x.id) AND NOT EXISTS(SELECT 1 FROM affectationfacturecontrole c WHERE c.categorie='{category}' AND c.facture_id=x.id) AND json_valid('['||x.bandes||']') AND EXISTS(SELECT 1 FROM bande b WHERE b.id=CAST(j.value AS INTEGER))");
+        changed += sqlx::query(&sql).execute(pool).await?.rows_affected();
+    }
+
     for (category, table) in [
         ("aliment", "livraisonaliment"),
         ("veto", "achatveto"),
         ("semence", "achatsemence"),
     ] {
         let sql = format!(
-            "INSERT OR IGNORE INTO affectationfacturebande(categorie,facture_id,bande_id,automatique) SELECT '{category}',id,bande_id,0 FROM {table} WHERE bande_id IS NOT NULL"
+            "INSERT OR IGNORE INTO affectationfacturebande(categorie,facture_id,bande_id,automatique) SELECT '{category}',id,bande_id,0 FROM {table} x WHERE bande_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM affectationfacturebande a WHERE a.categorie='{category}' AND a.facture_id=x.id) AND NOT EXISTS(SELECT 1 FROM affectationfacturecontrole c WHERE c.categorie='{category}' AND c.facture_id=x.id)"
         );
         changed += sqlx::query(&sql).execute(pool).await?.rows_affected();
     }
     changed += sqlx::query("INSERT OR IGNORE INTO affectationfacturebande(categorie,facture_id,bande_id,automatique) SELECT 'genetique',a.id,b.id,0 FROM achatgenetique a JOIN bande b ON b.code=a.bande_code WHERE a.bande_code IS NOT NULL AND trim(a.bande_code)<>''")
         .execute(pool).await?.rows_affected();
-    for (category, table) in [("aliment", "livraisonaliment"), ("veto", "achatveto")] {
-        let sql = format!("INSERT OR IGNORE INTO affectationfacturebande(categorie,facture_id,bande_id,automatique) SELECT '{category}',x.id,CAST(j.value AS INTEGER),0 FROM {table} x,json_each('['||x.bandes||']') j WHERE x.bandes IS NOT NULL AND json_valid('['||x.bandes||']') AND EXISTS(SELECT 1 FROM bande b WHERE b.id=CAST(j.value AS INTEGER))");
-        changed += sqlx::query(&sql).execute(pool).await?.rows_affected();
-    }
 
     for (category, table, center, has_site) in [
-        ("aliment", "livraisonaliment", 70_i64, true),
-        ("veto", "achatveto", 55_i64, true),
         ("semence", "achatsemence", -114_i64, false),
         ("genetique", "achatgenetique", -180_i64, false),
     ] {
@@ -253,10 +262,62 @@ pub async fn auto_assign_economic_invoices(pool: &SqlitePool) -> anyhow::Result<
         changed += sqlx::query(&sql).execute(pool).await?.rows_affected();
     }
 
+    changed += crate::affectation::refresh(pool, "aliment", "livraisonaliment").await?;
+    changed += crate::affectation::refresh(pool, "veto", "achatveto").await?;
     sqlx::query("UPDATE livraisonaliment SET bande_id=(SELECT a.bande_id FROM affectationfacturebande a WHERE a.categorie='aliment' AND a.facture_id=livraisonaliment.id ORDER BY a.id LIMIT 1),bandes=(SELECT GROUP_CONCAT(a.bande_id) FROM affectationfacturebande a WHERE a.categorie='aliment' AND a.facture_id=livraisonaliment.id)").execute(pool).await?;
     sqlx::query("UPDATE achatveto SET bande_id=(SELECT a.bande_id FROM affectationfacturebande a WHERE a.categorie='veto' AND a.facture_id=achatveto.id ORDER BY a.id LIMIT 1),bandes=(SELECT GROUP_CONCAT(a.bande_id) FROM affectationfacturebande a WHERE a.categorie='veto' AND a.facture_id=achatveto.id)").execute(pool).await?;
     sqlx::query("UPDATE achatsemence SET bande_id=(SELECT a.bande_id FROM affectationfacturebande a WHERE a.categorie='semence' AND a.facture_id=achatsemence.id ORDER BY a.id LIMIT 1)").execute(pool).await?;
     sqlx::query("UPDATE achatgenetique SET bande_code=(SELECT b.code FROM affectationfacturebande a JOIN bande b ON b.id=a.bande_id WHERE a.categorie='genetique' AND a.facture_id=achatgenetique.id ORDER BY a.id LIMIT 1)").execute(pool).await?;
+    Ok(changed)
+}
+
+/// Ne répare que les valeurs TTC reconnaissables dans une source importée
+/// appliquée. Aucun taux de TVA supposé, aucune correction manuelle écrasée.
+pub async fn repair_genetic_ht(pool: &SqlitePool) -> anyhow::Result<u64> {
+    let rows: Vec<(i64, Option<String>, Option<f64>)> =
+        sqlx::query_as("SELECT id,num_facture,montant_ht FROM achatgenetique WHERE ht_manuel=0")
+            .fetch_all(pool)
+            .await?;
+    let sources:Vec<String>=sqlx::query_scalar("SELECT l.donnees_json FROM importligne l JOIN importjournal j ON j.token=l.token WHERE j.statut='applique' AND j.type_import LIKE 'economique:%'").fetch_all(pool).await?;
+    let mut changed = 0;
+    for (id, reference, current) in rows {
+        if reference.as_deref().is_none_or(|r| r.trim().is_empty()) {
+            continue;
+        }
+        let mut candidates = Vec::new();
+        for raw in &sources {
+            let Ok(line) = serde_json::from_str::<crate::economic_import::ImportLine>(raw) else {
+                continue;
+            };
+            if line.kind != "genetique" || line.reference != reference {
+                continue;
+            }
+            if let Some(ht) = line.details["montant_ht"]
+                .as_f64()
+                .filter(|x| x.is_finite())
+            {
+                if line.amount == Some(ht)
+                    && (current.is_none()
+                        || (line.details["montant_net"].as_f64() == current && current != Some(ht)))
+                {
+                    candidates.push(ht);
+                }
+            }
+        }
+        if let Some(ht) = candidates
+            .first()
+            .copied()
+            .filter(|ht| candidates.iter().all(|x| x == ht))
+        {
+            changed +=
+                sqlx::query("UPDATE achatgenetique SET montant_ht=? WHERE id=? AND ht_manuel=0")
+                    .bind(ht)
+                    .bind(id)
+                    .execute(pool)
+                    .await?
+                    .rows_affected();
+        }
+    }
     Ok(changed)
 }
 
@@ -355,7 +416,8 @@ mod economic_assignment_tests {
                 .execute(&pool)
                 .await?
                 .last_insert_rowid();
-        let invoice = sqlx::query("INSERT INTO livraisonaliment(date,produit,montant_ht) VALUES('2026-03-12','Aliment test',1000)")
+        sqlx::raw_sql("INSERT INTO site(id,code) VALUES(1,'S1'); INSERT INTO salle(id,site_id,nom) VALUES(1,1,'S1'); INSERT INTO transfert(date,bande_id,salle_dest_id,nombre) VALUES('2026-02-01',1,1,10),('2026-04-01',2,1,10);").execute(&pool).await?;
+        let invoice = sqlx::query("INSERT INTO livraisonaliment(date,produit,montant_ht,sites_json) VALUES('2026-03-12','Aliment test',1000,'[1]')")
             .execute(&pool).await?.last_insert_rowid();
         let removed = sqlx::query("INSERT INTO livraisonaliment(date,produit,montant_ht) VALUES('2026-03-12','Retrait manuel',500)")
             .execute(&pool).await?.last_insert_rowid();

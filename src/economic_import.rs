@@ -13,7 +13,7 @@ const MAX_DECOMPRESSED_PAGE: usize = 2 * 1024 * 1024;
 /// de tableau « Désignation produit / Silos » dans le texte extrait par
 /// lopdf — probablement du texte positionné hors flux principal — alors que
 /// les lignes produit elles-mêmes restent extraites normalement.
-const ALIMENT_ROW_PATTERN: &str = r"(?m)^(.+?)\s+(MI|FE|GR)\s+([0-9]+)\s+([0-9.,]+)(-?)\s*\*?\s+[0-9.,]+\s+([0-9.,]+)\s+[0-9]+\s+([0-9.,]+)(-?)\s*$";
+const ALIMENT_ROW_PATTERN: &str = r"(?m)^(.+?)\s+(MI|FE|GR|FM|\([0-9]+\))\s+(?:([0-9]{1,3})\s+)?([0-9]+[.,][0-9]+)(-?)\s*\*?\s+(?:[0-9.,]+\s+)?([0-9.,]+)\s+[0-9]+\s+([0-9.,]+)(-?)\s*$";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImportLine {
@@ -244,6 +244,34 @@ fn document_sign(text: &str) -> f64 {
     }
 }
 
+/// Contexte du bon auquel appartient une ligne, et non le premier site du PDF.
+fn delivery_context(text: &str, end: usize) -> (Option<String>, Option<String>, Option<String>) {
+    let prefix = &text[..end];
+    let mut delivery = None;
+    let mut order = None;
+    let mut destination = None;
+    for line in prefix.lines() {
+        let upper = line.to_uppercase();
+        if upper.contains("BON") && (upper.contains("LIVRAISON") || upper.contains("BON N")) {
+            delivery = capture(line, r"(?i)du\s*([0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4})", 1)
+                .and_then(|v| iso_date(&v));
+            order = None;
+        }
+        if upper.contains("COMMANDE") {
+            order = capture(
+                line,
+                r"(?i)(?:du|date\s*:?)\s*([0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4})",
+                1,
+            )
+            .and_then(|v| iso_date(&v));
+        }
+        if upper.contains("LIVRÉ CHEZ") || upper.contains("LIVRE CHEZ") {
+            destination = Some(line.trim().to_string());
+        }
+    }
+    (delivery, order, destination)
+}
+
 fn parse_aliment(text: &str) -> Result<ImportDocument, String> {
     // Le numéro de facture est normalement précédé de « FACTURE N° », mais
     // certains bordereaux (constaté sur une facture aliment réelle, 38.pdf)
@@ -274,6 +302,7 @@ fn parse_aliment(text: &str) -> Result<ImportDocument, String> {
     let credit = document_sign(text);
     let mut lines = Vec::new();
     for row in regex.captures_iter(text) {
+        let (delivery, order, destination) = delivery_context(text, row.get(0).unwrap().start());
         let product = format!(
             "{} {}",
             row[1].split_whitespace().collect::<Vec<_>>().join(" "),
@@ -289,16 +318,17 @@ fn parse_aliment(text: &str) -> Result<ImportDocument, String> {
         let amount = number(&row[7]).map(|value| value.abs() * line_sign);
         lines.push(ImportLine {
             kind: "aliment".into(),
-            date: date.clone(),
+            date: delivery.clone().or_else(||date.clone()),
             reference: reference.clone(),
             label: product.clone(),
             quantity: tonnage,
             unit_price,
             amount,
             details: json!({
+                "date_commande":order,"date_livraison":delivery,"destination":destination,"source_ligne":row.get(0).unwrap().start(),
                 "fournisseur": "Cooperl Nutrition",
                 "produit": product,
-                "silo": row[3].to_string(),
+                "silo": row.get(3).map(|v|v.as_str()),
                 "presentation": row[2].to_string(),
                 "tonnage": tonnage,
                 "pu_ht": unit_price,
@@ -311,17 +341,26 @@ fn parse_aliment(text: &str) -> Result<ImportDocument, String> {
 }
 
 fn parse_veto(text: &str) -> Result<ImportDocument, String> {
-    let reference = capture(text, r"(?i)ACTURE\s*N[°ºo]?\s*([0-9]{6,})", 1);
-    let date = capture(text, r"(?i)\bLE\s*([0-9]{2}/[0-9]{2}/[0-9]{2,4})", 1)
+    let reference = capture(text, r"(?i)ACTURE\s*N[°ºo]?\s*([0-9.]{6,})", 1)
+        .or_else(|| {
+            capture(
+                text,
+                r"(?m)^\s*(20\.[0-9]{4,8}|20[0-9]{5}|[0-9]{12})\s*$",
+                1,
+            )
+        })
+        .map(|v| v.replace('.', ""));
+    let date = capture(text, r"(?i)\bLE\s*([0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4})", 1)
         .or_else(|| capture(text, r"(?i)FACT\.?\s*([0-9]{2}/[0-9]{2}/[0-9]{2,4})", 1))
         .and_then(|value| iso_date(&value));
     let regex = Regex::new(
-        r"(?m)^([0-9]+)\s+([A-ZÀ-ÖØ-Þ].+?)\s+4\s+[0-9 ]+?\s+([0-9.,]+)\s+([0-9.,]+)(-?)\s*$",
+        r"(?m)^\s*([0-9]+)\s+([A-ZÀ-ÖØ-Þ].+?)\s+[1-9]\s+[0-9 ]+?\s+([0-9.,]+)\s+([0-9.,]+)(-?)\s*$",
     )
     .map_err(|error| format!("analyse vétérinaire indisponible: {error}"))?;
     let credit = document_sign(text);
     let mut lines = Vec::new();
     for row in regex.captures_iter(text) {
+        let (delivery, order, destination) = delivery_context(text, row.get(0).unwrap().start());
         let product = row[2].trim();
         if product.to_uppercase().contains("REMISE") {
             continue;
@@ -337,13 +376,14 @@ fn parse_veto(text: &str) -> Result<ImportDocument, String> {
         };
         lines.push(ImportLine {
             kind: "veto".into(),
-            date: date.clone(),
+            date: delivery.clone().or_else(||date.clone()),
             reference: reference.clone(),
             label: label.clone(),
             quantity,
             unit_price,
             amount,
             details: json!({
+                "date_commande":order,"date_livraison":delivery,"destination":destination,"source_ligne":row.get(0).unwrap().start(),
                 "fournisseur": "Cooperl",
                 "produit": label,
                 "quantite": quantity,
@@ -500,6 +540,7 @@ fn parse_genetique(text: &str) -> Result<ImportDocument, String> {
         1,
     )
     .or_else(|| capture(text, r"\b([0-9]{1,2}\.[0-9]{4,6})\b", 1))
+    .or_else(|| capture(text, r"(?m)^\s*(14[0-9]{5,10})\s*$", 1))
     .map(|value| value.replace('.', ""));
     // Un avoir renvoie vers la facture qu'il annule ; on le garde dans le
     // libellé (la table `achatgenetique` n'a pas de colonne dédiée, et
@@ -543,18 +584,23 @@ fn parse_genetique(text: &str) -> Result<ImportDocument, String> {
     // le sens du document — plus besoin d'une liste de références codées en
     // dur comme avant, qui ne fonctionnait de toute façon plus depuis que
     // la référence n'était jamais extraite.
-    let recap =
-        Regex::new(r"(?m)^\s*([0-9.,]+-?)\s+[0-9]\s+[0-9]+,[0-9]+%\s+([0-9.,]+-?)\s+([0-9.,]+-?)")
-            .ok()
-            .and_then(|regex| regex.captures(text));
-    let ht = recap
-        .as_ref()
-        .and_then(|row| row.get(1))
-        .and_then(|value| number(value.as_str()));
-    let ttc = recap
-        .as_ref()
-        .and_then(|row| row.get(3))
-        .and_then(|value| number(value.as_str()));
+    let recap_regex = Regex::new(
+        r"(?m)^\s*([0-9.,]+-?)\s+[0-9]\s+[0-9]+[,.][0-9]+%\s+([0-9.,]+-?)\s+([0-9.,]+-?)",
+    )
+    .map_err(|e| e.to_string())?;
+    let recaps: Vec<_> = recap_regex.captures_iter(text).collect();
+    let ht = if recaps.is_empty() {
+        capture(
+            text,
+            r"(?i)(?:TOTAL\s+HORS\s+TAXES|TOTAL\s+H\.?\s*T\.?)\s*:?\s*([0-9.,]+-?)",
+            1,
+        )
+        .and_then(|v| number(&v))
+    } else {
+        Some(recaps.iter().filter_map(|r| number(&r[1])).sum::<f64>())
+    };
+    let ttc =
+        (!recaps.is_empty()).then(|| recaps.iter().filter_map(|r| number(&r[3])).sum::<f64>());
     let is_avoir = ht.is_some_and(|value| value < 0.0)
         || ttc.is_some_and(|value| value < 0.0)
         || document_sign(text) < 0.0
@@ -563,13 +609,7 @@ fn parse_genetique(text: &str) -> Result<ImportDocument, String> {
     // Les calculs économiques utilisent exclusivement la base HT. Le TTC
     // reste conservé dans les détails pour contrôle de facture, jamais comme
     // solution de repli silencieuse.
-    let micro_tva_non_applicable = text.to_uppercase().contains("MICRO-ENTREPRISE")
-        || text.to_uppercase().contains("MICRO ENTREPRISE")
-        || text.to_uppercase().contains("TVA NON APPLICABLE")
-        || text.to_uppercase().contains("293 B");
-    let amount = ht
-        .or_else(|| micro_tva_non_applicable.then_some(ttc).flatten())
-        .map(|value| value.abs() * sign);
+    let amount = ht.map(|value| value.abs() * sign);
     let base_label = if count > 0 {
         format!("{count} cochettes")
     } else {
@@ -594,7 +634,7 @@ fn parse_genetique(text: &str) -> Result<ImportDocument, String> {
             "nb_animaux": (count > 0).then_some(count),
             "poids_total": (weight != 0.0).then_some((weight.abs() * 10.0).round() / 10.0 * sign),
             "prix_moyen": average,
-            "montant_ht": ht.map(|value| value.abs() * sign),
+            "montant_ht": amount,
             "montant_net": ttc.map(|value| value.abs() * sign),
             "num_facture": reference,
             "avoir": sign < 0.0,
@@ -639,7 +679,7 @@ fn parse_apport(text: &str) -> Result<ImportDocument, String> {
             1,
         )
     })
-    .or_else(|| capture(text, r"(?i)\bLE\s*([0-9]{2}/[0-9]{2}/[0-9]{2,4})", 1))
+    .or_else(|| capture(text, r"(?i)\bLE\s*([0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4})", 1))
     .and_then(|value| iso_date(&value));
     let week = capture(text, r"(?i)Semaine\s*N[°ºo]?\s*([0-9./]+)", 1);
     let total_net = captures_all(text, r"(?i)NET\s*A\s*PAYER\s*E?\s*([0-9.,]+)\s*E?", 1)
@@ -1258,6 +1298,57 @@ mod tests {
     fn ne_touche_pas_un_startxref_deja_correct() {
         let good = build_minimal_pdf("Bon n 1");
         assert!(repair_startxref_offset(&good).is_none());
+    }
+
+    #[test]
+    fn veterinaire_dates_bons_tva_et_lignes_repetées() {
+        let text="PRODUITS VETERINAIRES\n20.18089\nLE 14/02/26\nBon n° 1113 du 9/02/26\nLivré chez SITE A\n 1 SANIBLANC SAC 3 01113 11,18 11,18\n 1 ECO-CONTRIBUTION TVA 20% 4 01113 0,04 0,04\nBon n° 28761 du 12/02/26\nLivré chez SITE B\n 1 ECO-CONTRIBUTION TVA 20% 4 28761 0,24 0,24";
+        let doc = parse_document(text).unwrap();
+        assert_eq!(doc.lines.len(), 3);
+        assert_eq!(doc.lines[0].reference.as_deref(), Some("2018089"));
+        assert_eq!(doc.lines[0].date.as_deref(), Some("2026-02-09"));
+        assert_eq!(doc.lines[2].date.as_deref(), Some("2026-02-12"));
+        assert_eq!(doc.lines[2].details["destination"], "Livré chez SITE B");
+        assert!((doc.lines.iter().filter_map(|x| x.amount).sum::<f64>() - 11.46).abs() < 0.001);
+    }
+    #[test]
+    fn aliment_chaque_bon_garde_date_et_destination() {
+        let text="FACTURE N° 123456 ALIMENTS\nLIVRE CHEZ SITE A\nBon de livraison n° 10 du 1/08/26\nPORC GR 01 1,000 200,00 210,00 2 210,00\nLIVRE CHEZ SITE B\nBon de livraison n° 11 du 2/08/26\nPORC GR 01 2,000 200,00 210,00 2 420,00";
+        let doc = parse_document(text).unwrap();
+        assert_eq!(doc.lines.len(), 2);
+        assert_eq!(doc.lines[0].date.as_deref(), Some("2026-08-01"));
+        assert_eq!(doc.lines[1].date.as_deref(), Some("2026-08-02"));
+        assert_eq!(doc.lines[1].details["destination"], "LIVRE CHEZ SITE B");
+    }
+    #[test]
+    fn genetique_totalise_les_bases_ht_pas_les_ttc() {
+        let doc=parse_document("ANIMAUX REPRODUCTEURS\nSemaine N° 26.01 14.12345\nLE 1/01/26\n100,00 2 5,5% 5,50 105,50\n20,00 4 20,0% 4,00 24,00").unwrap();
+        assert_eq!(doc.lines[0].amount, Some(120.0));
+        assert_eq!(doc.lines[0].details["montant_ht"], 120.0);
+        assert_eq!(doc.lines[0].details["montant_net"], 129.5);
+    }
+    #[test]
+    #[ignore]
+    fn audit_dossier_pdf_local() {
+        let root = std::env::var("CHECK_PDF_DIR").expect("CHECK_PDF_DIR");
+        let mut report = Vec::new();
+        for entry in std::fs::read_dir(root).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|x| x.to_str()) != Some("pdf") {
+                continue;
+            }
+            let result = std::fs::read(&path)
+                .map_err(|e| e.to_string())
+                .and_then(|b| extract_pdf_text(&b))
+                .and_then(|t| parse_document(&t));
+            report.push(match result {Ok(d)=>json!({"file":path,"type":d.document_type,"lines":d.lines,"warnings":d.warnings}),Err(e)=>json!({"file":path,"error":e})});
+        }
+        std::fs::write(
+            std::env::var("CHECK_PDF_REPORT").expect("CHECK_PDF_REPORT"),
+            serde_json::to_string_pretty(&report).unwrap(),
+        )
+        .unwrap();
+        println!("{} PDF examinés", report.len());
     }
 
     #[test]

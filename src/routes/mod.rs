@@ -27,6 +27,7 @@ mod adoptions;
 mod ameliorations;
 mod demo_portal;
 mod documents;
+mod factures;
 mod import_historique;
 mod parity;
 mod ventes;
@@ -276,6 +277,11 @@ pub fn router(state: AppState) -> Router {
         .route("/energie/modele.csv", get(energie_modele_csv))
         .route("/energie/import", post(energie_import))
         .route("/economique", get(economique))
+        .route(
+            "/economique/{category}/{id}/contexte",
+            post(factures::contexte),
+        )
+        .route("/economique/genetique/{id}/ht", post(factures::ht))
         .route("/gte", get(gte))
         .route(
             "/economique/import-pdf",
@@ -310,7 +316,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/economique/vente/{id}/supprimer",
-            post(economique_vente_supprimer),
+            post(ventes::remove_apport),
         )
         .route(
             "/economique/semence/{id}/supprimer",
@@ -6984,8 +6990,8 @@ async fn economique(
     let ventes = ventes::rows(&state.pool).await?;
     let achats = generic_rows(&state.pool,"SELECT id,date,'aliment' AS categorie,produit AS libelle,tonnage AS quantite,montant_ht FROM livraisonaliment UNION ALL SELECT id,date,'vétérinaire',produit,quantite,montant_ht FROM achatveto UNION ALL SELECT id,date,'semence',designation,nb_doses,montant_ht FROM achatsemence UNION ALL SELECT id,date,'génétique',designation,nb_animaux,montant_ht FROM achatgenetique ORDER BY date DESC,id DESC LIMIT 50").await?;
     let genetiques = generic_rows(&state.pool,"SELECT a.id,a.date,a.num_facture,a.fournisseur,a.designation,a.nb_animaux,a.poids_total,a.montant_ht,CASE WHEN a.montant_ht IS NULL THEN 1 ELSE 0 END AS ht_manquant,COALESCE((SELECT GROUP_CONCAT(b.code,', ') FROM affectationfacturebande af JOIN bande b ON b.id=af.bande_id WHERE af.categorie='genetique' AND af.facture_id=a.id),'Non affecté') AS bandes_affectees,COALESCE((SELECT GROUP_CONCAT(af.bande_id) FROM affectationfacturebande af WHERE af.categorie='genetique' AND af.facture_id=a.id),'') AS bandes_ids,EXISTS(SELECT 1 FROM affectationfacturebande af WHERE af.categorie='genetique' AND af.facture_id=a.id AND af.automatique=1) AS affectation_auto FROM achatgenetique a ORDER BY a.date DESC,a.id DESC LIMIT 250").await?;
-    let aliments = generic_rows(&state.pool,"SELECT a.id,a.date,a.num_facture,a.fournisseur,a.produit,a.tonnage,a.montant_ht,COALESCE((SELECT GROUP_CONCAT(b.code,', ') FROM affectationfacturebande af JOIN bande b ON b.id=af.bande_id WHERE af.categorie='aliment' AND af.facture_id=a.id),'Non affecté') AS bandes_affectees,COALESCE((SELECT GROUP_CONCAT(af.bande_id) FROM affectationfacturebande af WHERE af.categorie='aliment' AND af.facture_id=a.id),'') AS bandes_ids,EXISTS(SELECT 1 FROM affectationfacturebande af WHERE af.categorie='aliment' AND af.facture_id=a.id AND af.automatique=1) AS affectation_auto FROM livraisonaliment a ORDER BY a.date DESC,a.id DESC LIMIT 250").await?;
-    let veterinaires = generic_rows(&state.pool,"SELECT a.id,a.date,a.num_facture,a.fournisseur,a.produit,a.quantite,a.montant_ht,COALESCE((SELECT GROUP_CONCAT(b.code,', ') FROM affectationfacturebande af JOIN bande b ON b.id=af.bande_id WHERE af.categorie='veto' AND af.facture_id=a.id),'Non affecté') AS bandes_affectees,COALESCE((SELECT GROUP_CONCAT(af.bande_id) FROM affectationfacturebande af WHERE af.categorie='veto' AND af.facture_id=a.id),'') AS bandes_ids,EXISTS(SELECT 1 FROM affectationfacturebande af WHERE af.categorie='veto' AND af.facture_id=a.id AND af.automatique=1) AS affectation_auto FROM achatveto a ORDER BY a.date DESC,a.id DESC LIMIT 250").await?;
+    let aliments = generic_rows(&state.pool,"SELECT a.id,a.date,COALESCE(a.date_reference,a.date) AS date_reference,a.site,a.sites_json,replace(replace(a.sites_json,'[',''),']','') AS sites_ids,a.num_facture,a.fournisseur,a.produit,a.tonnage,a.montant_ht,COALESCE((SELECT GROUP_CONCAT(b.code,', ') FROM affectationfacturebande af JOIN bande b ON b.id=af.bande_id WHERE af.categorie='aliment' AND af.facture_id=a.id),'Non affecté') AS bandes_affectees,COALESCE((SELECT GROUP_CONCAT(af.bande_id) FROM affectationfacturebande af WHERE af.categorie='aliment' AND af.facture_id=a.id),'') AS bandes_ids,EXISTS(SELECT 1 FROM affectationfacturebande af WHERE af.categorie='aliment' AND af.facture_id=a.id AND af.automatique=1) AS affectation_auto FROM livraisonaliment a ORDER BY a.date DESC,a.id DESC LIMIT 250").await?;
+    let veterinaires = generic_rows(&state.pool,"SELECT a.id,a.date,COALESCE(a.date_reference,a.date) AS date_reference,a.site,a.sites_json,replace(replace(a.sites_json,'[',''),']','') AS sites_ids,a.num_facture,a.fournisseur,a.produit,a.quantite,a.montant_ht,COALESCE((SELECT GROUP_CONCAT(b.code,', ') FROM affectationfacturebande af JOIN bande b ON b.id=af.bande_id WHERE af.categorie='veto' AND af.facture_id=a.id),'Non affecté') AS bandes_affectees,COALESCE((SELECT GROUP_CONCAT(af.bande_id) FROM affectationfacturebande af WHERE af.categorie='veto' AND af.facture_id=a.id),'') AS bandes_ids,EXISTS(SELECT 1 FROM affectationfacturebande af WHERE af.categorie='veto' AND af.facture_id=a.id AND af.automatique=1) AS affectation_auto FROM achatveto a ORDER BY a.date DESC,a.id DESC LIMIT 250").await?;
     let semences = generic_rows(&state.pool,"SELECT a.id,a.date,a.num_facture,a.fournisseur,a.designation,a.nb_doses,a.montant_ht,COALESCE((SELECT GROUP_CONCAT(b.code,', ') FROM affectationfacturebande af JOIN bande b ON b.id=af.bande_id WHERE af.categorie='semence' AND af.facture_id=a.id),'Non affecté') AS bandes_affectees,COALESCE((SELECT GROUP_CONCAT(af.bande_id) FROM affectationfacturebande af WHERE af.categorie='semence' AND af.facture_id=a.id),'') AS bandes_ids,EXISTS(SELECT 1 FROM affectationfacturebande af WHERE af.categorie='semence' AND af.facture_id=a.id AND af.automatique=1) AS affectation_auto FROM achatsemence a ORDER BY a.date DESC,a.id DESC LIMIT 250").await?;
     let valuations = generic_rows(&state.pool,"SELECT id,num_apport,date,libelle,montant,categorie,CASE WHEN lower(COALESCE(categorie,''))='retenue' THEN 1 ELSE 0 END AS est_retenue FROM valorisationapport ORDER BY date DESC,id DESC LIMIT 200").await?;
     let monthly = generic_rows(&state.pool,"WITH RECURSIVE mois(m) AS (SELECT date('now','start of month','-11 months') UNION ALL SELECT date(m,'+1 month') FROM mois WHERE m<date('now','start of month')),depenses AS (SELECT substr(date,1,7) AS m,SUM(COALESCE(montant_ht,0)) AS montant FROM livraisonaliment GROUP BY m UNION ALL SELECT substr(date,1,7),SUM(COALESCE(montant_ht,0)) FROM achatveto GROUP BY substr(date,1,7) UNION ALL SELECT substr(date,1,7),SUM(COALESCE(montant_ht,0)) FROM achatsemence GROUP BY substr(date,1,7) UNION ALL SELECT substr(date,1,7),SUM(COALESCE(montant_ht,0)) FROM achatgenetique GROUP BY substr(date,1,7)),revenus AS (SELECT substr(date,1,7) AS m,SUM(COALESCE(montant_ht,0)) AS montant,SUM(COALESCE(poids_total,0)) AS poids FROM venteapport GROUP BY m) SELECT substr(m.m,1,7) AS mois,ROUND(COALESCE((SELECT SUM(d.montant) FROM depenses d WHERE d.m=substr(m.m,1,7)),0),2) AS depenses,ROUND(COALESCE(r.montant,0),2) AS revenus,ROUND(r.montant/NULLIF(r.poids,0),3) AS prix_ht_kg FROM mois m LEFT JOIN revenus r ON r.m=substr(m.m,1,7) ORDER BY m.m").await?;
@@ -7013,6 +7019,10 @@ async fn economique(
     )
     .await?;
     let mut ctx = context(&session);
+    ctx.insert(
+        "sites".into(),
+        json!(generic_rows(&state.pool, "SELECT id,code,nom FROM site ORDER BY code").await?),
+    );
     ctx.insert("cahiers".into(), Value::Array(cahiers));
     ctx.insert("cahiers_reels".into(), Value::Array(cahiers_reels));
     ctx.insert("totaux".into(),json!({"ventes":ventes_total,"aliment":aliment,"veto":veto,"semence":semence,"genetique":genetique,"marge":ventes_total-aliment-veto-semence-genetique,"porcs":total_pigs,"prix_ht_kg":if total_weight>0.0{Some(ventes_total/total_weight)}else{None}}));
@@ -7187,7 +7197,11 @@ fn import_key(line: &ImportLine) -> String {
         _ => String::new(),
     };
     format!(
-        "{}|{}|{}",
+        "{}|{}|{}|{}",
+        line.details
+            .get("source_ligne")
+            .map(Value::to_string)
+            .unwrap_or_default(),
         line.kind,
         line.reference.as_deref().unwrap_or(""),
         detail.to_lowercase()
@@ -7383,6 +7397,7 @@ async fn economique_import_apercu(
     let stored = sqlx::query_as::<_,(i64,String,Option<String>,String)>("SELECT numero_ligne,action,anomalie,donnees_json FROM importligne WHERE token=? ORDER BY numero_ligne")
         .bind(&token).fetch_all(&state.pool).await?;
     let bands = ventes::bands(&state.pool).await?;
+    let sites = generic_rows(&state.pool, "SELECT id,code,nom FROM site ORDER BY code").await?;
     let mut rows = Vec::new();
     for (number, action, anomaly, raw) in stored {
         let line: ImportLine =
@@ -7392,7 +7407,7 @@ async fn economique_import_apercu(
         } else {
             (None, "")
         };
-        rows.push(json!({"suggested_band":suggested_band,"suggestion_note":suggestion_note,"lot_ref":import_detail_str(&line,"frappe"),"ligne":number,"action":action,"anomalie":anomaly,"type":line.kind,"date":line.date,"reference":line.reference,"libelle":line.label,"quantite":line.quantity,"prix_unitaire":line.unit_price,"montant":line.amount}));
+        rows.push(json!({"sites_suggeres":factures::suggest_sites(import_detail_str(&line,"destination"),&sites),"details":line.details.clone(),"suggested_band":suggested_band,"suggestion_note":suggestion_note,"lot_ref":import_detail_str(&line,"frappe"),"ligne":number,"action":action,"anomalie":anomaly,"type":line.kind,"date":line.date,"reference":line.reference,"libelle":line.label,"quantite":line.quantity,"prix_unitaire":line.unit_price,"montant":line.amount}));
     }
     let summary = journal
         .2
@@ -7400,6 +7415,7 @@ async fn economique_import_apercu(
         .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
         .unwrap_or_else(|| json!({}));
     let mut ctx = context(&session);
+    ctx.insert("sites".into(), json!(sites));
     ctx.insert("token".into(), json!(token));
     ctx.insert(
         "type_document".into(),
@@ -7469,9 +7485,12 @@ async fn synchronise_sortie_abattoir(
         .unwrap_or_else(|| Local::now().date_naive().format("%Y-%m-%d").to_string());
     for (band, count) in allocations {
         let cases: Vec<(i64, i64)> = sqlx::query_as(
-            "SELECT c.id,CAST(COALESCE(SUM(CASE WHEN t.case_dest_id=c.id THEN COALESCE(t.nombre,0) WHEN t.id IN (SELECT transfert_id FROM sortienourrice WHERE transfert_id IS NOT NULL) THEN 0 ELSE -COALESCE(t.nombre,0) END),0) AS INTEGER) AS disponible FROM casesalle c JOIN transfert t ON (t.case_dest_id=c.id OR t.case_source_id=c.id) WHERE t.espece='porc' AND t.bande_id=? GROUP BY c.id HAVING disponible>0 ORDER BY MAX(t.date),c.id",
+            "SELECT c.id,CAST(COALESCE(SUM(CASE WHEN t.case_dest_id=c.id THEN COALESCE(t.nombre,0) WHEN t.id IN (SELECT transfert_id FROM sortienourrice WHERE transfert_id IS NOT NULL) THEN 0 ELSE -COALESCE(t.nombre,0) END),0)-COALESCE((SELECT SUM(d.nombre) FROM declarationmort d JOIN bande b ON b.code=d.bande_code WHERE d.case_id=c.id AND b.id=? AND date(d.date)<=date(?)),0) AS INTEGER) AS disponible FROM casesalle c JOIN transfert t ON (t.case_dest_id=c.id OR t.case_source_id=c.id) WHERE t.espece='porc' AND t.bande_id=? AND date(t.date)<=date(?) GROUP BY c.id HAVING disponible>0 ORDER BY MAX(t.date),c.id",
         )
         .bind(band)
+        .bind(&movement_date)
+        .bind(band)
+        .bind(&movement_date)
         .fetch_all(&mut **tx)
         .await?;
         let mut remaining = count;
@@ -7504,6 +7523,9 @@ async fn economique_import_confirmer(
 ) -> AppResult<Response> {
     require_economic_import(&session)?;
     verify_csrf(&session, &form)?;
+    let sites_available: Vec<i64> = sqlx::query_scalar("SELECT id FROM site")
+        .fetch_all(&state.pool)
+        .await?;
     let mut transaction = state.pool.begin().await?;
     let owner: Option<i64> = sqlx::query_scalar("SELECT cree_par FROM importjournal WHERE token=? AND statut='apercu' AND type_import LIKE 'economique:%'")
         .bind(&token).fetch_optional(&mut *transaction).await?.flatten();
@@ -7578,26 +7600,33 @@ async fn economique_import_confirmer(
             affected_apports.insert(reference.to_string());
         }
         match line.kind.as_str() {
-            "aliment" => {
-                let id: Option<i64> = sqlx::query_scalar("SELECT id FROM livraisonaliment WHERE COALESCE(num_facture,'')=? AND lower(COALESCE(produit,''))=lower(?) AND COALESCE(silo,'')=COALESCE(?, '') ORDER BY id LIMIT 1")
-                    .bind(reference).bind(import_detail_str(line,"produit")).bind(import_detail_str(line,"silo")).fetch_optional(&mut *transaction).await?;
-                if let Some(id) = id {
-                    sqlx::query("UPDATE livraisonaliment SET date=?,fournisseur=?,produit=?,silo=?,tonnage=?,pu_ht=?,montant_ht=?,bande_id=COALESCE(?,bande_id) WHERE id=?")
-                        .bind(line.date.as_deref()).bind(import_detail_str(line,"fournisseur")).bind(import_detail_str(line,"produit")).bind(import_detail_str(line,"silo")).bind(import_detail_f64(line,"tonnage")).bind(import_detail_f64(line,"pu_ht")).bind(import_detail_f64(line,"montant_ht")).bind(band_id).bind(id).execute(&mut *transaction).await?;
+            "aliment" | "veto" => {
+                let sites: Vec<i64> = sites_available
+                    .iter()
+                    .copied()
+                    .filter(|id| form.contains_key(&format!("site_ligne_{number}_{id}")))
+                    .collect();
+                let reference_date = form_date(&form, &format!("date_reference_{number}"))?
+                    .or_else(|| {
+                        (line.kind == "veto")
+                            .then(|| import_detail_str(line, "date_commande").map(str::to_string))
+                            .flatten()
+                    })
+                    .or_else(|| import_detail_str(line, "date_livraison").map(str::to_string))
+                    .or_else(|| line.date.clone());
+                let inserted = if line.kind == "aliment" {
+                    sqlx::query("INSERT INTO livraisonaliment(date,fournisseur,produit,silo,tonnage,pu_ht,montant_ht,num_facture,bande_id,date_reference,sites_json) VALUES(?,?,?,?,?,?,?,?,?,?,?)")
+                        .bind(line.date.as_deref()).bind(import_detail_str(line,"fournisseur")).bind(import_detail_str(line,"produit")).bind(import_detail_str(line,"silo")).bind(import_detail_f64(line,"tonnage")).bind(import_detail_f64(line,"pu_ht")).bind(line.amount).bind(reference).bind(band_id).bind(reference_date).bind(json!(sites).to_string()).execute(&mut *transaction).await?.last_insert_rowid()
                 } else {
-                    sqlx::query("INSERT INTO livraisonaliment(date,fournisseur,produit,silo,tonnage,pu_ht,montant_ht,num_facture,bande_id) VALUES(?,?,?,?,?,?,?,?,?)")
-                        .bind(line.date.as_deref()).bind(import_detail_str(line,"fournisseur")).bind(import_detail_str(line,"produit")).bind(import_detail_str(line,"silo")).bind(import_detail_f64(line,"tonnage")).bind(import_detail_f64(line,"pu_ht")).bind(import_detail_f64(line,"montant_ht")).bind(reference).bind(band_id).execute(&mut *transaction).await?;
-                }
-            }
-            "veto" => {
-                let id: Option<i64> = sqlx::query_scalar("SELECT id FROM achatveto WHERE COALESCE(num_facture,'')=? AND lower(COALESCE(produit,''))=lower(?) ORDER BY id LIMIT 1")
-                    .bind(reference).bind(import_detail_str(line,"produit")).fetch_optional(&mut *transaction).await?;
-                if let Some(id) = id {
-                    sqlx::query("UPDATE achatveto SET date=?,produit=?,quantite=?,pu_ht=?,montant_ht=?,fournisseur=?,bande_id=COALESCE(?,bande_id) WHERE id=?")
-                        .bind(line.date.as_deref()).bind(import_detail_str(line,"produit")).bind(import_detail_f64(line,"quantite")).bind(import_detail_f64(line,"pu_ht")).bind(import_detail_f64(line,"montant_ht")).bind(import_detail_str(line,"fournisseur")).bind(band_id).bind(id).execute(&mut *transaction).await?;
-                } else {
-                    sqlx::query("INSERT INTO achatveto(date,produit,quantite,pu_ht,montant_ht,num_facture,fournisseur,bande_id) VALUES(?,?,?,?,?,?,?,?)")
-                        .bind(line.date.as_deref()).bind(import_detail_str(line,"produit")).bind(import_detail_f64(line,"quantite")).bind(import_detail_f64(line,"pu_ht")).bind(import_detail_f64(line,"montant_ht")).bind(reference).bind(import_detail_str(line,"fournisseur")).bind(band_id).execute(&mut *transaction).await?;
+                    sqlx::query("INSERT INTO achatveto(date,produit,quantite,pu_ht,montant_ht,num_facture,fournisseur,bande_id,date_reference,sites_json) VALUES(?,?,?,?,?,?,?,?,?,?)")
+                        .bind(line.date.as_deref()).bind(import_detail_str(line,"produit")).bind(import_detail_f64(line,"quantite")).bind(import_detail_f64(line,"pu_ht")).bind(line.amount).bind(reference).bind(import_detail_str(line,"fournisseur")).bind(band_id).bind(reference_date).bind(json!(sites).to_string()).execute(&mut *transaction).await?.last_insert_rowid()
+                };
+                if form
+                    .get(&format!("bande_ligne_{number}"))
+                    .map(String::as_str)
+                    == Some("none")
+                {
+                    sqlx::query("INSERT INTO affectationfacturecontrole(categorie,facture_id,verrou_manuel) VALUES(?,?,1)").bind(&line.kind).bind(inserted).execute(&mut *transaction).await?;
                 }
             }
             "semence" => {
@@ -7874,7 +7903,7 @@ macro_rules! delete_handler {
 }
 delete_handler!(economique_aliment_supprimer, "livraisonaliment");
 delete_handler!(economique_veto_supprimer, "achatveto");
-delete_handler!(economique_vente_supprimer, "venteapport");
+
 delete_handler!(economique_semence_supprimer, "achatsemence");
 delete_handler!(economique_genetique_supprimer, "achatgenetique");
 

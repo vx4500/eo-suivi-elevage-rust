@@ -1,4 +1,5 @@
 #![recursion_limit = "256"]
+mod affectation;
 mod auth;
 mod cleanup;
 mod config;

@@ -319,6 +319,8 @@ CREATE TABLE IF NOT EXISTS livraisonaliment (
     montant_ht REAL,
     num_facture TEXT,
     site TEXT,
+    date_reference TEXT,
+    sites_json TEXT NOT NULL DEFAULT '[]',
     bande_id INTEGER REFERENCES bande(id),
     bandes TEXT
 );
@@ -335,6 +337,8 @@ CREATE TABLE IF NOT EXISTS achatveto (
     fournisseur TEXT,
     doses_unite INTEGER,
     site TEXT,
+    date_reference TEXT,
+    sites_json TEXT NOT NULL DEFAULT '[]',
     bande_id INTEGER REFERENCES bande(id),
     bandes TEXT
 );
@@ -390,6 +394,7 @@ CREATE TABLE IF NOT EXISTS achatgenetique (
     poids_total REAL,
     prix_moyen REAL,
     montant_ht REAL,
+    ht_manuel INTEGER NOT NULL DEFAULT 0,
     montant_net REAL,
     bande_code TEXT,
     note TEXT
