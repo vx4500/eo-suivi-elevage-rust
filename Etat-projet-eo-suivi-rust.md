@@ -1,6 +1,15 @@
 # EO-Suivi Élevage Rust — État du projet
 
-Version actuelle : **2.2.48** — Dernière mise à jour de ce document : 28 août 2026.
+Version actuelle : **2.2.49** — Dernière mise à jour de ce document : 31 août 2026.
+
+### Version 2.2.49 — économie fictive sur cinq ans
+
+Le portail de démonstration complète son historique pour couvrir cinq ans de
+ventes et conserve les sept bandes actives espacées de 21 jours. Il ajoute les
+ventes, aliments par stade, frais sanitaires, semences et génétique avec leurs
+affectations. Les données restent fictives et ne représentent pas un coût de
+production complet. Ajout transactionnel unique, sans réinitialiser les comptes
+ni remplacer les saisies existantes ; les bandes déjà renseignées sont exclues.
 
 ### Version 2.2.43 — ergonomie et gestion quotidienne
 
@@ -536,7 +545,7 @@ l'arrêt déclenche le retour arrière ; la sauvegarde de la base est conservée
 ```bash
 systemctl status eo-suivi-rust --no-pager -l
 journalctl -u eo-suivi-rust -n 80 --no-pager -l -o cat
-curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.48"
+curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.49"
 ```
 
 Puis ouvrir `https://rust-elevage.basse-chevrie.ovh`.

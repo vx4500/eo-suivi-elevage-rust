@@ -18,7 +18,7 @@ jobs:
         with:
           components: rustfmt, clippy
       - name: Vérifier les scripts de déploiement
-        run: bash -n scripts/mettre-a-jour-debian13.sh && sh -n scripts/build-linux-musl.sh scripts/lancer.sh
+        run: bash -n scripts/mettre-a-jour-debian13.sh scripts/mettre-a-jour-demo.sh && sh -n scripts/build-linux-musl.sh scripts/lancer.sh
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo fmt --all -- --check
       - name: Tests complets
@@ -37,6 +37,6 @@ jobs:
         run: file target/x86_64-unknown-linux-musl/release/eo-suivi-elevage | grep -Eq "statically linked|static-pie linked"
       - uses: actions/upload-artifact@v4
         with:
-          name: eo-suivi-elevage-2.2.48-linux-x86_64-musl
+          name: eo-suivi-elevage-2.2.49-linux-x86_64-musl
           path: target/x86_64-unknown-linux-musl/release/eo-suivi-elevage
           if-no-files-found: error

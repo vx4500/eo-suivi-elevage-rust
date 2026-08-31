@@ -1,4 +1,31 @@
-# EO-Suivi Élevage — démonstration 2.2.44
+# EO-Suivi Élevage — démonstration 2.2.49
+
+## Historique économique fictif
+
+Au premier démarrage de cette version, le portail ajoute, en une transaction,
+un historique couvrant au moins cinq ans de ventes et de dépenses fictives.
+La conduite conserve sept bandes actives et un intervalle de 21 jours entre
+cycles ; les cycles anciens sont archivés et ne sont pas des bandes actives
+supplémentaires. L'historique des mises-bas remonte plus loin pour couvrir le
+délai avant les premières ventes.
+
+Les ventes d'abattoir, aliments (gestation, lactation, post-sevrage, croissance,
+finition), frais sanitaires, semences et achats de génétique sont affectés aux
+bandes. Les opérations futures ne sont pas créées. Les comptes, mots de passe,
+suggestions et saisies existants ne sont pas réinitialisés. Une bande possédant
+déjà des données économiques est laissée intacte, donc son historique peut
+rester incomplet. Le complément ne se répète pas au redémarrage.
+
+Les tarifs sont des hypothèses illustratives, pas des références de marché.
+La marge affichée porte uniquement sur les postes suivis par l'écran économique :
+elle n'inclut pas l'ensemble des charges (travail, amortissements, énergie,
+financement, etc.) et ne doit pas être présentée comme un bénéfice net.
+Le tableau mensuel du portail couvre cinq ans et le mois en cours.
+
+Pour le conteneur OEelevage-demo déjà installé, utiliser après récupération du
+correctif : `bash scripts/mettre-a-jour-demo.sh`. Le script teste et compile
+séparément du binaire actif, sauvegarde la base à l'arrêt, puis contrôle la page
+de connexion. En cas d'échec, il restaure le binaire et la base sauvegardés.
 
 ## Démarrage sur Linux x86_64
 

@@ -1,4 +1,4 @@
-# EO-Suivi Élevage — portage Rust 2.2.48
+# EO-Suivi Élevage — portage Rust 2.2.49
 
 Cette archive reprend la base EO-Suivi 1.65 sous forme d'un serveur Rust. Elle
 n'utilise plus FastAPI, SQLModel, Uvicorn ni Python pour les fonctions déjà
@@ -93,6 +93,14 @@ oblige à choisir immédiatement un mot de passe d'au moins huit caractères.
 Les migrations sont additives : aucune table ni colonne historique n'est
 supprimée. Il ne faut toutefois pas faire fonctionner les versions Python et
 Rust en même temps sur la même base.
+
+## Démonstration fictive
+
+Le portail `EO_DEMO_PORTAL=1` dispose d'un historique économique d'au moins
+cinq ans pour une conduite en sept bandes actives. Les anciennes démos sont
+complétées une seule fois, sans réinitialiser les comptes ni remplacer les
+bandes déjà renseignées économiquement. Voir `DEMONSTRATION.md` pour le détail
+des données et `scripts/mettre-a-jour-demo.sh` pour le conteneur de démonstration.
 
 ## Docker
 
