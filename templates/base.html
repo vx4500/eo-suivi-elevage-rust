@@ -38,28 +38,29 @@
 <nav class="rust-nav">
   <a class="site-brand" href="/" aria-label="EI ORY Emmanuel — Accueil"><img src="/static/favicon.png?v={{ app_version }}" alt=""><span>EI ORY EMMANUEL</span></a>
   <a href="/">Accueil</a>
-  {% if session.a_truies %}<div class="rust-menu"><span>Reproduction ▾</span><div class="rust-sub">
-    <a href="/bandes">Bandes</a><a href="/maternite">Maternité / Mise-bas</a><a href="/truies">Truies</a><a href="/inseminations">Inséminations</a>
-    <a href="/reformes">Réformes</a><a href="/cochettes">Cochettes</a><a href="/archives">Archives</a>
+  {% if session.a_truies and ('bandes' in session.pages or 'truies' in session.pages or 'reformes' in session.pages or 'cochettes' in session.pages or 'archives' in session.pages) %}<div class="rust-menu"><span>Reproduction ▾</span><div class="rust-sub">
+    {% if 'bandes' in session.pages %}<a href="/bandes">Bandes</a><a href="/maternite">Maternité / Mise-bas</a>{% endif %}{% if 'truies' in session.pages %}<a href="/truies">Truies</a><a href="/inseminations">Inséminations</a>{% endif %}
+    {% if 'reformes' in session.pages %}<a href="/reformes">Réformes</a>{% endif %}{% if 'cochettes' in session.pages %}<a href="/cochettes">Cochettes</a>{% endif %}{% if 'archives' in session.pages %}<a href="/archives">Archives</a>{% endif %}
   </div></div>{% endif %}
-  <div class="rust-menu"><span>Élevage ▾</span><div class="rust-sub">
-    <a href="/planning">Planning</a><a href="/quotidien">Quotidien</a><a href="/transferts">Transferts</a>
-    <a href="/structure">Structure</a>{% if session.recoit_achats %}<a href="/reception">Réception</a>{% endif %}{% if session.module_genetique %}<a href="/genetique">Génétique</a>{% endif %}{% if session.engraisse and session.module_charcutiers_rfid %}<a href="/charcutiers">Charcutiers RFID</a>{% endif %}{% if session.engraisse and session.module_prestataires %}<a href="/engraissement">Prestataire</a>{% endif %}
-    <a href="/taches">Tâches et entretien</a>
+  {% if 'planning' in session.pages or 'quotidien' in session.pages or 'transferts' in session.pages or 'structure' in session.pages or 'reception' in session.pages or 'genetique' in session.pages or 'charcutiers' in session.pages or 'engraissement' in session.pages or 'entretien' in session.pages %}<div class="rust-menu"><span>Élevage ▾</span><div class="rust-sub">
+    {% if 'planning' in session.pages %}<a href="/planning">Planning</a>{% endif %}{% if 'quotidien' in session.pages %}<a href="/quotidien">Quotidien</a>{% endif %}{% if 'transferts' in session.pages %}<a href="/transferts">Transferts</a>{% endif %}
+    {% if 'structure' in session.pages %}<a href="/structure">Structure</a>{% endif %}{% if session.recoit_achats and 'reception' in session.pages %}<a href="/reception">Réception</a>{% endif %}{% if session.module_genetique and 'genetique' in session.pages %}<a href="/genetique">Génétique</a>{% endif %}{% if session.engraisse and session.module_charcutiers_rfid and 'charcutiers' in session.pages %}<a href="/charcutiers">Charcutiers RFID</a>{% endif %}{% if session.engraisse and session.module_prestataires and 'engraissement' in session.pages %}<a href="/engraissement">Prestataire</a>{% endif %}
+    {% if 'entretien' in session.pages %}<a href="/taches">Tâches et entretien</a>{% endif %}
+  </div></div>{% endif %}
+  {% if 'productivite' in session.pages or 'economique' in session.pages or 'ifip' in session.pages or 'charcutiers' in session.pages %}<div class="rust-menu"><span>Indicateurs ▾</span><div class="rust-sub">
+    {% if session.a_truies and 'productivite' in session.pages %}<a href="/gttt">GTTT</a><a href="/productivite">Productivité</a>{% endif %}
+    {% if 'economique' in session.pages %}<a href="/gte">GTE</a>{% endif %}{% if 'ifip' in session.pages %}<a href="/ifip">IFIP</a>{% endif %}{% if 'charcutiers' in session.pages %}<a href="/abattoir">Abattoir</a>{% endif %}
   </div></div>
-  <div class="rust-menu"><span>Indicateurs ▾</span><div class="rust-sub">
-    {% if session.a_truies %}<a href="/gttt">GTTT</a><a href="/productivite">Productivité</a>{% endif %}
-    <a href="/gte">GTE</a><a href="/ifip">IFIP</a><a href="/abattoir">Abattoir</a>
-  </div></div>
-  <div class="rust-menu"><span>Économie ▾</span><div class="rust-sub">
-    <a href="/economique">Économie</a><a href="/aliment-previsions">Prévisions aliment</a><a href="/energie">Eau & électricité</a><a href="/stock">Stocks</a>
-  </div></div>
-  {% if session.module_vente_directe %}<div class="rust-menu"><span>Vente ▾</span><div class="rust-sub">
+  {% endif %}
+  {% if 'economique' in session.pages or 'stock' in session.pages or 'energie' in session.pages %}<div class="rust-menu"><span>Économie ▾</span><div class="rust-sub">
+    {% if 'economique' in session.pages %}<a href="/economique">Économie</a>{% endif %}{% if 'stock' in session.pages %}<a href="/aliment-previsions">Prévisions aliment</a><a href="/stock">Stocks</a>{% endif %}{% if 'energie' in session.pages %}<a href="/energie">Eau & électricité</a>{% endif %}
+  </div></div>{% endif %}
+  {% if session.module_vente_directe %}{% if 'vente' in session.pages %}<div class="rust-menu"><span>Vente ▾</span><div class="rust-sub">
     <a href="/vente-directe">Vente directe</a><a href="/vente-directe/commandes">Commandes clients</a><a href="/vente-directe/bilan">Récapitulatif</a><a href="/vente-directe/sessions">Sessions de vente</a><a href="/vente-directe/communications">Communications clients</a><a href="/commande">Page de commande</a>
+  </div></div>{% endif %}{% endif %}
+  {% if 'documents' in session.pages or 'sanitaire' in session.pages or 'imports' in session.pages %}<div class="rust-menu"><span>Exploitation ▾</span><div class="rust-sub">
+    {% if 'documents' in session.pages %}<a href="/documents-obligatoires">Documents obligatoires</a>{% endif %}{% if 'sanitaire' in session.pages %}<a href="/sanitaire">Sanitaire</a><a href="/resolution-problemes">Résolution de problèmes</a><a href="/pharmacie">Pharmacie</a>{% endif %}{% if 'imports' in session.pages %}<a href="/imports">Importer un document</a>{% endif %}
   </div></div>{% endif %}
-  <div class="rust-menu"><span>Exploitation ▾</span><div class="rust-sub">
-    <a href="/documents-obligatoires">Documents obligatoires</a><a href="/sanitaire">Sanitaire</a><a href="/resolution-problemes">Résolution de problèmes</a><a href="/pharmacie">Pharmacie</a><a href="/imports">Importer un document</a>
-  </div></div>
   <button type="button" id="farm-alert-button" class="farm-alert-button" aria-label="Alertes de l’élevage" aria-controls="farm-alert-panel" aria-expanded="false"><span aria-hidden="true">!</span><b id="farm-alert-count">…</b></button>
   <span class="grow"></span>
   <form class="rust-search" action="/recherche" method="get"><input name="q" placeholder="Rechercher…"><button type="submit">OK</button></form>

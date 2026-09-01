@@ -1,6 +1,12 @@
 # EO-Suivi Élevage Rust — État du projet
 
-Version actuelle : **2.2.52** — Dernière mise à jour de ce document : 1er septembre 2026.
+Version actuelle : **2.2.53** — Dernière mise à jour de ce document : 1er septembre 2026.
+
+### Version 2.2.53 — accès utilisateurs, bandes et ventilation économique
+
+- Choix du rôle et des pages visibles pour chaque utilisateur.
+- Distinction entre bandes configurées et cycles ouverts sur le tableau de bord.
+- Import des factures d’aliment bloqué tant que le site manque ou que le stade ne peut pas être reconnu.
 
 ### Version 2.2.52 — coût d'achat en GTE, lignées et import génétique
 
@@ -576,7 +582,7 @@ l'arrêt déclenche le retour arrière ; la sauvegarde de la base est conservée
 ```bash
 systemctl status eo-suivi-rust --no-pager -l
 journalctl -u eo-suivi-rust -n 80 --no-pager -l -o cat
-curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.52"
+curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.53"
 ```
 
 Puis ouvrir `https://rust-elevage.basse-chevrie.ovh`.

@@ -10,6 +10,32 @@ use subtle::ConstantTimeEq;
 
 const SALARIE_DEFAUT: &[&str] = &["planning", "bandes", "truies", "charcutiers", "sanitaire"];
 
+pub const ACCESS_PAGES: &[(&str, &str)] = &[
+    ("planning", "Planning"),
+    ("bandes", "Bandes et maternité"),
+    ("truies", "Truies et inséminations"),
+    ("quotidien", "Quotidien"),
+    ("transferts", "Transferts"),
+    ("structure", "Structure"),
+    ("reception", "Réception"),
+    ("genetique", "Génétique"),
+    ("charcutiers", "Charcutiers et abattoir"),
+    ("entretien", "Tâches et entretien"),
+    ("productivite", "GTTT et productivité"),
+    ("ifip", "IFIP"),
+    ("economique", "Économie et GTE"),
+    ("stock", "Aliment et stocks"),
+    ("energie", "Eau et électricité"),
+    ("vente", "Vente directe"),
+    ("documents", "Documents obligatoires"),
+    ("sanitaire", "Sanitaire et pharmacie"),
+    ("imports", "Imports"),
+    ("reformes", "Réformes"),
+    ("cochettes", "Cochettes"),
+    ("archives", "Archives"),
+    ("engraissement", "Prestataire / engraissement"),
+];
+
 const SALARIE_HORS_SECTION_OK: &[&str] = &[
     "/apropos",
     "/documents-obligatoires",
@@ -184,7 +210,7 @@ fn path_has_prefix(path: &str, prefix: &str) -> bool {
 fn section_for_path(path: &str) -> Option<&'static str> {
     match path.trim_start_matches('/').split('/').next().unwrap_or("") {
         "planning" => Some("planning"),
-        "bandes" | "bande" => Some("bandes"),
+        "bandes" | "bande" | "maternite" | "soin-portee" => Some("bandes"),
         "truies" | "truie" | "recherche" | "inseminations" => Some("truies"),
         "charcutiers" | "charcutier" | "abattoir" | "traitement-charc" => Some("charcutiers"),
         "productivite" | "gttt" => Some("productivite"),
@@ -192,14 +218,42 @@ fn section_for_path(path: &str) -> Option<&'static str> {
         "reformes" => Some("reformes"),
         "cochettes" => Some("cochettes"),
         "sanitaire" => Some("sanitaire"),
-        "stock" => Some("stock"),
-        "economique" => Some("economique"),
+        "stock" | "aliment-previsions" | "machine-soupe" => Some("stock"),
+        "economique" | "gte" => Some("economique"),
         "structure" | "salle" => Some("structure"),
-        "effectifs" => Some("effectifs"),
         "archives" => Some("archives"),
         "entretien" | "taches" => Some("entretien"),
+        "quotidien" => Some("quotidien"),
+        "transfert" | "transferts" => Some("transferts"),
+        "reception" => Some("reception"),
+        "genetique" => Some("genetique"),
+        "energie" => Some("energie"),
+        "vente-directe" | "commande" => Some("vente"),
+        "documents-obligatoires" => Some("documents"),
+        "imports" | "import" | "import-pdf" => Some("imports"),
+        "engraissement" | "declaration" => Some("engraissement"),
         _ => None,
     }
+}
+
+pub fn effective_pages(session: &SessionData) -> Vec<String> {
+    if session.est_admin() || (session.role != "salarie" && session.sections.is_empty()) {
+        return ACCESS_PAGES
+            .iter()
+            .map(|(code, _)| (*code).into())
+            .collect();
+    }
+    if session.sections.iter().any(|section| section == "aucune") {
+        return Vec::new();
+    }
+    if session.sections.is_empty() {
+        return SALARIE_DEFAUT.iter().map(|code| (*code).into()).collect();
+    }
+    session.sections.clone()
+}
+
+fn page_allowed(session: &SessionData, path: &str) -> bool {
+    section_for_path(path).is_none_or(|page| effective_pages(session).iter().any(|p| p == page))
 }
 
 fn salarie_path_allowed(path: &str, sections: &[String]) -> bool {
@@ -261,7 +315,11 @@ pub async fn guard(State(state): State<AppState>, mut request: Request, next: Ne
         if session.doit_changer_mdp && path != "/mon-compte/mdp" && path != "/logout" {
             return Redirect::to("/mon-compte/mdp?force=1").into_response();
         }
+        // Compatibilité des anciens comptes prestataires sans réglage fin :
+        // ils restent limités à leur portail historique. Dès qu'un admin leur
+        // enregistre des pages, la sélection explicite ci-dessous s'applique.
         if session.role == "engraisseur"
+            && session.sections.is_empty()
             && path != "/documents-obligatoires"
             && path != "/"
             && !path.starts_with("/engraissement")
@@ -278,7 +336,10 @@ pub async fn guard(State(state): State<AppState>, mut request: Request, next: Ne
         {
             return Redirect::to("/").into_response();
         }
-        if session.role == "salarie" && !salarie_path_allowed(&path, &session.sections) {
+        if session.role == "salarie" && !salarie_path_allowed(&path, &effective_pages(&session)) {
+            return Redirect::to("/").into_response();
+        }
+        if session.role != "admin" && !page_allowed(&session, &path) {
             return Redirect::to("/").into_response();
         }
         if !session.module_vente_directe && path_has_prefix(&path, "/vente-directe") {
@@ -399,5 +460,21 @@ mod tests {
         assert!(!inconnu.a_truies());
         assert!(!inconnu.engraisse());
         assert!(!inconnu.recoit_achats());
+    }
+
+    #[test]
+    fn pages_personnalisees_sappliquent_aux_roles_non_admin() {
+        let mut user = session_avec_type("naisseur_engraisseur");
+        user.role = "eleveur".into();
+        user.sections = vec!["planning".into(), "sanitaire".into()];
+        assert!(page_allowed(&user, "/planning"));
+        assert!(page_allowed(&user, "/pharmacie"));
+        assert!(!page_allowed(&user, "/economique"));
+
+        user.sections = vec!["aucune".into()];
+        assert!(!page_allowed(&user, "/planning"));
+
+        user.role = "admin".into();
+        assert!(page_allowed(&user, "/economique"));
     }
 }

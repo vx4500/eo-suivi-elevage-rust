@@ -26,7 +26,7 @@
   <div>
     <span class="dashboard-eyebrow">Centre de pilotage</span>
     <h1>Tableau de bord élevage</h1>
-    <p>Situation au {{ aujourd_hui|date_fr }} · {{ stats.band_active }} bande(s) active(s) · {{ stats.truies }} truie(s)</p>
+    <p>Situation au {{ aujourd_hui|date_fr }} · {{ stats.band_configured }} bande(s) configurée(s) · {{ stats.band_active }} cycle(s) ouvert(s) · {{ stats.truies }} truie(s)</p>
   </div>
   <div class="dashboard-actions">
     <a href="/quotidien" class="dashboard-button secondary">Contrôle quotidien</a>
@@ -35,7 +35,7 @@
 </section>
 
 <section class="dashboard-kpis" aria-label="Indicateurs principaux">
-  <div class="dashboard-kpi"><span class="kpi-symbol">B</span><div><b>{{ stats.band_active }}</b><small>Bandes actives</small></div></div>
+  <div class="dashboard-kpi"><span class="kpi-symbol">B</span><div><b>{{ stats.band_configured }}</b><small>Bandes configurées · {{ stats.band_active }} cycles ouverts</small></div></div>
   <div class="dashboard-kpi"><span class="kpi-symbol">T</span><div><b>{{ stats.truies }}</b><small>Truies actives</small></div></div>
   <div class="dashboard-kpi"><span class="kpi-symbol">PV</span><div><b>{{ stats.porcs_vendus_annee }}</b><small>Porcs vendus {{ annee }}</small></div></div>
   <div class="dashboard-kpi"><span class="kpi-symbol">€/kg</span><div><b>{% if stats.prix_ht_kg is not none %}{{ stats.prix_ht_kg|decimal3 }} €{% else %}—{% endif %}</b><small>Prix HT {{ annee }}</small></div></div>

@@ -724,6 +724,7 @@ fn session_value(session: &SessionData) -> Value {
         "nom": session.nom,
         "role": session.role,
         "sections": session.sections,
+        "pages": auth::effective_pages(session),
         "csrf": session.csrf,
         "doit_changer_mdp": session.doit_changer_mdp,
         "peut_modifier": session.peut_modifier(),
@@ -1986,6 +1987,16 @@ async fn dashboard(
     let truies: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM truie WHERE reformee=0")
         .fetch_one(&state.pool)
         .await?;
+    // `bande.active=1` représente les cycles encore ouverts dans la base ; ce
+    // n'est pas le nombre de bandes de la conduite configurée (3, 4, 5, 7…).
+    // Afficher les deux évite notamment qu'une conduite passée de 7 à 3 bandes
+    // continue d'être présentée comme une conduite en 7 bandes.
+    let bandes_configurees: i64 = sqlx::query_scalar(
+        "SELECT CAST(valeur AS INTEGER) FROM parametre WHERE cle='nombre_bandes'",
+    )
+    .fetch_optional(&state.pool)
+    .await?
+    .unwrap_or(7);
     let sevres: i64 =
         sqlx::query_scalar("SELECT COALESCE(SUM(nb_sevres),0) FROM evenement WHERE type='sevrage'")
             .fetch_one(&state.pool)
@@ -2104,7 +2115,7 @@ async fn dashboard(
     );
     ctx.insert(
         "stats".into(),
-        json!({"band_active": bands.len(), "truies": truies, "sevres": sevres, "marge": vente-aliment-veto-semence-genetique,"porcs_vendus_annee":year_sales.0,"prix_ht_kg":if year_sales.1>0.0{Some(year_sales.2/year_sales.1)}else{None},"prix_dernieres_ventes":if latest_average.1>0.0{Some(latest_average.0/latest_average.1)}else{None},"morts_annee":year_deaths}),
+        json!({"band_configured": bandes_configurees, "band_active": bands.len(), "truies": truies, "sevres": sevres, "marge": vente-aliment-veto-semence-genetique,"porcs_vendus_annee":year_sales.0,"prix_ht_kg":if year_sales.1>0.0{Some(year_sales.2/year_sales.1)}else{None},"prix_dernieres_ventes":if latest_average.1>0.0{Some(latest_average.0/latest_average.1)}else{None},"morts_annee":year_deaths}),
     );
     Ok(render(&state, "dashboard.html", Value::Object(ctx))?.into_response())
 }
@@ -7795,6 +7806,15 @@ async fn economique_import_confirmer(
                     .copied()
                     .filter(|id| form.contains_key(&format!("site_ligne_{number}_{id}")))
                     .collect();
+                let explicitly_without_band = form
+                    .get(&format!("bande_ligne_{number}"))
+                    .map(String::as_str)
+                    == Some("none");
+                if line.kind == "aliment" && sites.is_empty() && !explicitly_without_band {
+                    return Err(AppError::Invalid(format!(
+                        "Choisissez au moins un site de livraison pour la facture {reference} (ligne {number})."
+                    )));
+                }
                 let reference_date = form_date(&form, &format!("date_reference_{number}"))?
                     .or_else(|| {
                         (line.kind == "veto")
@@ -7817,6 +7837,16 @@ async fn economique_import_confirmer(
                         .unwrap_or("auto");
                     if !crate::affectation::valid_stage(stage) {
                         return Err(AppError::Invalid("Stade d'aliment invalide.".into()));
+                    }
+                    if !explicitly_without_band
+                        && stage == "auto"
+                        && crate::affectation::feed_stage(
+                            import_detail_str(line, "produit").unwrap_or_default(),
+                        ) == "inconnu"
+                    {
+                        return Err(AppError::Invalid(format!(
+                            "Le stade de l’aliment n’est pas reconnu pour la facture {reference} (ligne {number}). Choisissez sa destination avant de confirmer."
+                        )));
                     }
                     sqlx::query("UPDATE livraisonaliment SET stade_aliment=? WHERE id=?")
                         .bind(stage)
@@ -9283,11 +9313,24 @@ async fn utilisateurs(
         return Err(AppError::Forbidden);
     }
     let users=sqlx::query_as::<_,Utilisateur>("SELECT id,identifiant,nom,prenom,hash_mdp,role,actif,sections,doit_changer_mdp,tentatives_echec,bloque_jusqu FROM utilisateur ORDER BY identifiant").fetch_all(&state.pool).await?;
+    let users = users
+        .into_iter()
+        .map(|user| {
+            let mut value = serde_json::to_value(&user).unwrap_or_default();
+            let pages = user
+                .sections
+                .as_deref()
+                .unwrap_or("")
+                .split(',')
+                .filter(|page| !page.is_empty() && *page != "aucune")
+                .collect::<Vec<_>>();
+            value["pages"] = json!(pages);
+            value
+        })
+        .collect::<Vec<_>>();
     let mut ctx = context(&session);
-    ctx.insert(
-        "utilisateurs".into(),
-        serde_json::to_value(users).unwrap_or_default(),
-    );
+    ctx.insert("utilisateurs".into(), json!(users));
+    ctx.insert("pages_acces".into(), json!(auth::ACCESS_PAGES));
     render(&state, "utilisateurs.html", Value::Object(ctx))
 }
 async fn utilisateur_creer(
@@ -9340,30 +9383,36 @@ async fn utilisateur_sections(
         return Err(AppError::Forbidden);
     }
     verify_csrf(&session, &form)?;
-    let allowed = [
-        "planning",
-        "bandes",
-        "truies",
-        "charcutiers",
-        "productivite",
-        "ifip",
-        "reformes",
-        "cochettes",
-        "sanitaire",
-        "stock",
-        "economique",
-        "structure",
-        "effectifs",
-        "archives",
-        "entretien",
-    ];
-    let sections = allowed
+    let requested_role = form.get("role").map(String::as_str).unwrap_or("salarie");
+    if !matches!(
+        requested_role,
+        "admin" | "eleveur" | "salarie" | "engraisseur"
+    ) {
+        return Err(AppError::Invalid("Rôle invalide".into()));
+    }
+    let identifiant: String = sqlx::query_scalar("SELECT identifiant FROM utilisateur WHERE id=?")
+        .bind(id)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let role = if identifiant == "admin" {
+        "admin"
+    } else {
+        requested_role
+    };
+    let mut selected = auth::ACCESS_PAGES
         .iter()
-        .filter(|section| form.contains_key(&format!("section_{section}")))
-        .copied()
-        .collect::<Vec<_>>()
-        .join(",");
-    sqlx::query("UPDATE utilisateur SET sections=? WHERE id=? AND role='salarie'")
+        .filter(|(code, _)| form.contains_key(&format!("section_{code}")))
+        .map(|(code, _)| *code)
+        .collect::<Vec<_>>();
+    selected.sort_unstable();
+    let sections = if selected.is_empty() {
+        "aucune".to_string()
+    } else {
+        selected.join(",")
+    };
+    sqlx::query("UPDATE utilisateur SET role=?,sections=? WHERE id=?")
+        .bind(role)
         .bind(sections)
         .bind(id)
         .execute(&state.pool)
