@@ -1,6 +1,15 @@
 # EO-Suivi Élevage Rust — État du projet
 
-Version actuelle : **2.2.54** — Dernière mise à jour de ce document : 1er septembre 2026.
+Version actuelle : **2.2.55** — Dernière mise à jour de ce document : 1er septembre 2026.
+
+### Version 2.2.55 — découverte du serveur sur le réseau local
+
+Le serveur s'annonce en mDNS/DNS-SD (`_eosuivi._tcp.local.`) avec son port, sa
+version et le nom de l'élevage. Prépare l'application mobile : beaucoup
+d'élevages n'ont aucun accès internet — ni nom de domaine, ni certificat, ni
+DNS — et le téléphone doit trouver le serveur seul sur le réseau. L'annonce
+n'est jamais bloquante (multicast filtré ou interface absente n'empêchent pas le
+démarrage) et se coupe avec `EO_MDNS=0`.
 
 ### Version 2.2.54 — progression des bandes et commandes clients
 
@@ -588,7 +597,7 @@ l'arrêt déclenche le retour arrière ; la sauvegarde de la base est conservée
 ```bash
 systemctl status eo-suivi-rust --no-pager -l
 journalctl -u eo-suivi-rust -n 80 --no-pager -l -o cat
-curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.54"
+curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.55"
 ```
 
 Puis ouvrir `https://rust-elevage.basse-chevrie.ovh`.

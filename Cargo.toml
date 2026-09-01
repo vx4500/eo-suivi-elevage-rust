@@ -1,6 +1,6 @@
 [package]
 name = "eo-suivi-elevage"
-version = "2.2.54"
+version = "2.2.55"
 edition = "2021"
 description = "EO-Suivi Elevage - serveur Rust compatible avec les bases SQLite v1.65"
 license = "proprietary"
@@ -31,6 +31,7 @@ tower-http = { version = "0.6", features = ["compression-full", "fs", "limit", "
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 uuid = { version = "1.12", features = ["v4"] }
+mdns-sd = "0.21.1"
 
 [profile.release]
 lto = "thin"
