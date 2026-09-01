@@ -14,7 +14,27 @@ fn normalize(reference: &str) -> String {
         .flat_map(char::to_uppercase)
         .collect()
 }
-/// Match exact du code ou du numéro officiel. Un marquage réutilisé reste
+/// Accepte la forme courte imprimée par l'abattoir (G6K07) et la forme
+/// complète proposée dans l'application (FR35G6K07), sans rapprochement flou.
+fn short_mark(reference: &str) -> Option<&str> {
+    let bytes = reference.as_bytes();
+    if !(7..=9).contains(&bytes.len())
+        || !reference.starts_with("FR")
+        || !bytes[2..4].iter().all(u8::is_ascii_digit)
+        || !bytes[4..].iter().all(u8::is_ascii_alphanumeric)
+        || !bytes[4..].iter().any(u8::is_ascii_alphabetic)
+        || !bytes[4..].iter().any(u8::is_ascii_digit)
+    {
+        return None;
+    }
+    Some(&reference[4..])
+}
+
+fn same_mark(left: &str, right: &str) -> bool {
+    left == right || short_mark(left) == Some(right) || short_mark(right) == Some(left)
+}
+
+/// Match du code exact ou du numéro officiel. Un marquage réutilisé reste
 /// ambigu : aucune déduction de bande à partir de la seule date d'abattage.
 pub(super) fn suggestion(reference: Option<&str>, bands: &[Value]) -> (Option<i64>, &'static str) {
     let reference = normalize(reference.unwrap_or_default());
@@ -24,9 +44,12 @@ pub(super) fn suggestion(reference: Option<&str>, bands: &[Value]) -> (Option<i6
     let matches: HashSet<i64> = bands
         .iter()
         .filter(|b| {
-            ["code", "num_officiel"]
-                .iter()
-                .any(|k| b[*k].as_str().is_some_and(|v| normalize(v) == reference))
+            b["code"]
+                .as_str()
+                .is_some_and(|v| normalize(v) == reference)
+                || b["num_officiel"]
+                    .as_str()
+                    .is_some_and(|v| same_mark(&normalize(v), &reference))
         })
         .filter_map(|b| b["id"].as_i64())
         .collect();
@@ -35,7 +58,10 @@ pub(super) fn suggestion(reference: Option<&str>, bands: &[Value]) -> (Option<i6
             matches.into_iter().next(),
             "Bande proposée d’après le numéro de lot / marquage.",
         ),
-        0 => (None, "Aucune correspondance exacte : choisissez la bande."),
+        0 => (
+            None,
+            "Marquage absent des bandes : renseignez leur n° de marquage ou choisissez la bande.",
+        ),
         _ => (
             None,
             "Ce numéro correspond à plusieurs bandes : choisissez la bonne bande.",
@@ -445,6 +471,66 @@ mod tests {
         assert_eq!(stock, 40);
         Ok(())
     }
+    #[test]
+    fn marquages_courts_des_apports_et_numeros_complets() {
+        let bands = vec![
+            json!({"id":1,"num_officiel":"FR35G6K07"}),
+            json!({"id":2,"num_officiel":"FR35G6KL"}),
+            json!({"id":3,"num_officiel":"FR35DA915"}),
+            json!({"id":4,"num_officiel":"FR35DA9"}),
+        ];
+        for (mark, id) in [(" g6k07 ", 1), ("G6KL", 2), ("DA915", 3), ("DA9", 4)] {
+            assert_eq!(suggestion(Some(mark), &bands).0, Some(id));
+        }
+        for mark in ["G6K", "FR44G6K07", "XX35G6K07", "35G6K07"] {
+            assert_eq!(suggestion(Some(mark), &bands).0, None);
+        }
+        let short = vec![json!({"id":1,"num_officiel":"G6K07"})];
+        assert_eq!(suggestion(Some("FR35G6K07"), &short).0, Some(1));
+        let mut ambiguous = bands.clone();
+        ambiguous.push(json!({"id":5,"num_officiel":"G6K07"}));
+        assert_eq!(suggestion(Some("G6K07"), &ambiguous).0, None);
+        let code_only = vec![json!({"id":1,"code":"FR35G6K07"})];
+        assert_eq!(suggestion(Some("G6K07"), &code_only).0, None);
+    }
+
+    #[tokio::test]
+    async fn bouton_reaffectation_inclut_abattoir_sans_doubler_les_sorties() -> anyhow::Result<()> {
+        use super::super::documents::tests::{session, state};
+        let state = state().await;
+        sqlx::raw_sql("INSERT INTO bande(id,code,num_officiel) VALUES(1,'B1','FR35G6K07'),(2,'B2','FR35G6KL'),(3,'B3','DA915'),(4,'B4','DA915'); INSERT INTO venteapport(id,date,num_apport,frappe,nb_porcs,montant_ht,bande_id) VALUES(1,'2026-08-03','AP1','G6K07',55,8488.41,NULL),(2,'2026-07-27','AP2','G6KL',66,9607.76,1),(3,'2026-07-27','AP3','DA915',68,8855.10,NULL),(4,'2026-08-03','AVOIR',NULL,NULL,49.08,NULL);").execute(&state.pool).await?;
+        assert!(super::super::parity::economique_rattacher_auto(
+            State(state.clone()),
+            Extension(session()),
+            Form(HashMap::new())
+        )
+        .await
+        .is_err());
+        for _ in 0..2 {
+            super::super::parity::economique_rattacher_auto(
+                State(state.clone()),
+                Extension(session()),
+                Form(HashMap::from([("csrf_token".into(), "test".into())])),
+            )
+            .await?;
+        }
+        let assigned: Vec<(i64, Option<i64>)> =
+            sqlx::query_as("SELECT id,bande_id FROM venteapport ORDER BY id")
+                .fetch_all(&state.pool)
+                .await?;
+        assert_eq!(
+            assigned,
+            vec![(1, Some(1)), (2, Some(1)), (3, None), (4, None)]
+        );
+        let moved: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(SUM(nombre),0) FROM transfert WHERE vente_apport_id=1",
+        )
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(moved, 55);
+        Ok(())
+    }
+
     #[test]
     fn correspondance_exacte_et_ambiguites() {
         let bands = vec![

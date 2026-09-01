@@ -32,7 +32,15 @@ pub async fn selected_sites(
 }
 
 pub fn feed_stage(product: &str) -> &'static str {
-    let p = product.to_uppercase();
+    let p = product
+        .to_uppercase()
+        .replace(['É', 'È', 'Ê', 'Ë'], "E")
+        .replace(['À', 'Â'], "A");
+    let p = p
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
     let stages = [
         ("gestation", p.contains("GESTA")),
         ("lactation", p.contains("LACTA")),
@@ -40,10 +48,10 @@ pub fn feed_stage(product: &str) -> &'static str {
         ("finition", p.contains("FINITION")),
         (
             "ps",
-            p.contains("POST-SEVRAGE")
-                || p.contains("POST SEVRAGE")
+            p.contains("POST SEVRAGE")
                 || p.contains("2EME AGE")
-                || p.contains("2ÈME ÂGE"),
+                || p.contains("2E AGE")
+                || p.split_whitespace().any(|word| word == "PS"),
         ),
     ];
     let found: Vec<_> = stages.into_iter().filter(|(_, yes)| *yes).collect();
@@ -121,7 +129,7 @@ pub async fn refresh(pool: &SqlitePool, category: &str, table: &str) -> anyhow::
         Option<String>,
         String,
     );
-    let rows:Vec<InvoiceContext>=sqlx::query_as(&format!("SELECT id,COALESCE(date_reference,date),sites_json,site,produit,{extra} FROM {table} x WHERE NOT EXISTS(SELECT 1 FROM affectationfacturecontrole c WHERE c.categorie=? AND c.facture_id=x.id AND c.verrou_manuel=1) AND NOT EXISTS(SELECT 1 FROM affectationfacturebande a WHERE a.categorie=? AND a.facture_id=x.id AND a.automatique=0)")).bind(category).bind(category).fetch_all(pool).await?;
+    let rows:Vec<InvoiceContext>=sqlx::query_as(&format!("SELECT id,COALESCE(NULLIF(trim(date_reference),''),trim(date)),sites_json,site,produit,{extra} FROM {table} x WHERE NOT EXISTS(SELECT 1 FROM affectationfacturecontrole c WHERE c.categorie=? AND c.facture_id=x.id AND c.verrou_manuel=1) AND NOT EXISTS(SELECT 1 FROM affectationfacturebande a WHERE a.categorie=? AND a.facture_id=x.id AND a.automatique=0)")).bind(category).bind(category).fetch_all(pool).await?;
     let mut count = 0;
     for (id, date, raw, site, product, stage) in rows {
         let sites = selected_sites(pool, &raw, site.as_deref()).await?;
@@ -151,9 +159,124 @@ pub async fn refresh(pool: &SqlitePool, category: &str, table: &str) -> anyhow::
     Ok(count)
 }
 
+/// Explique les prérequis manquants sans modifier les choix de l'éleveur.
+pub async fn explain_unassigned(
+    pool: &SqlitePool,
+    category: &str,
+    invoices: &mut [serde_json::Value],
+) -> anyhow::Result<()> {
+    let locked: Vec<i64> = sqlx::query_scalar(
+        "SELECT facture_id FROM affectationfacturecontrole WHERE categorie=? AND verrou_manuel=1",
+    )
+    .bind(category)
+    .fetch_all(pool)
+    .await?;
+    for invoice in invoices {
+        let sites = selected_sites(
+            pool,
+            invoice["sites_json"].as_str().unwrap_or("[]"),
+            invoice["site"].as_str(),
+        )
+        .await?;
+        // Les anciens sites textuels doivent aussi être cochés dans le formulaire.
+        invoice["sites_ids"] = serde_json::json!(sites
+            .iter()
+            .map(i64::to_string)
+            .collect::<Vec<_>>()
+            .join(","));
+        if !invoice["bandes_ids"]
+            .as_str()
+            .unwrap_or_default()
+            .is_empty()
+        {
+            continue;
+        }
+        let mut reasons = Vec::new();
+        if invoice["id"]
+            .as_i64()
+            .is_some_and(|id| locked.contains(&id))
+        {
+            reasons.push("Sans bande par choix manuel. Le recalcul automatique conserve ce choix.");
+        } else {
+            if !invoice["date_reference"]
+                .as_str()
+                .is_some_and(|date| chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").is_ok())
+            {
+                reasons.push("Date manquante ou invalide : renseignez la date de référence.");
+            }
+            if category == "aliment" {
+                if sites.is_empty() {
+                    reasons.push(
+                        "Site de livraison manquant ou non reconnu : cochez le site concerné.",
+                    );
+                }
+                let stage = invoice["stade_aliment"].as_str().unwrap_or("auto");
+                if stage == "inconnu"
+                    || (stage == "auto"
+                        && feed_stage(invoice["produit"].as_str().unwrap_or_default()) == "inconnu")
+                {
+                    reasons.push(
+                        "Stade d’aliment non reconnu : choisissez la destination de l’aliment.",
+                    );
+                }
+            }
+            if reasons.is_empty() {
+                reasons.push("Aucune affectation enregistrée : vérifiez les sites, les dates de cycle et les mouvements des bandes, puis relancez le recalcul.");
+            }
+        }
+        invoice["affectation_message"] = serde_json::json!(reasons.join(" "));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn libelles_post_sevrage_et_ambiguite() {
+        for label in [
+            "POST-SEVRAGE",
+            "Post–sevrage",
+            "POST  SEVRAGE",
+            "2ème âge",
+            "2e âge",
+            "ALIMENT PS",
+        ] {
+            assert_eq!(feed_stage(label), "ps", "{label}");
+        }
+        for label in ["ACTI PLUS B", "PS FINITION", "GESTA LACTA", "CAPSULE"] {
+            assert_eq!(feed_stage(label), "inconnu", "{label}");
+        }
+    }
+
+    #[tokio::test]
+    async fn date_reference_vide_et_diagnostic_sans_ecraser_choix_manuel() -> anyhow::Result<()> {
+        let state = crate::routes::documents::tests::state().await;
+        let p = &state.pool;
+        sqlx::raw_sql("INSERT INTO site(id,code) VALUES(1,'S1'); INSERT INTO bande(id,code,site,date_mb) VALUES(1,'PS','S1','2026-05-15'); INSERT INTO livraisonaliment(id,date,date_reference,site,produit) VALUES(1,'2026-07-01','  ','S1','2e âge'),(2,'2026-07-01',NULL,NULL,'ACTI PLUS B'),(3,'2026-07-01',NULL,'S1','2e âge'); INSERT INTO affectationfacturecontrole(categorie,facture_id,verrou_manuel) VALUES('aliment',3,1);").execute(p).await?;
+        for _ in 0..2 {
+            crate::db::auto_assign_economic_invoices(p).await?;
+            let assigned: Vec<(i64, i64)> = sqlx::query_as("SELECT facture_id,bande_id FROM affectationfacturebande WHERE categorie='aliment' ORDER BY facture_id").fetch_all(p).await?;
+            assert_eq!(assigned, vec![(1, 1)]);
+        }
+        let mut invoices = vec![
+            serde_json::json!({"id":1,"site":"S1","bandes_ids":"1"}),
+            serde_json::json!({"id":2,"date_reference":"2026-07-01","stade_aliment":"auto","produit":"ACTI PLUS B"}),
+            serde_json::json!({"id":3,"site":"S1"}),
+        ];
+        explain_unassigned(p, "aliment", &mut invoices).await?;
+        assert_eq!(invoices[0]["sites_ids"], "1");
+        assert!(invoices[0]["affectation_message"].is_null());
+        let message = invoices[1]["affectation_message"].as_str().unwrap();
+        assert!(message.contains("Site de livraison manquant"));
+        assert!(message.contains("Stade d’aliment non reconnu"));
+        assert!(invoices[2]["affectation_message"]
+            .as_str()
+            .unwrap()
+            .contains("choix manuel"));
+        Ok(())
+    }
+
     #[tokio::test]
     async fn stades_et_sites_selon_le_cycle() -> anyhow::Result<()> {
         let state = crate::routes::documents::tests::state().await;

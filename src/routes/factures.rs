@@ -234,6 +234,29 @@ mod tests {
     use crate::routes::documents::tests::{session, state};
 
     #[tokio::test]
+    async fn classement_affiche_les_blocages_et_le_resultat_nul() -> anyhow::Result<()> {
+        let s = state().await;
+        sqlx::query("INSERT INTO livraisonaliment(date,produit,montant_ht) VALUES('2026-07-01','ACTI PLUS B',100)").execute(&s.pool).await?;
+        let Html(html) = economique(
+            State(s.clone()),
+            Extension(session()),
+            Query(HashMap::from([("secteur".into(), "aliment".into())])),
+        )
+        .await?;
+        assert!(html.contains("Site de livraison manquant"));
+        assert!(html.contains("Stade d’aliment non reconnu"));
+        assert!(html.contains("<details open><summary>Date et sites concernés"));
+        let Html(html) = economique(
+            State(s),
+            Extension(session()),
+            Query(HashMap::from([("liaisons".into(), "0".into())])),
+        )
+        .await?;
+        assert!(html.contains("Aucune affectation automatique possible."));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn import_repetitions_sites_et_non_affectation() -> anyhow::Result<()> {
         let s = state().await;
         sqlx::raw_sql("INSERT INTO site(id,code) VALUES(1,'S1'),(2,'S2'); INSERT INTO salle(id,site_id,nom) VALUES(1,1,'A'),(2,2,'B'); INSERT INTO bande(id,code) VALUES(1,'B1'),(2,'B2'); INSERT INTO transfert(date,bande_id,salle_dest_id,nombre) VALUES('2026-01-01',1,1,10),('2026-01-01',2,2,20); INSERT INTO importjournal(token,type_import,cree_par) VALUES('test','economique:aliment',1);").execute(&s.pool).await?;

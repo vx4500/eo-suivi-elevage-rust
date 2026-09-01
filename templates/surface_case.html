@@ -1,0 +1,34 @@
+{% set d = c.densite %}{% set sf = c.surface %}
+<div class="surface-diagnostic surface-{{ d.niveau }}">
+<strong>{{ d.statut }}</strong>
+{% if sf.secteur %}<div>{{ sf.secteur }} · {{ d.effectif }} animaux enregistrés</div>{% endif %}
+{% if d.utile %}<div>{{ d.utile }} m² utiles{% if d.par_animal %} · <b>{{ d.par_animal }} m²/animal</b>{% endif %}</div>{% endif %}
+{% if sf.poids %}<div>Poids de contrôle : {{ sf.poids }} kg</div>{% endif %}
+{% if d.minimum %}<div>Minimum calculé : {{ d.minimum }} m²/animal · {{ d.requis }} m² requis</div>{% endif %}
+{% if d.capacite is defined %}<div>Capacité selon la surface et le poids saisi : {{ d.capacite }} porcs{% if d.excedent %} · <b>{{ d.excedent }} en excédent</b>{% endif %}</div>{% endif %}
+{% if d.manque %}<div><b>Manque : {{ d.manque }} m²</b></div>{% endif %}
+{% if d.objectif %}<div>{{ d.origine_objectif }} : {{ d.objectif }} m²/animal</div>{% endif %}
+<p>{{ d.message }}</p>
+{% if sf.date_saisie %}<small>Paramètres saisis le {{ sf.date_saisie }}. Effectif issu du suivi ; poids à actualiser.</small>{% endif %}
+</div>
+{% if session.peut_modifier %}
+<details><summary>Régler les dimensions et le secteur</summary>
+<form method="post" action="/structure/case/{{ c.id }}/surface" class="surface-form">
+<input type="hidden" name="csrf_token" value="{{ session.csrf }}">
+<label>Secteur de cette case<select name="secteur">
+{% for value,label in [('', 'À renseigner'),('verraterie','Verraterie (reproductrices)'),('gestantes','Gestantes'),('maternite','Maternité'),('ps','PS · Post-sevrage'),('pe','PE · Pré-engraissement'),('engraissement','Engraissement')] %}<option value="{{ value }}" {% if sf.secteur == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+</select></label>
+<label>Mode de logement<select name="logement">
+{% for value,label in [('', 'À renseigner'),('groupe','Porcs sevrés en groupe (PS / PE / engraissement)'),('reproductrices','Reproductrices en groupe après saillie'),('individuel','Reproductrices en logement individuel'),('liberte','Maternité liberté'),('bloquee','Maternité avec contention')] %}<option value="{{ value }}" {% if sf.logement == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+</select></label>
+<p>Saisir <b>soit les m², soit longueur × largeur</b>, en dimensions intérieures. Le secteur est propre à cette case ; il ne renomme pas la salle.</p>
+<label>Surface totale intérieure (m²)<input name="surface" inputmode="decimal" value="{{ sf.surface if sf.surface is not none else '' }}" placeholder="ex. 15,6"></label>
+<div class="rust-actions"><label>Longueur (m)<input name="longueur" inputmode="decimal" value="{{ sf.longueur if sf.longueur is not none else '' }}" placeholder="ex. 5,2"></label><label>Largeur (m)<input name="largeur" inputmode="decimal" value="{{ sf.largeur if sf.largeur is not none else '' }}" placeholder="ex. 3"></label></div>
+<label>Surface inaccessible à déduire (m²)<input name="exclue" inputmode="decimal" value="{{ sf.exclue if sf.exclue is not none else '' }}" placeholder="0"></label>
+<small>Déduire les obstacles, équipements non accessibles et, en maternité liberté, la zone réservée aux porcelets. Si les m² saisis sont déjà utiles, laisser la déduction à zéro.</small>
+<label>Poids vif de contrôle / sortie prévu (kg, PS–PE–engraissement)<input name="poids" inputmode="decimal" value="{{ sf.poids if sf.poids is not none else '' }}" placeholder="ex. 115"></label>
+<label>Objectif personnalisé de surface utile (m²/animal, facultatif)<input name="objectif" inputmode="decimal" value="{{ sf.objectif if sf.objectif is not none else '' }}" placeholder="À définir avec votre conseiller"></label>
+<small>L’objectif ne remplace pas le minimum. Sans objectif personnalisé, aucun « idéal » n’est inventé. En maternité liberté individuelle : repère EFSA de 6,6 m² accessibles à la truie.</small>
+<button>Enregistrer la surface et recalculer</button>
+</form></details>
+{% endif %}

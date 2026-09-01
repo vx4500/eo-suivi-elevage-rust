@@ -48,7 +48,7 @@ pub(super) async fn transferer(
     }
     let mut tx = state.pool.begin_with("BEGIN IMMEDIATE").await?;
     for id in std::iter::once(source).chain(destination) {
-        let row: Option<(i64, i64, String)> = sqlx::query_as("SELECT p.presents,p.bande_id,p.date FROM portee_effectif p JOIN truie t ON t.id=p.truie_id WHERE p.id=? AND t.reformee=0 AND NOT EXISTS(SELECT 1 FROM evenement s WHERE s.type='sevrage' AND s.truie_id=p.truie_id AND s.bande_id=p.bande_id AND s.date>=p.date) AND p.id=(SELECT e.id FROM evenement e WHERE e.truie_id=p.truie_id AND e.type='mise_bas' ORDER BY e.date DESC,e.id DESC LIMIT 1)")
+        let row: Option<(i64, i64, String)> = sqlx::query_as("SELECT p.presents,p.bande_id,p.date FROM portee_effectif p JOIN truie t ON t.id=p.truie_id WHERE p.id=? AND t.reformee=0 AND p.cloturee=0 AND p.date<=date('now') AND p.id=(SELECT e.id FROM evenement e WHERE e.truie_id=p.truie_id AND e.type='mise_bas' ORDER BY e.date DESC,e.id DESC LIMIT 1)")
             .bind(id).fetch_optional(&mut *tx).await?;
         let (presents, bande, naissance) = row.ok_or_else(|| {
             AppError::Invalid("Choisissez deux portées en allaitement, non sevrées".into())

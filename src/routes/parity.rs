@@ -688,7 +688,7 @@ pub(super) async fn economique_rattacher_auto(
 ) -> AppResult<Response> {
     require_writer(&session)?;
     verify_csrf(&session, &form)?;
-    let changed = auto_link_economy(&state.pool, false).await?;
+    let changed = auto_link_economy(&state.pool, true).await?;
     Ok(Redirect::to(&format!("/economique?liaisons={changed}")).into_response())
 }
 

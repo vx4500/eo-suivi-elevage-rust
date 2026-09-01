@@ -1,6 +1,12 @@
 # EO-Suivi Élevage Rust — État du projet
 
-Version actuelle : **2.2.49** — Dernière mise à jour de ce document : 31 août 2026.
+Version actuelle : **2.2.50** — Dernière mise à jour de ce document : 1er septembre 2026.
+
+### Version 2.2.50 — surfaces des cases et fiabilité des cycles
+
+- Dimensions intérieures ou surface utile par case, secteur, mode de logement, poids de contrôle, objectif et diagnostic documenté de charge.
+- Effectifs de portée recalculés par cycle réel, historique de maternité continu et contrôles renforcés sur pertes, adoptions et sevrages.
+- Affectations économiques, factures et ventilation des ventes consolidées.
 
 ### Version 2.2.49 — économie fictive sur cinq ans
 
@@ -545,7 +551,7 @@ l'arrêt déclenche le retour arrière ; la sauvegarde de la base est conservée
 ```bash
 systemctl status eo-suivi-rust --no-pager -l
 journalctl -u eo-suivi-rust -n 80 --no-pager -l -o cat
-curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.49"
+curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.50"
 ```
 
 Puis ouvrir `https://rust-elevage.basse-chevrie.ovh`.

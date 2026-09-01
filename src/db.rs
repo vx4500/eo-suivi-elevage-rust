@@ -10,6 +10,7 @@ pub async fn init(pool: &SqlitePool) -> anyhow::Result<()> {
     // Migrations additives pour les bases anciennes 1.55–1.65. Une colonne déjà
     // présente est volontairement ignorée afin de rendre le démarrage idempotent.
     for (table, column, definition) in [
+        ("casesalle", "surface_config", "TEXT"),
         ("livraisonaliment", "date_reference", "TEXT"),
         (
             "livraisonaliment",
@@ -167,6 +168,12 @@ pub async fn init(pool: &SqlitePool) -> anyhow::Result<()> {
     ] {
         ensure_column(pool, table, column, definition).await?;
     }
+    // Remplacer uniquement la vue de calcul, atomiquement, après les colonnes additives.
+    let mut tx = pool.begin().await?;
+    sqlx::raw_sql(include_str!("../migrations/0003_portee_effectif.sql"))
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
     // Après les colonnes additives : compatible avec les bases anciennes.
     sqlx::raw_sql(include_str!("../migrations/0002_ventelot.sql"))
         .execute(pool)

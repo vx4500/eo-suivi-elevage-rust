@@ -54,7 +54,9 @@ fn la_maternite_suit_chaque_truie_jusqua_j28() {
         );
     }
     assert!(routes.contains(".route(\"/maternite\", get(maternite))"));
-    assert!(routes.contains("(0..=28).contains(&age)"));
+    assert!(routes.contains("Some(28)"));
+    assert!(include_str!("../src/routes/maternite_suivi.rs")
+        .contains("max_age.is_some_and(|max| age > max)"));
     assert!(navigation.contains(">Maternité / Mise-bas<"));
 }
 
@@ -213,7 +215,7 @@ fn fiche_truie_234_est_modulaire_et_reliedonnees_reproduction() {
     assert!(sow.contains("/mesure/{{ m.id }}/modifier"));
     assert!(sow.contains("Produit administré"));
     assert!(sow.contains("IA probablement fécondante"));
-    assert!(sow.contains("Performances par rang de portée"));
+    assert!(sow.contains("Historique par rang de portée"));
     assert!(quick.contains("Numéro de la truie"));
     assert!(quick.contains("name=\"ia_matin\""));
     assert!(routes.contains("SOW_EXIT_REASONS"));

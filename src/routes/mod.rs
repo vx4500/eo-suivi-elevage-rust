@@ -29,8 +29,11 @@ mod demo_portal;
 pub(crate) mod documents;
 mod factures;
 mod feuille_mise_bas;
+mod historique_truie;
 mod import_historique;
+mod maternite_suivi;
 mod parity;
+mod surfaces;
 mod ventes;
 
 fn contenu_sha256(bytes: &[u8]) -> String {
@@ -88,6 +91,10 @@ pub fn router(state: AppState) -> Router {
         .route("/bandes", get(bandes))
         .route("/bandes/ajouter", post(bande_ajouter))
         .route("/marquages/ajouter", post(marquage_ajouter))
+        .route(
+            "/maternite/mise-bas/{id}/etat",
+            post(maternite_suivi::changer_etat),
+        )
         .route("/bandes/{id}/modifier-rapide", post(bande_modifier_rapide))
         .route("/bande/{id}", get(bande_detail))
         .route("/bande/{id}/marquage", post(bande_marquage))
@@ -432,6 +439,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/structure/salle", post(structure_salle))
         .route("/structure/case", post(structure_case))
+        .route("/structure/case/{id}/surface", post(surfaces::save))
         .route(
             "/structure/salle/{id}/modifier",
             post(structure_salle_modifier),
@@ -2637,9 +2645,8 @@ async fn truie_detail(
         .into_iter()
         .next()
         .unwrap_or_else(|| json!({}));
-    let performances = sqlx::query("SELECT e.date,e.nes_totaux,e.nes_vifs,e.mort_nes,e.momifies,(SELECT s.nb_sevres FROM evenement s WHERE s.truie_id=e.truie_id AND s.bande_id=e.bande_id AND s.type='sevrage' ORDER BY s.date DESC,s.id DESC LIMIT 1) AS nb_sevres,COALESCE((SELECT SUM(p.nb) FROM perteporcelet p WHERE p.truie_id=e.truie_id AND p.bande_id=e.bande_id),0) AS pertes,b.code AS bande FROM evenement e LEFT JOIN bande b ON b.id=e.bande_id WHERE e.truie_id=? AND e.type='mise_bas' ORDER BY e.date DESC,e.id DESC")
-        .bind(id).fetch_all(&state.pool).await?;
-    let performances = rows_to_json(performances)?;
+    let performances = historique_truie::portees(&state.pool, &sow).await?;
+    let portee_actuelle = maternite_suivi::actuelle(&state.pool, id).await?;
     let probable_ia = sqlx::query("WITH mb AS (SELECT date FROM evenement WHERE truie_id=? AND type='mise_bas' ORDER BY date DESC,id DESC LIMIT 1) SELECT ia.date,ia.produit,ia.nb_doses,ia.creneaux_ia,CAST(julianday((SELECT date FROM mb))-julianday(ia.date) AS INTEGER) AS gestation_j,CASE WHEN ABS((julianday((SELECT date FROM mb))-julianday(ia.date))-115)<=2 THEN 'Correspondance forte' ELSE 'Correspondance plausible' END AS confiance FROM evenement ia WHERE ia.truie_id=? AND ia.type='ia' AND (SELECT date FROM mb) IS NOT NULL AND julianday((SELECT date FROM mb))-julianday(ia.date) BETWEEN 105 AND 125 ORDER BY ABS((julianday((SELECT date FROM mb))-julianday(ia.date))-115),ia.id DESC LIMIT 1")
         .bind(id).bind(id).fetch_all(&state.pool).await?;
     let probable_ia = rows_to_json(probable_ia)?.into_iter().next();
@@ -2675,6 +2682,7 @@ async fn truie_detail(
     );
     ctx.insert("cases".into(), Value::Array(cases));
     ctx.insert("emplacement".into(), emplacement);
+    ctx.insert("portee_actuelle".into(), portee_actuelle);
     ctx.insert("performances_rang".into(), Value::Array(performances));
     ctx.insert("ia_probable".into(), probable_ia.unwrap_or(Value::Null));
     ctx.insert("soins_portee".into(), Value::Array(soins_portee));
@@ -2890,36 +2898,7 @@ async fn truie_perte(
 ) -> AppResult<Response> {
     require_writer(&session)?;
     verify_csrf(&session, &form)?;
-    let nb = form_i64(&form, "nb").unwrap_or(1).max(1);
-    let cause = form_text(&form, "cause")
-        .ok_or_else(|| AppError::Invalid("Cause de perte obligatoire".into()))?;
-    let cause_exists: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM causeperte WHERE lower(libelle)=lower(?)")
-            .bind(&cause)
-            .fetch_one(&state.pool)
-            .await?;
-    if cause_exists == 0 {
-        return Err(AppError::Invalid(
-            "Sélectionnez une cause de perte configurée".into(),
-        ));
-    }
-    let band_id: Option<i64> = sqlx::query_scalar(
-        "SELECT b.id FROM truie t JOIN bande b ON b.code=t.bande_code WHERE t.id=? ORDER BY b.active DESC,b.id DESC LIMIT 1",
-    )
-    .bind(id)
-    .fetch_optional(&state.pool)
-    .await?;
-    sqlx::query(
-        "INSERT INTO perteporcelet(truie_id,bande_id,age_j,nb,cause,date) VALUES(?,?,?,?,?,?)",
-    )
-    .bind(id)
-    .bind(band_id)
-    .bind(form_i64(&form, "age_j"))
-    .bind(nb)
-    .bind(cause)
-    .bind(form_date_or_today(&form, "date")?)
-    .execute(&state.pool)
-    .await?;
+    maternite_suivi::enregistrer_perte(&state.pool, id, None, &form, None).await?;
     Ok(Redirect::to(&format!("/truie/{id}#pertes")).into_response())
 }
 
@@ -2980,10 +2959,8 @@ async fn maternite(
         .next()
         .ok_or(AppError::NotFound)?;
     let sow_rows = sqlx::query(
-        "WITH sow_ids AS (SELECT id FROM truie WHERE bande_code=(SELECT code FROM bande WHERE id=?) UNION SELECT DISTINCT truie_id FROM evenement WHERE bande_id=? AND truie_id IS NOT NULL) SELECT t.id,t.num_travail,t.rfid,t.rang,t.race,e.id AS mise_bas_id,e.date AS date_mise_bas,COALESCE(e.nes_totaux,0) AS nes_totaux,COALESCE(e.nes_vifs,0) AS nes_vifs,COALESCE(e.mort_nes,0) AS mort_nes,COALESCE(e.momifies,0) AS momifies,COALESCE(e.chetifs,0) AS chetifs,COALESCE(e.ecrases,0) AS ecrases,COALESCE(e.tues_truie,0) AS tues_truie,e.heure_debut,e.heure_fin,COALESCE(e.suivi_actif,0) AS suivi_actif,e.delivrance_ok,e.note,c.num_vanne,c.nom AS case_nom,COALESCE((SELECT COUNT(*) FROM soinportee sp WHERE sp.evenement_id=e.id AND sp.date_realisee IS NULL),0) AS soins_attendus,(SELECT MIN(sp.date_prevue) FROM soinportee sp WHERE sp.evenement_id=e.id AND sp.date_realisee IS NULL) AS prochain_soin,CASE WHEN e.id IS NULL THEN 'a_mettre_bas' WHEN COALESCE(e.heure_debut,'')<>'' AND COALESCE(e.heure_fin,'')='' THEN 'en_cours' WHEN COALESCE(e.suivi_actif,0)=1 OR e.delivrance_ok=0 THEN 'a_surveiller' ELSE 'terminee' END AS statut_code,CASE WHEN e.id IS NULL THEN 'À mettre bas' WHEN COALESCE(e.heure_debut,'')<>'' AND COALESCE(e.heure_fin,'')='' THEN 'En cours' WHEN COALESCE(e.suivi_actif,0)=1 OR e.delivrance_ok=0 THEN 'À surveiller' ELSE 'Terminée' END AS statut_libelle,CASE WHEN e.date IS NOT NULL THEN CAST(julianday('now')-julianday(e.date) AS INTEGER) END AS jour_lactation,CASE WHEN e.date IS NOT NULL THEN date(e.date,'+28 day') END AS fin_suivi,CASE WHEN date('now')<date(e.date) THEN date(e.date) WHEN date('now')>date(e.date,'+28 day') THEN date(e.date,'+28 day') ELSE date('now') END AS date_perte_defaut,COALESCE((SELECT SUM(p.nb) FROM perteporcelet p WHERE p.truie_id=t.id AND p.bande_id=?),0) AS pertes,COALESCE((SELECT presents FROM portee_effectif pe WHERE pe.id=e.id AND pe.bande_id=?),0) AS porcelets_presents FROM sow_ids s JOIN truie t ON t.id=s.id LEFT JOIN evenement e ON e.id=(SELECT e2.id FROM evenement e2 WHERE e2.truie_id=t.id AND e2.bande_id=? AND e2.type='mise_bas' ORDER BY e2.date DESC,e2.id DESC LIMIT 1) LEFT JOIN casesalle c ON c.id=COALESCE(e.case_id,t.case_id) ORDER BY CASE WHEN e.id IS NULL THEN 0 WHEN COALESCE(e.heure_debut,'')<>'' AND COALESCE(e.heure_fin,'')='' THEN 1 WHEN COALESCE(e.suivi_actif,0)=1 OR e.delivrance_ok=0 THEN 2 ELSE 3 END,t.num_travail COLLATE NOCASE",
+        "WITH sow_ids AS (SELECT id FROM truie WHERE bande_code=(SELECT code FROM bande WHERE id=?) UNION SELECT DISTINCT truie_id FROM evenement WHERE bande_id=? AND truie_id IS NOT NULL) SELECT t.id,t.num_travail,t.rfid,t.rang,t.race,e.id AS mise_bas_id,e.date AS date_mise_bas,COALESCE(e.nes_totaux,0) AS nes_totaux,COALESCE(e.nes_vifs,0) AS nes_vifs,COALESCE(e.mort_nes,0) AS mort_nes,COALESCE(e.momifies,0) AS momifies,COALESCE(e.chetifs,0) AS chetifs,COALESCE(e.ecrases,0) AS ecrases,COALESCE(e.tues_truie,0) AS tues_truie,e.heure_debut,e.heure_fin,COALESCE(e.suivi_actif,0) AS suivi_actif,e.delivrance_ok,e.note,c.num_vanne,c.nom AS case_nom,COALESCE((SELECT COUNT(*) FROM soinportee sp WHERE sp.evenement_id=e.id AND sp.date_realisee IS NULL),0) AS soins_attendus,(SELECT MIN(sp.date_prevue) FROM soinportee sp WHERE sp.evenement_id=e.id AND sp.date_realisee IS NULL) AS prochain_soin,pe.date_sevrage,pe.cloturee,pe.adoptes,pe.retires,CASE WHEN e.date IS NOT NULL THEN CAST(julianday('now')-julianday(e.date) AS INTEGER) END AS jour_lactation,CASE WHEN e.date IS NOT NULL THEN date(e.date,'+28 day') END AS fin_suivi,CASE WHEN date('now')<date(e.date) THEN date(e.date) WHEN date('now')>date(e.date,'+28 day') THEN date(e.date,'+28 day') ELSE date('now') END AS date_perte_defaut,COALESCE(pe.pertes,0) AS pertes,COALESCE(pe.presents,0) AS porcelets_presents FROM sow_ids s JOIN truie t ON t.id=s.id LEFT JOIN evenement e ON e.id=(SELECT e2.id FROM evenement e2 WHERE e2.truie_id=t.id AND e2.bande_id=? AND e2.type='mise_bas' AND e2.date<=date('now') ORDER BY e2.date DESC,e2.id DESC LIMIT 1) LEFT JOIN portee_effectif pe ON pe.id=e.id LEFT JOIN casesalle c ON c.id=COALESCE(e.case_id,t.case_id) ORDER BY t.num_travail COLLATE NOCASE",
     )
-    .bind(band_id)
-    .bind(band_id)
     .bind(band_id)
     .bind(band_id)
     .bind(band_id)
@@ -2991,7 +2968,7 @@ async fn maternite(
     .await?;
     let mut sows = rows_to_json(sow_rows)?;
     let loss_rows = sqlx::query(
-        "SELECT id,truie_id,date,age_j,nb,cause,evenement_id FROM perteporcelet WHERE bande_id=? ORDER BY date DESC,id DESC",
+        "SELECT p.id,p.truie_id,p.date,p.age_j,p.nb,p.cause,p.evenement_id FROM perteporcelet p JOIN portee_effectif pe ON pe.truie_id=p.truie_id WHERE pe.bande_id=? AND pe.id=(SELECT e.id FROM evenement e WHERE e.truie_id=pe.truie_id AND e.bande_id=pe.bande_id AND e.type='mise_bas' AND e.date<=date('now') ORDER BY e.date DESC,e.id DESC LIMIT 1) AND (p.evenement_id=pe.id OR (p.evenement_id IS NULL AND (p.bande_id IS pe.bande_id OR p.bande_id IS NULL OR pe.bande_id IS NULL) AND p.date>=pe.date AND (pe.prochaine_mb IS NULL OR p.date<pe.prochaine_mb))) AND p.date<=COALESCE(pe.date_sevrage,date('now')) ORDER BY p.date DESC,p.id DESC",
     )
     .bind(band_id)
     .fetch_all(&state.pool)
@@ -3002,8 +2979,10 @@ async fn maternite(
             losses_by_sow.entry(sow_id).or_default().push(loss);
         }
     }
-    let mut totals = json!({"truies":sows.len(),"mises_bas":0,"restantes":0,"en_cours":0,"surveillance":0,"nes_vifs":0,"mort_nes":0,"momifies":0,"pertes":0,"presents":0});
+    let mut totals = json!({"truies":sows.len(),"mises_bas":0,"restantes":0,"en_cours":0,"surveillance":0,"terminees":0,"sevrees":0,"nes_vifs":0,"mort_nes":0,"momifies":0,"pertes":0,"presents":0});
     for sow in &mut sows {
+        let has_birth = sow["mise_bas_id"].as_i64().is_some();
+        maternite_suivi::annoter(sow, has_birth);
         let object = json_object_mut(sow, "tableau de maternité")?;
         let sow_id = object.get("id").and_then(Value::as_i64).unwrap_or_default();
         object.insert(
@@ -3027,7 +3006,13 @@ async fn maternite(
         if status == "en_cours" {
             increment(totals_object, "en_cours", 1);
         }
-        if status == "a_surveiller" {
+        if status == "terminee" {
+            increment(totals_object, "terminees", 1);
+        }
+        if status == "sevree" {
+            increment(totals_object, "sevrees", 1);
+        }
+        if object.get("surveillance").and_then(Value::as_bool) == Some(true) {
             increment(totals_object, "surveillance", 1);
         }
         for key in ["mort_nes", "momifies"] {
@@ -3068,7 +3053,7 @@ async fn maternite(
     )
     .await?;
     let weaning_sows = generic_rows(&state.pool, &format!(
-        "SELECT t.id,t.num_travail,e.date AS date_mise_bas,e.case_id AS case_source_id,c.nom AS case_source,c.num_vanne AS vanne_source,COALESCE((SELECT presents FROM portee_effectif pe WHERE pe.id=e.id),0) AS porcelets_presents FROM evenement e JOIN truie t ON t.id=e.truie_id LEFT JOIN casesalle c ON c.id=COALESCE(e.case_id,t.case_id) WHERE e.bande_id={band_id} AND e.type='mise_bas' AND e.id=(SELECT e2.id FROM evenement e2 WHERE e2.bande_id={band_id} AND e2.truie_id=t.id AND e2.type='mise_bas' ORDER BY e2.date DESC,e2.id DESC LIMIT 1) AND NOT EXISTS(SELECT 1 FROM evenement sv WHERE sv.bande_id={band_id} AND sv.truie_id=t.id AND sv.type='sevrage' AND sv.date>=e.date) ORDER BY e.date,t.num_travail COLLATE NOCASE"
+        "SELECT t.id,t.num_travail,e.date AS date_mise_bas,e.case_id AS case_source_id,c.nom AS case_source,c.num_vanne AS vanne_source,COALESCE((SELECT presents FROM portee_effectif pe WHERE pe.id=e.id),0) AS porcelets_presents FROM evenement e JOIN truie t ON t.id=e.truie_id LEFT JOIN casesalle c ON c.id=COALESCE(e.case_id,t.case_id) WHERE e.bande_id={band_id} AND e.type='mise_bas' AND e.id=(SELECT e2.id FROM evenement e2 WHERE e2.bande_id={band_id} AND e2.truie_id=t.id AND e2.type='mise_bas' ORDER BY e2.date DESC,e2.id DESC LIMIT 1) AND EXISTS(SELECT 1 FROM portee_effectif pe WHERE pe.id=e.id AND pe.cloturee=0 AND pe.date<=date('now')) ORDER BY e.date,t.num_travail COLLATE NOCASE"
     )).await?;
     let mut destinations = generic_rows(&state.pool, "SELECT c.id,c.salle_id,c.nom,c.num_vanne,c.nb_max_porcs,s.nom AS salle,COALESCE(si.nom,si.code) AS site FROM casesalle c JOIN salle s ON s.id=c.salle_id JOIN site si ON si.id=s.site_id WHERE lower(COALESCE(s.type,'')) LIKE '%sevr%' OR lower(s.nom) LIKE '%sevr%' ORDER BY COALESCE(si.nom,si.code),s.ordre,c.nom").await?;
     for destination in &mut destinations {
@@ -3084,7 +3069,7 @@ async fn maternite(
                 .unwrap_or(Value::Null),
         );
     }
-    let receveuses = generic_rows(&state.pool, "SELECT e.id,t.num_travail,b.code AS bande,p.presents FROM portee_effectif p JOIN evenement e ON e.id=p.id JOIN truie t ON t.id=e.truie_id JOIN bande b ON b.id=e.bande_id WHERE t.reformee=0 AND NOT EXISTS(SELECT 1 FROM evenement sv WHERE sv.type='sevrage' AND sv.truie_id=t.id AND sv.bande_id=e.bande_id AND sv.date>=e.date) AND e.id=(SELECT e2.id FROM evenement e2 WHERE e2.truie_id=t.id AND e2.type='mise_bas' ORDER BY e2.date DESC,e2.id DESC LIMIT 1) ORDER BY t.num_travail").await?;
+    let receveuses = generic_rows(&state.pool, "SELECT e.id,t.num_travail,b.code AS bande,p.presents FROM portee_effectif p JOIN evenement e ON e.id=p.id JOIN truie t ON t.id=e.truie_id JOIN bande b ON b.id=e.bande_id WHERE t.reformee=0 AND p.cloturee=0 AND p.date<=date('now') AND e.id=(SELECT e2.id FROM evenement e2 WHERE e2.truie_id=t.id AND e2.type='mise_bas' ORDER BY e2.date DESC,e2.id DESC LIMIT 1) ORDER BY t.num_travail").await?;
     let adoptions = generic_rows(&state.pool, &format!("SELECT a.date,a.nombre,a.case_nourrice_id,a.note,ts.num_travail AS donneuse,td.num_travail AS receveuse,c.nom AS case_nourrice,s.nom AS salle_nourrice FROM adoptionporcelet a JOIN evenement es ON es.id=a.source_id LEFT JOIN evenement ed ON ed.id=a.destination_id JOIN truie ts ON ts.id=es.truie_id LEFT JOIN truie td ON td.id=ed.truie_id LEFT JOIN casesalle c ON c.id=a.case_nourrice_id LEFT JOIN salle s ON s.id=c.salle_id WHERE es.bande_id={band_id} OR ed.bande_id={band_id} ORDER BY a.date DESC,a.id DESC")).await?;
     let cases_nourrices = generic_rows(&state.pool, "SELECT c.id,c.nom,s.nom AS salle FROM casesalle c JOIN salle s ON s.id=c.salle_id WHERE lower(COALESCE(s.type,'')) LIKE '%nourri%' OR lower(s.nom) LIKE '%nourri%' OR lower(COALESCE(s.type,'')) LIKE '%matern%' OR lower(s.nom) LIKE '%matern%' ORDER BY s.nom,c.nom").await?;
     let nourrices = generic_rows(&state.pool, &format!("SELECT n.id,n.date,n.presents,c.nom AS case_nom,s.nom AS salle,t.num_travail AS donneuse FROM nourrice_effectif n JOIN casesalle c ON c.id=n.case_nourrice_id JOIN salle s ON s.id=c.salle_id JOIN truie t ON t.id=n.truie_id WHERE n.bande_id={band_id} ORDER BY s.nom,c.nom,n.date,n.id")).await?;
@@ -3098,6 +3083,7 @@ async fn maternite(
         .filter(|s| s.get("type").and_then(Value::as_str) == Some("perte"))
         .map(|s| s.get("nombre").and_then(Value::as_i64).unwrap_or(0))
         .sum();
+    totals["sous_meres"] = totals["presents"].clone();
     totals["presents"] = json!(totals["presents"].as_i64().unwrap_or(0) + presents_nourrice);
     totals["pertes"] = json!(totals["pertes"].as_i64().unwrap_or(0) + pertes_nourrice);
     totals["nourrice"] = json!(presents_nourrice);
@@ -3149,9 +3135,9 @@ async fn maternite_sevrage(
                     "Choisissez une case de post-sevrage pour chaque truie cochée".into(),
                 )
             })?;
-        let source: Option<i64> = sqlx::query_scalar("SELECT COALESCE(e.case_id,t.case_id) FROM evenement e JOIN truie t ON t.id=e.truie_id WHERE e.bande_id=? AND e.truie_id=? AND e.type='mise_bas' AND NOT EXISTS(SELECT 1 FROM evenement sv WHERE sv.bande_id=e.bande_id AND sv.truie_id=e.truie_id AND sv.type='sevrage' AND sv.date>=e.date) ORDER BY e.date DESC,e.id DESC LIMIT 1")
+        let source: Option<i64> = sqlx::query_scalar("SELECT COALESCE(e.case_id,t.case_id) FROM evenement e JOIN truie t ON t.id=e.truie_id WHERE e.bande_id=? AND e.truie_id=? AND e.type='mise_bas' AND EXISTS(SELECT 1 FROM portee_effectif pe WHERE pe.id=e.id AND pe.cloturee=0 AND pe.date<=date('now')) ORDER BY e.date DESC,e.id DESC LIMIT 1")
             .bind(band_id).bind(sow_id).fetch_optional(&state.pool).await?.flatten();
-        let born: Option<i64> = sqlx::query_scalar("SELECT (SELECT presents FROM portee_effectif pe WHERE pe.id=e.id) FROM evenement e WHERE e.bande_id=? AND e.truie_id=? AND e.type='mise_bas' AND NOT EXISTS(SELECT 1 FROM evenement sv WHERE sv.bande_id=e.bande_id AND sv.truie_id=e.truie_id AND sv.type='sevrage' AND sv.date>=e.date) ORDER BY e.date DESC,e.id DESC LIMIT 1")
+        let born: Option<i64> = sqlx::query_scalar("SELECT (SELECT presents FROM portee_effectif pe WHERE pe.id=e.id) FROM evenement e WHERE e.bande_id=? AND e.truie_id=? AND e.type='mise_bas' AND EXISTS(SELECT 1 FROM portee_effectif pe WHERE pe.id=e.id AND pe.cloturee=0 AND pe.date<=date('now')) ORDER BY e.date DESC,e.id DESC LIMIT 1")
             .bind(band_id).bind(sow_id).fetch_optional(&state.pool).await?.flatten();
         let present = born.ok_or_else(|| {
             AppError::Invalid(
@@ -3231,51 +3217,7 @@ async fn maternite_perte(
 ) -> AppResult<Response> {
     require_writer(&session)?;
     verify_csrf(&session, &form)?;
-    let cause =
-        form_text(&form, "cause").ok_or_else(|| AppError::Invalid("Cause obligatoire".into()))?;
-    let cause_exists: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM causeperte WHERE lower(libelle)=lower(?)")
-            .bind(&cause)
-            .fetch_one(&state.pool)
-            .await?;
-    if cause_exists == 0 {
-        return Err(AppError::Invalid(
-            "Sélectionnez une cause configurée".into(),
-        ));
-    }
-    let farrowing: String = sqlx::query_scalar("SELECT date FROM evenement WHERE type='mise_bas' AND bande_id=? AND truie_id=? ORDER BY date DESC,id DESC LIMIT 1")
-        .bind(band_id).bind(sow_id).fetch_optional(&state.pool).await?.ok_or_else(|| AppError::Invalid("Enregistrez d'abord la mise-bas de cette truie".into()))?;
-    let farrowing_date = parse_stored_date(&farrowing)
-        .ok_or_else(|| AppError::Invalid("Date de mise-bas invalide".into()))?;
-    let loss_date_raw = form_date_or_today(&form, "date")?;
-    let loss_date = parse_stored_date(&loss_date_raw)
-        .ok_or_else(|| AppError::Invalid("Date de perte invalide".into()))?;
-    let age = (loss_date - farrowing_date).num_days();
-    if !(0..=28).contains(&age) {
-        return Err(AppError::Invalid(
-            "La perte doit être comprise entre la mise-bas et J+28".into(),
-        ));
-    }
-    let number = form_i64(&form, "nb")
-        .filter(|n| *n > 0)
-        .ok_or_else(|| AppError::Invalid("Nombre entier positif obligatoire".into()))?;
-    let present = adoptions::effectif(&state.pool, sow_id, band_id).await?;
-    if number > present {
-        return Err(AppError::Invalid(format!(
-            "Seulement {present} porcelet(s) vivant(s) présents"
-        )));
-    }
-    sqlx::query(
-        "INSERT INTO perteporcelet(truie_id,bande_id,age_j,nb,cause,date) VALUES(?,?,?,?,?,?)",
-    )
-    .bind(sow_id)
-    .bind(band_id)
-    .bind(age)
-    .bind(number)
-    .bind(cause)
-    .bind(loss_date_raw)
-    .execute(&state.pool)
-    .await?;
+    maternite_suivi::enregistrer_perte(&state.pool, sow_id, Some(band_id), &form, Some(28)).await?;
     Ok(Redirect::to(&format!("/maternite?bande_id={band_id}#truie-{sow_id}")).into_response())
 }
 
@@ -7002,8 +6944,10 @@ async fn economique(
     let ventes = ventes::rows(&state.pool).await?;
     let achats = generic_rows(&state.pool,"SELECT id,date,'aliment' AS categorie,produit AS libelle,tonnage AS quantite,montant_ht FROM livraisonaliment UNION ALL SELECT id,date,'vétérinaire',produit,quantite,montant_ht FROM achatveto UNION ALL SELECT id,date,'semence',designation,nb_doses,montant_ht FROM achatsemence UNION ALL SELECT id,date,'génétique',designation,nb_animaux,montant_ht FROM achatgenetique ORDER BY date DESC,id DESC LIMIT 50").await?;
     let genetiques = generic_rows(&state.pool,"SELECT a.id,a.date,a.toutes_bandes,a.num_facture,a.fournisseur,a.designation,a.nb_animaux,a.poids_total,a.montant_ht,CASE WHEN a.montant_ht IS NULL THEN 1 ELSE 0 END AS ht_manquant,COALESCE((SELECT GROUP_CONCAT(b.code,', ') FROM affectationfacturebande af JOIN bande b ON b.id=af.bande_id WHERE af.categorie='genetique' AND af.facture_id=a.id),'Non affecté') AS bandes_affectees,COALESCE((SELECT GROUP_CONCAT(af.bande_id) FROM affectationfacturebande af WHERE af.categorie='genetique' AND af.facture_id=a.id),'') AS bandes_ids,EXISTS(SELECT 1 FROM affectationfacturebande af WHERE af.categorie='genetique' AND af.facture_id=a.id AND af.automatique=1) AS affectation_auto FROM achatgenetique a ORDER BY a.date DESC,a.id DESC LIMIT 250").await?;
-    let aliments = generic_rows(&state.pool,"SELECT a.id,a.date,a.stade_aliment,COALESCE(a.date_reference,a.date) AS date_reference,a.site,a.sites_json,replace(replace(a.sites_json,'[',''),']','') AS sites_ids,a.num_facture,a.fournisseur,a.produit,a.tonnage,a.montant_ht,COALESCE((SELECT GROUP_CONCAT(b.code,', ') FROM affectationfacturebande af JOIN bande b ON b.id=af.bande_id WHERE af.categorie='aliment' AND af.facture_id=a.id),'Non affecté') AS bandes_affectees,COALESCE((SELECT GROUP_CONCAT(af.bande_id) FROM affectationfacturebande af WHERE af.categorie='aliment' AND af.facture_id=a.id),'') AS bandes_ids,EXISTS(SELECT 1 FROM affectationfacturebande af WHERE af.categorie='aliment' AND af.facture_id=a.id AND af.automatique=1) AS affectation_auto FROM livraisonaliment a ORDER BY a.date DESC,a.id DESC LIMIT 250").await?;
-    let veterinaires = generic_rows(&state.pool,"SELECT a.id,a.date,COALESCE(a.date_reference,a.date) AS date_reference,a.site,a.sites_json,replace(replace(a.sites_json,'[',''),']','') AS sites_ids,a.num_facture,a.fournisseur,a.produit,a.quantite,a.montant_ht,COALESCE((SELECT GROUP_CONCAT(b.code,', ') FROM affectationfacturebande af JOIN bande b ON b.id=af.bande_id WHERE af.categorie='veto' AND af.facture_id=a.id),'Non affecté') AS bandes_affectees,COALESCE((SELECT GROUP_CONCAT(af.bande_id) FROM affectationfacturebande af WHERE af.categorie='veto' AND af.facture_id=a.id),'') AS bandes_ids,EXISTS(SELECT 1 FROM affectationfacturebande af WHERE af.categorie='veto' AND af.facture_id=a.id AND af.automatique=1) AS affectation_auto FROM achatveto a ORDER BY a.date DESC,a.id DESC LIMIT 250").await?;
+    let mut aliments = generic_rows(&state.pool,"SELECT a.id,a.date,a.stade_aliment,COALESCE(NULLIF(trim(a.date_reference),''),trim(a.date)) AS date_reference,a.site,a.sites_json,replace(replace(a.sites_json,'[',''),']','') AS sites_ids,a.num_facture,a.fournisseur,a.produit,a.tonnage,a.montant_ht,COALESCE((SELECT GROUP_CONCAT(b.code,', ') FROM affectationfacturebande af JOIN bande b ON b.id=af.bande_id WHERE af.categorie='aliment' AND af.facture_id=a.id),'Non affecté') AS bandes_affectees,COALESCE((SELECT GROUP_CONCAT(af.bande_id) FROM affectationfacturebande af WHERE af.categorie='aliment' AND af.facture_id=a.id),'') AS bandes_ids,EXISTS(SELECT 1 FROM affectationfacturebande af WHERE af.categorie='aliment' AND af.facture_id=a.id AND af.automatique=1) AS affectation_auto FROM livraisonaliment a ORDER BY a.date DESC,a.id DESC LIMIT 250").await?;
+    let mut veterinaires = generic_rows(&state.pool,"SELECT a.id,a.date,COALESCE(NULLIF(trim(a.date_reference),''),trim(a.date)) AS date_reference,a.site,a.sites_json,replace(replace(a.sites_json,'[',''),']','') AS sites_ids,a.num_facture,a.fournisseur,a.produit,a.quantite,a.montant_ht,COALESCE((SELECT GROUP_CONCAT(b.code,', ') FROM affectationfacturebande af JOIN bande b ON b.id=af.bande_id WHERE af.categorie='veto' AND af.facture_id=a.id),'Non affecté') AS bandes_affectees,COALESCE((SELECT GROUP_CONCAT(af.bande_id) FROM affectationfacturebande af WHERE af.categorie='veto' AND af.facture_id=a.id),'') AS bandes_ids,EXISTS(SELECT 1 FROM affectationfacturebande af WHERE af.categorie='veto' AND af.facture_id=a.id AND af.automatique=1) AS affectation_auto FROM achatveto a ORDER BY a.date DESC,a.id DESC LIMIT 250").await?;
+    crate::affectation::explain_unassigned(&state.pool, "aliment", &mut aliments).await?;
+    crate::affectation::explain_unassigned(&state.pool, "veto", &mut veterinaires).await?;
     let semences = generic_rows(&state.pool,"SELECT a.id,a.date,a.num_facture,a.fournisseur,a.designation,a.nb_doses,a.montant_ht,COALESCE((SELECT GROUP_CONCAT(b.code,', ') FROM affectationfacturebande af JOIN bande b ON b.id=af.bande_id WHERE af.categorie='semence' AND af.facture_id=a.id),'Non affecté') AS bandes_affectees,COALESCE((SELECT GROUP_CONCAT(af.bande_id) FROM affectationfacturebande af WHERE af.categorie='semence' AND af.facture_id=a.id),'') AS bandes_ids,EXISTS(SELECT 1 FROM affectationfacturebande af WHERE af.categorie='semence' AND af.facture_id=a.id AND af.automatique=1) AS affectation_auto FROM achatsemence a ORDER BY a.date DESC,a.id DESC LIMIT 250").await?;
     let valuations = generic_rows(&state.pool,"SELECT id,num_apport,date,libelle,montant,categorie,CASE WHEN lower(COALESCE(categorie,''))='retenue' THEN 1 ELSE 0 END AS est_retenue FROM valorisationapport ORDER BY date DESC,id DESC LIMIT 200").await?;
     let monthly = generic_rows(&state.pool,"WITH RECURSIVE mois(m) AS (SELECT date('now','start of month',CASE WHEN EXISTS(SELECT 1 FROM parametre WHERE cle='demo_portal' AND valeur='1') THEN '-60 months' ELSE '-11 months' END) UNION ALL SELECT date(m,'+1 month') FROM mois WHERE m<date('now','start of month')),depenses AS (SELECT substr(date,1,7) AS m,SUM(COALESCE(montant_ht,0)) AS montant FROM livraisonaliment GROUP BY m UNION ALL SELECT substr(date,1,7),SUM(COALESCE(montant_ht,0)) FROM achatveto GROUP BY substr(date,1,7) UNION ALL SELECT substr(date,1,7),SUM(COALESCE(montant_ht,0)) FROM achatsemence GROUP BY substr(date,1,7) UNION ALL SELECT substr(date,1,7),SUM(COALESCE(montant_ht,0)) FROM achatgenetique GROUP BY substr(date,1,7)),revenus AS (SELECT substr(date,1,7) AS m,SUM(COALESCE(montant_ht,0)) AS montant,SUM(COALESCE(poids_total,0)) AS poids FROM venteapport GROUP BY m) SELECT substr(m.m,1,7) AS mois,ROUND(COALESCE((SELECT SUM(d.montant) FROM depenses d WHERE d.m=substr(m.m,1,7)),0),2) AS depenses,ROUND(COALESCE(r.montant,0),2) AS revenus,ROUND(r.montant/NULLIF(r.poids,0),3) AS prix_ht_kg FROM mois m LEFT JOIN revenus r ON r.m=substr(m.m,1,7) ORDER BY m.m").await?;
@@ -9238,7 +9182,7 @@ async fn structure(
     )
     .await?;
     let rooms = generic_rows(&state.pool, "SELECT s.id,s.site_id,s.nom,s.type,s.rfid,s.nb_cases,s.ordre,COALESCE(si.nom,si.code) AS site FROM salle s JOIN site si ON si.id=s.site_id ORDER BY COALESCE(si.nom,si.code),s.ordre,s.nom").await?;
-    let mut cases = generic_rows(&state.pool, "SELECT c.id,c.salle_id,c.nom,c.rfid,c.nb_max_porcs,c.nb_max_truies,c.nb_max_porcelets,c.num_vanne,s.nom AS salle,COALESCE(si.nom,si.code) AS site,(SELECT COUNT(*) FROM truie t WHERE t.case_id=c.id AND t.reformee=0) AS truies_presentes,COALESCE((SELECT SUM(MAX(0,COALESCE(e.nes_vifs,0)-COALESCE((SELECT SUM(p.nb) FROM perteporcelet p WHERE p.evenement_id=e.id OR (p.evenement_id IS NULL AND p.truie_id=e.truie_id AND p.bande_id=e.bande_id)),0))) FROM evenement e WHERE e.type='mise_bas' AND e.case_id=c.id AND NOT EXISTS(SELECT 1 FROM evenement sv WHERE sv.type='sevrage' AND sv.truie_id=e.truie_id AND sv.bande_id=e.bande_id AND sv.date>=e.date)),0) AS porcelets_presents FROM casesalle c JOIN salle s ON s.id=c.salle_id JOIN site si ON si.id=s.site_id ORDER BY COALESCE(si.nom,si.code),s.ordre,c.nom").await?;
+    let mut cases = generic_rows(&state.pool, "SELECT c.id,c.salle_id,c.nom,c.rfid,c.nb_max_porcs,c.nb_max_truies,c.nb_max_porcelets,c.num_vanne,c.surface_config,s.type AS type_salle,s.nom AS salle,COALESCE(si.nom,si.code) AS site,(SELECT COUNT(*) FROM truie t WHERE t.case_id=c.id AND t.reformee=0) AS truies_presentes,COALESCE((SELECT SUM(MAX(0,COALESCE(e.nes_vifs,0)-COALESCE((SELECT SUM(p.nb) FROM perteporcelet p WHERE p.evenement_id=e.id OR (p.evenement_id IS NULL AND p.truie_id=e.truie_id AND p.bande_id=e.bande_id)),0))) FROM evenement e WHERE e.type='mise_bas' AND e.case_id=c.id AND NOT EXISTS(SELECT 1 FROM evenement sv WHERE sv.type='sevrage' AND sv.truie_id=e.truie_id AND sv.bande_id=e.bande_id AND sv.date>=e.date)),0) AS porcelets_presents FROM casesalle c JOIN salle s ON s.id=c.salle_id JOIN site si ON si.id=s.site_id ORDER BY COALESCE(si.nom,si.code),s.ordre,c.nom").await?;
     for case in &mut cases {
         let object = json_object_mut(case, "la capacité des cases")?;
         let sows = object
@@ -9254,6 +9198,7 @@ async fn structure(
             .map(|v| (v - sows).max(0));
         object.insert("places_truies_dispo".into(), json!(sow_places));
         object.insert("places_porcelets_dispo".into(), Value::Null);
+        surfaces::enrich(&state.pool, object).await?;
     }
     let mut ctx = context(&session);
     ctx.insert("sites".into(), Value::Array(sites));

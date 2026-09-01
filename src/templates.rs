@@ -3,6 +3,14 @@ use minijinja::{Environment, Value};
 
 pub fn build() -> anyhow::Result<Environment<'static>> {
     let mut env = Environment::new();
+    env.add_template(
+        "surface_case.html",
+        include_str!("../templates/surface_case.html"),
+    )?;
+    env.add_template(
+        "surface_references.html",
+        include_str!("../templates/surface_references.html"),
+    )?;
     env.add_filter("truncate", |value: String, length: usize| {
         let mut chars = value.chars();
         let text: String = chars.by_ref().take(length).collect();

@@ -87,7 +87,12 @@ pub(super) async fn mise_bas_modifier(
             sqlx::query("INSERT INTO perteporcelet(truie_id,bande_id,age_j,nb,cause,date,evenement_id) VALUES(?,?,0,?,?,?,?)").bind(sow).bind(band).bind(n).bind(cause).bind(&date).bind(id).execute(&mut *tx).await?;
         }
     }
-    let available: i64 = sqlx::query_scalar("SELECT COALESCE(nes_vifs,0)+COALESCE(adoptes,0)-COALESCE(retires,0)+(SELECT COALESCE(SUM(nombre),0) FROM adoptionporcelet WHERE destination_id=e.id)-(SELECT COALESCE(SUM(nombre),0) FROM adoptionporcelet WHERE source_id=e.id)-(SELECT COALESCE(SUM(nb),0) FROM perteporcelet WHERE truie_id=e.truie_id AND (bande_id=e.bande_id OR evenement_id=e.id))-(SELECT COALESCE(SUM(nb_sevres),0) FROM evenement WHERE type='sevrage' AND truie_id=e.truie_id AND bande_id=e.bande_id) FROM evenement e WHERE id=?").bind(id).fetch_one(&mut *tx).await?;
+    let available: i64 = sqlx::query_scalar(
+        "SELECT avant_sevrage-COALESCE(nb_sevres,0) FROM portee_effectif WHERE id=?",
+    )
+    .bind(id)
+    .fetch_one(&mut *tx)
+    .await?;
     if available < 0 {
         return Err(AppError::Invalid("Cette correction est incompatible avec les pertes, adoptions ou sevrages déjà enregistrés".into()));
     }
