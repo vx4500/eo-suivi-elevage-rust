@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Mise à jour du conteneur de démonstration installé dans ce parcours.
+# Mise à jour du conteneur de démonstration installé dans ce parcours, y
+# compris après son passage contrôlé en mode normal.
 # Ne télécharge rien depuis Git : récupérer d'abord le correctif validé.
 set -Eeuo pipefail
 export PATH="/root/.cargo/bin:$PATH"
 app=/opt/eo-suivi-rust-demo
 service=eo-suivi-demo
-db="$app/donnees-demo/elevage.db"
 binary="$app/target/release/eo-suivi-elevage"
 
 [[ $(id -u) == 0 ]] || { echo 'Exécuter dans le conteneur avec root.'; exit 1; }
@@ -16,14 +16,22 @@ exec 9>/run/lock/eo-demo-update.lock
 flock -n 9 || { echo 'Une mise à jour est déjà en cours.'; exit 1; }
 cd "$app"
 [[ $(realpath "$(dirname "$0")/..") == "$app" ]]
-[[ -x "$binary" && -s "$db" ]]
+[[ -x "$binary" ]]
 [[ $(systemctl show "$service" -p WorkingDirectory --value) == "$app" ]]
 systemctl show "$service" -p ExecStart --value | grep -Fq "path=$binary ;"
 environment=$(systemctl show "$service" -p Environment --value)
-[[ " $environment " == *" EO_DEMO_PORTAL=1 "* ]]
-[[ " $environment " == *" ELEVAGE_DATA=$app/donnees-demo "* ]]
+data_dir=$(sed -n 's/.* ELEVAGE_DATA=\([^ ]*\).*/\1/p' <<<" $environment ")
+[[ -n "$data_dir" && "$data_dir" == "$app"/* ]]
+db="$data_dir/elevage.db"
+[[ -s "$db" ]]
+demo_portal=0
+if [[ " $environment " == *" EO_DEMO_PORTAL=1 "* ]]; then
+    demo_portal=1
+fi
 [[ " $environment " == *" EO_PORT=8080 "* ]]
-[[ $(sqlite3 -readonly "$db" "SELECT valeur FROM parametre WHERE cle='demo_portal';") == 1 ]]
+if [[ $demo_portal == 1 ]]; then
+    [[ $(sqlite3 -readonly "$db" "SELECT valeur FROM parametre WHERE cle='demo_portal';") == 1 ]]
+fi
 systemctl is-active --quiet "$service"
 
 echo 'Tests et compilation séparés ; la démo reste accessible.'
@@ -65,8 +73,14 @@ for tentative in {1..60}; do
 done
 [[ $ok == 1 ]]
 systemctl is-active --quiet "$service"
-[[ $(sqlite3 -readonly "$db" "SELECT valeur FROM parametre WHERE cle='demo_economie_v1';") == 1 ]]
+if [[ $demo_portal == 1 ]]; then
+    [[ $(sqlite3 -readonly "$db" "SELECT valeur FROM parametre WHERE cle='demo_economie_v1';") == 1 ]]
+fi
 trap - ERR INT TERM
-echo "Version Rust $version active ; historique économique fictif complété."
+echo "Version Rust $version active."
 echo "Sauvegarde conservée : $backup"
-echo 'Les bandes qui avaient déjà des saisies économiques ont été laissées intactes.'
+if [[ $demo_portal == 1 ]]; then
+    echo 'Les bandes qui avaient déjà des saisies économiques ont été laissées intactes.'
+else
+    echo 'Instance issue de la démo et passée en mode normal : configuration conservée.'
+fi
