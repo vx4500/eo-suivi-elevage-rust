@@ -198,9 +198,9 @@ pub async fn explain_unassigned(
         {
             reasons.push("Sans bande par choix manuel. Le recalcul automatique conserve ce choix.");
         } else {
-            if !invoice["date_reference"]
+            if invoice["date_reference"]
                 .as_str()
-                .is_some_and(|date| chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").is_ok())
+                .is_none_or(|date| chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").is_err())
             {
                 reasons.push("Date manquante ou invalide : renseignez la date de référence.");
             }
