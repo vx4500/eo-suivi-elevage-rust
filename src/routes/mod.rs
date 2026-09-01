@@ -29,6 +29,7 @@ mod demo_portal;
 pub(crate) mod documents;
 mod factures;
 mod feuille_mise_bas;
+mod genetique_import;
 mod historique_truie;
 mod import_historique;
 mod maternite_suivi;
@@ -311,6 +312,22 @@ pub fn router(state: AppState) -> Router {
         .route("/economique/vente", post(economique_vente))
         .route("/economique/semence", post(economique_semence))
         .route("/economique/genetique", post(economique_genetique))
+        .route(
+            "/economique/genetique/modele.csv",
+            get(genetique_import::modele_csv),
+        )
+        .route(
+            "/economique/genetique/import",
+            post(genetique_import::importer),
+        )
+        .route(
+            "/economique/genetique/import/confirmer",
+            post(genetique_import::confirmer),
+        )
+        .route(
+            "/economique/genetique/import/annuler",
+            post(genetique_import::annuler),
+        )
         .route("/economique/valorisation", post(economique_valorisation))
         .route(
             "/economique/valorisation/{id}/supprimer",
