@@ -1,4 +1,4 @@
-# EO-Suivi Élevage — portage Rust 2.2.54
+# EO-Suivi Élevage — portage Rust 2.2.55
 
 Cette archive reprend la base EO-Suivi 1.65 sous forme d'un serveur Rust. Elle
 n'utilise plus FastAPI, SQLModel, Uvicorn ni Python pour les fonctions déjà
@@ -118,7 +118,25 @@ La base est conservée dans le volume `eo_data`.
 | `EO_HOST` | `0.0.0.0` | adresse d'écoute |
 | `EO_PORT` | `8080` | port HTTP |
 | `EO_SECURE_COOKIES` | `false` | mettre `true` lorsque le site est servi en HTTPS |
+| `EO_MDNS` | activé | `0` coupe l'annonce du serveur sur le réseau local |
 | `RUST_LOG` | `info` | niveau du journal |
+
+### Découverte sur le réseau local
+
+Le serveur s'annonce en mDNS/DNS-SD sous le service `_eosuivi._tcp.local.`,
+avec son port, sa version et le nom de l'élevage (`nom_elevage`) comme nom
+d'instance. Un élevage sans accès internet n'a ni nom de domaine ni DNS : c'est
+ce qui permet à l'application mobile de trouver le serveur sans qu'on lui saisisse
+une adresse. Pour vérifier depuis un poste Linux du même réseau :
+
+```bash
+avahi-browse -rt _eosuivi._tcp
+```
+
+L'annonce n'est jamais bloquante : si le réseau filtre le multicast ou si aucune
+interface ne convient, le serveur démarre quand même et un avertissement est
+journalisé. Mettre `EO_MDNS=0` pour la couper (serveur derrière un proxy, ou
+réseau où le multicast n'est pas souhaité).
 
 ## Vérifications
 

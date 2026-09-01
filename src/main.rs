@@ -9,6 +9,7 @@ mod demo_portal;
 mod economic_import;
 mod error;
 mod machine_soupe;
+mod mdns;
 mod models;
 mod routes;
 mod templates;
@@ -69,6 +70,21 @@ async fn main() -> anyhow::Result<()> {
             }
         });
     }
+    // Annonce sur le réseau local, pour que l'application Android trouve le
+    // serveur sans qu'on lui saisisse une adresse. Le démon doit rester vivant
+    // aussi longtemps que le serveur : le lier ici, et non dans une fonction
+    // dont il sortirait, sinon l'annonce disparaît aussitôt publiée.
+    let nom_elevage: Option<String> =
+        sqlx::query_scalar("SELECT valeur FROM parametre WHERE cle='nom_elevage'")
+            .fetch_optional(&pool)
+            .await?
+            .flatten();
+    let _annonce_reseau = mdns::annoncer(
+        config.bind.port(),
+        nom_elevage.as_deref(),
+        env!("CARGO_PKG_VERSION"),
+    );
+
     let templates = templates::build()?;
     let state = AppState::new(config.clone(), pool, templates);
 
