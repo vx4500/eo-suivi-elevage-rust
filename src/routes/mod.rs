@@ -1606,12 +1606,11 @@ async fn password_post(
         .bind(session.uid)
         .execute(&state.pool)
         .await?;
-    for mut entry in state.sessions.iter_mut() {
-        if entry.uid == session.uid {
-            entry.doit_changer_mdp = false;
-        }
-    }
-    Ok(Redirect::to("/").into_response())
+    // Un changement de mot de passe doit rendre inutilisable tout cookie de
+    // session éventuellement volé. L'utilisateur se reconnecte ensuite avec
+    // son nouveau mot de passe.
+    state.sessions.retain(|_, active| active.uid != session.uid);
+    Ok(Redirect::to("/login").into_response())
 }
 
 #[derive(serde::Serialize)]
@@ -8991,7 +8990,31 @@ async fn commande_post(
         .collect::<String>()
         .to_uppercase();
     let email = form_text(&form, "email");
-    let client_id=if let Some(id)=sqlx::query_scalar::<_,i64>("SELECT id FROM clientventedirecte WHERE (? IS NOT NULL AND email=?) OR telephone=? LIMIT 1").bind(&email).bind(&email).bind(&phone).fetch_optional(&mut *tx).await?{sqlx::query("UPDATE clientventedirecte SET nom=?,email=?,telephone=? WHERE id=?").bind(&name).bind(&email).bind(&phone).bind(id).execute(&mut *tx).await?;id}else{sqlx::query("INSERT INTO clientventedirecte(nom,email,telephone,newsletter_email,newsletter_sms,cree_le,token_desinscription) VALUES(?,?,?,0,0,CURRENT_TIMESTAMP,?)").bind(&name).bind(&email).bind(&phone).bind(unsubscribe_token).execute(&mut *tx).await?.last_insert_rowid()};
+    // Une commande publique ne doit jamais permettre de prendre le contrôle
+    // d'une fiche client en connaissant seulement son numéro de téléphone.
+    // Seule une adresse e-mail identique permet de réutiliser la fiche ; sans
+    // e-mail, une nouvelle fiche indépendante est créée.
+    let existing_client = if let Some(email) = email.as_deref() {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT id FROM clientventedirecte WHERE lower(trim(email))=lower(trim(?)) LIMIT 1",
+        )
+        .bind(email)
+        .fetch_optional(&mut *tx)
+        .await?
+    } else {
+        None
+    };
+    let client_id = if let Some(id) = existing_client {
+        sqlx::query("UPDATE clientventedirecte SET nom=?,telephone=? WHERE id=?")
+            .bind(&name)
+            .bind(&phone)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        id
+    } else {
+        sqlx::query("INSERT INTO clientventedirecte(nom,email,telephone,newsletter_email,newsletter_sms,cree_le,token_desinscription) VALUES(?,?,?,0,0,CURRENT_TIMESTAMP,?)").bind(&name).bind(&email).bind(&phone).bind(unsubscribe_token).execute(&mut *tx).await?.last_insert_rowid()
+    };
     let order_id=sqlx::query("INSERT INTO commandeventedirecte(client_id,session_vente_id,nom_client,telephone,email,notes,statut,total,cree_le,token_modification,code_modification) VALUES(?,?,?,?,?,?,'nouvelle',?,CURRENT_TIMESTAMP,?,?)").bind(client_id).bind(session_id).bind(&name).bind(&phone).bind(&email).bind(form_text(&form,"notes")).bind(total).bind(&modification_token).bind(&modification_code).execute(&mut *tx).await?.last_insert_rowid();
     let mut summary = Vec::new();
     for (product, quantity, line_total) in lines {
@@ -9069,6 +9092,7 @@ async fn utilisateur_actif(
     }
     verify_csrf(&session, &form)?;
     sqlx::query("UPDATE utilisateur SET actif=CASE actif WHEN 1 THEN 0 ELSE 1 END WHERE id=? AND identifiant<>'admin'").bind(id).execute(&state.pool).await?;
+    state.sessions.retain(|_, active| active.uid != id);
     Ok(Redirect::to("/utilisateurs").into_response())
 }
 
@@ -9110,6 +9134,9 @@ async fn utilisateur_sections(
         .bind(id)
         .execute(&state.pool)
         .await?;
+    // Les sections sont mises en cache dans SessionData : forcer une nouvelle
+    // connexion évite de conserver les anciens droits.
+    state.sessions.retain(|_, active| active.uid != id);
     Ok(Redirect::to("/utilisateurs").into_response())
 }
 
@@ -9135,6 +9162,7 @@ async fn utilisateur_mdp(
         .bind(id)
         .execute(&state.pool)
         .await?;
+    state.sessions.retain(|_, active| active.uid != id);
     Ok(Redirect::to("/utilisateurs").into_response())
 }
 
