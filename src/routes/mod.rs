@@ -29,6 +29,7 @@ mod demo_portal;
 pub(crate) mod documents;
 mod factures;
 mod feuille_mise_bas;
+mod genetique_import;
 mod historique_truie;
 mod import_historique;
 mod maternite_suivi;
@@ -153,6 +154,7 @@ pub fn router(state: AppState) -> Router {
         .route("/truie/{id}", get(truie_detail))
         .route("/truie/{id}/imprimer", get(truie_imprimer))
         .route("/truie/{id}/bande", post(truie_bande))
+        .route("/truie/{id}/lignee", post(truie_lignee))
         .route("/truie/{id}/emplacement", post(truie_emplacement))
         .route("/truie/{id}/reformer", post(truie_reformer))
         .route("/truie/{id}/annuler-sortie", post(truie_annuler_sortie))
@@ -310,6 +312,22 @@ pub fn router(state: AppState) -> Router {
         .route("/economique/vente", post(economique_vente))
         .route("/economique/semence", post(economique_semence))
         .route("/economique/genetique", post(economique_genetique))
+        .route(
+            "/economique/genetique/modele.csv",
+            get(genetique_import::modele_csv),
+        )
+        .route(
+            "/economique/genetique/import",
+            post(genetique_import::importer),
+        )
+        .route(
+            "/economique/genetique/import/confirmer",
+            post(genetique_import::confirmer),
+        )
+        .route(
+            "/economique/genetique/import/annuler",
+            post(genetique_import::annuler),
+        )
         .route("/economique/valorisation", post(economique_valorisation))
         .route(
             "/economique/valorisation/{id}/supprimer",
@@ -1386,6 +1404,87 @@ mod gte_tests {
     fn taux_renouvellement_ignore_cheptel_vide() {
         assert_eq!(taux_renouvellement_pct(9, 60), Some(15.0));
         assert_eq!(taux_renouvellement_pct(9, 0), None);
+    }
+
+    #[test]
+    fn cout_achat_par_animal_ignore_lot_sans_reception() {
+        assert_eq!(cout_achat_par_animal_entre(3000.0, 60), Some(50.0));
+        assert_eq!(cout_achat_par_animal_entre(0.0, 0), None);
+    }
+
+    /// La requête réelle doit remonter le coût d'achat et l'effectif entré du
+    /// lot : sans cela l'écran afficherait une marge après achat identique à la
+    /// MSA pour un profil acheteur, c'est-à-dire surestimée.
+    #[tokio::test]
+    async fn la_requete_gte_impute_les_receptions_dachat_au_lot() -> AppResult<()> {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .map_err(AppError::from)?;
+        for migration in [
+            include_str!("../../migrations/0001_schema.sql"),
+            include_str!("../../migrations/0002_ventelot.sql"),
+            include_str!("../../migrations/0003_portee_effectif.sql"),
+        ] {
+            sqlx::raw_sql(migration)
+                .execute(&pool)
+                .await
+                .map_err(AppError::from)?;
+        }
+        sqlx::query("INSERT INTO bande(code,active) VALUES('B-ACHAT',1)")
+            .execute(&pool)
+            .await?;
+        // Deux réceptions sur le même lot : les coûts et les effectifs
+        // s'additionnent, ils ne sont pas écrasés par la dernière ligne.
+        sqlx::query(
+            "INSERT INTO receptionachat(date,bande_code,effectif,prix_total) VALUES('2026-01-10','B-ACHAT',40,2000.0),('2026-02-10','B-ACHAT',20,1000.0)",
+        )
+        .execute(&pool)
+        .await?;
+        // Une réception sans lot ne doit être imputée à aucune bande.
+        sqlx::query(
+            "INSERT INTO receptionachat(date,bande_code,effectif,prix_total) VALUES('2026-03-10','',10,500.0)",
+        )
+        .execute(&pool)
+        .await?;
+
+        #[allow(clippy::type_complexity)]
+        let rows: Vec<(
+            i64,
+            String,
+            Option<String>,
+            i64,
+            f64,
+            f64,
+            f64,
+            f64,
+            i64,
+            f64,
+            i64,
+        )> = sqlx::query_as(GTE_LOTS_SQL).fetch_all(&pool).await?;
+        assert_eq!(rows.len(), 1, "le lot acheteur doit apparaître sans vente");
+        let (_, code, _, _, _, recettes, _, cout_aliment, _, cout_achat, entres) = &rows[0];
+        assert_eq!(code, "B-ACHAT");
+        assert_eq!(*cout_achat, 3000.0);
+        assert_eq!(*entres, 60);
+        // Sans vente ni aliment, la marge après achat est bien négative du
+        // montant payé — le lot n'est pas silencieusement à l'équilibre.
+        let msa = marge_sur_cout_alimentaire(*recettes, *cout_aliment);
+        assert_eq!(marge_apres_cout_achat(msa, *cout_achat), -3000.0);
+        assert_eq!(
+            cout_achat_par_animal_entre(*cout_achat, *entres),
+            Some(50.0)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn marge_apres_achat_deduit_la_charge_dentree() {
+        // Profil acheteur : la MSA seule surestime la marge du lot.
+        assert_eq!(marge_apres_cout_achat(7500.0, 3000.0), 4500.0);
+        // Profil naisseur : aucune réception, la valeur reste la MSA.
+        assert_eq!(marge_apres_cout_achat(7500.0, 0.0), 7500.0);
     }
 }
 
@@ -2491,8 +2590,8 @@ async fn archives(
     .await
 }
 
-const TRUIE_FIELDS: &str = "id,num_travail,num_national,rfid,race,date_entree,statut,note,rang,date_naissance,reformee,date_reforme,motif_sortie,mere_cochette,bande_code,salle_id,case_id,perf_nt,perf_nv,perf_mn,perf_sevres,perf_tx_perte";
-const TRUIE_SELECT_BY_BAND: &str = "SELECT id,num_travail,num_national,rfid,race,date_entree,statut,note,rang,date_naissance,reformee,date_reforme,motif_sortie,mere_cochette,bande_code,salle_id,case_id,perf_nt,perf_nv,perf_mn,perf_sevres,perf_tx_perte FROM truie WHERE bande_code=? AND reformee=0 ORDER BY num_travail";
+const TRUIE_FIELDS: &str = "id,num_travail,num_national,rfid,race,date_entree,statut,note,rang,date_naissance,reformee,date_reforme,motif_sortie,mere_cochette,bande_code,salle_id,case_id,lignee_id,perf_nt,perf_nv,perf_mn,perf_sevres,perf_tx_perte";
+const TRUIE_SELECT_BY_BAND: &str = "SELECT id,num_travail,num_national,rfid,race,date_entree,statut,note,rang,date_naissance,reformee,date_reforme,motif_sortie,mere_cochette,bande_code,salle_id,case_id,lignee_id,perf_nt,perf_nv,perf_mn,perf_sevres,perf_tx_perte FROM truie WHERE bande_code=? AND reformee=0 ORDER BY num_travail";
 
 async fn truies(
     State(state): State<AppState>,
@@ -2532,6 +2631,18 @@ async fn truies(
         serde_json::to_value(bands).unwrap_or_default(),
     );
     ctx.insert("q".into(), json!(q));
+    if session.module_genetique {
+        ctx.insert(
+            "lignees".into(),
+            Value::Array(
+                generic_rows(
+                    &state.pool,
+                    "SELECT id,nom FROM lignee_genetique ORDER BY nom",
+                )
+                .await?,
+            ),
+        );
+    }
     render(&state, "truies.html", Value::Object(ctx))
 }
 
@@ -2552,9 +2663,16 @@ async fn truie_ajouter(
     if duplicate > 0 {
         return Err(AppError::Invalid("Ce numéro de travail existe déjà".into()));
     }
-    let result = sqlx::query("INSERT INTO truie(num_travail,num_national,rfid,race,date_entree,bande_code,statut,reformee,rang,mere_cochette) VALUES(?,?,?,?,?,?,'active',0,0,0)")
+    // La lignée n'est proposée que si le module Génétique avancée est actif :
+    // une valeur envoyée sans le module est ignorée plutôt que refusée.
+    let lignee_id = session
+        .module_genetique
+        .then(|| form_i64(&form, "lignee_id"))
+        .flatten();
+    let result = sqlx::query("INSERT INTO truie(num_travail,num_national,rfid,race,date_entree,bande_code,lignee_id,statut,reformee,rang,mere_cochette) VALUES(?,?,?,?,?,?,?,'active',0,0,0)")
         .bind(&number).bind(form_text(&form,"num_national")).bind(form_text(&form,"rfid"))
         .bind(form_text(&form,"race")).bind(form_date(&form,"date_entree")?).bind(form_text(&form,"bande_code"))
+        .bind(lignee_id)
         .execute(&state.pool).await?;
     Ok(Redirect::to(&format!("/truie/{}", result.last_insert_rowid())).into_response())
 }
@@ -2707,7 +2825,70 @@ async fn truie_detail(
         .unwrap_or(Value::Null),
     );
     ctx.insert("mises_bas".into(), Value::Array(generic_rows(&state.pool,&format!("SELECT * FROM evenement WHERE truie_id={id} AND type='mise_bas' ORDER BY date DESC,id DESC")).await?));
+    // Rattachement au catalogue de lignées (§2) : uniquement quand le module
+    // Génétique avancée est actif, sinon la fiche garde `race` en texte libre.
+    if session.module_genetique {
+        ctx.insert(
+            "lignees".into(),
+            Value::Array(
+                generic_rows(
+                    &state.pool,
+                    "SELECT id,nom,fournisseur FROM lignee_genetique ORDER BY nom",
+                )
+                .await?,
+            ),
+        );
+        ctx.insert(
+            "lignee".into(),
+            generic_rows(
+                &state.pool,
+                &format!("SELECT l.nom,l.fournisseur,l.index_prolificite,l.index_croissance,l.index_ic FROM lignee_genetique l JOIN truie t ON t.lignee_id=l.id WHERE t.id={id}"),
+            )
+            .await?
+            .into_iter()
+            .next()
+            .unwrap_or(Value::Null),
+        );
+    }
     render(&state, "truie.html", Value::Object(ctx))
+}
+
+/// Rattache la truie à une lignée du catalogue (§2). `race`, texte libre
+/// historique, n'est pas modifié : les élevages qui n'activent pas le module
+/// Génétique avancée continuent de fonctionner comme avant.
+async fn truie_lignee(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Path(id): Path<i64>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    verify_csrf(&session, &form)?;
+    if !session.module_genetique {
+        return Err(AppError::Invalid(
+            "Le module Génétique avancée n'est pas activé (Paramètres > Type d'élevage et modules).".into(),
+        ));
+    }
+    let lignee_id = form_i64(&form, "lignee_id");
+    if let Some(lignee) = lignee_id {
+        let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM lignee_genetique WHERE id=?")
+            .bind(lignee)
+            .fetch_one(&state.pool)
+            .await?;
+        if exists == 0 {
+            return Err(AppError::Invalid("Lignée introuvable".into()));
+        }
+    }
+    let result =
+        sqlx::query("UPDATE truie SET lignee_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=?")
+            .bind(lignee_id)
+            .bind(id)
+            .execute(&state.pool)
+            .await?;
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound);
+    }
+    Ok(Redirect::to(&format!("/truie/{id}#identification")).into_response())
 }
 
 async fn truie_bande(
@@ -7034,6 +7215,22 @@ fn marge_sur_cout_alimentaire(recettes: f64, cout_aliment: f64) -> f64 {
     recettes - cout_aliment
 }
 
+/// Coût d'achat des animaux entrés dans le lot, rapporté à un animal entré
+/// (§1bis). `None` si aucune réception n'est enregistrée pour ce lot.
+fn cout_achat_par_animal_entre(cout_achat: f64, effectif_entre: i64) -> Option<f64> {
+    (effectif_entre > 0).then(|| cout_achat / effectif_entre as f64)
+}
+
+/// Marge après imputation du coût d'achat des animaux entrants : la MSA ne
+/// retient que l'aliment, or un post-sevreur ou un engraisseur achète ses
+/// animaux — cette charge d'entrée doit être déduite pour que la marge du lot
+/// soit comparable à celle d'un naisseur-engraisseur, qui produit les siens.
+/// Pour un lot sans réception d'achat, `cout_achat` vaut 0 et la valeur est
+/// identique à la MSA (pas de régression pour les profils naisseurs).
+fn marge_apres_cout_achat(msa: f64, cout_achat: f64) -> f64 {
+    msa - cout_achat
+}
+
 /// Marge brute répartie par truie active du lot (non applicable si le lot n'a
 /// pas de truies, ex. profil post-sevreur/engraisseur seul).
 fn marge_brute_par_truie(marge_totale: f64, nb_truies: i64) -> Option<f64> {
@@ -7046,35 +7243,68 @@ fn taux_renouvellement_pct(reformees_periode: i64, effectif_actif: i64) -> Optio
     (effectif_actif > 0).then(|| 100.0 * reformees_periode as f64 / effectif_actif as f64)
 }
 
+/// Requête des indicateurs GTE par lot. Isolée en constante pour être
+/// rejouée telle quelle par les tests sur une base en mémoire : le calcul
+/// des charges (aliment, achat d'animaux) est en SQL, pas seulement dans
+/// les fonctions pures ci-dessus.
+const GTE_LOTS_SQL: &str = "SELECT b.id,b.code,b.site,\
+         CAST(COALESCE(v.porcs,0) AS INTEGER),CAST(COALESCE(v.poids,0) AS REAL),CAST(COALESCE(v.recettes,0) AS REAL),\
+         CAST(COALESCE(a.tonnes,0) AS REAL),CAST(COALESCE(a.cout,0) AS REAL),\
+         CAST(COALESCE(t.truies,0) AS INTEGER),\
+         CAST(COALESCE(r.achat,0) AS REAL),CAST(COALESCE(r.entres,0) AS INTEGER) \
+         FROM bande b \
+         LEFT JOIN (SELECT bande_id,SUM(COALESCE(nb_porcs,0)) AS porcs,SUM(COALESCE(poids_total,0)) AS poids,SUM(COALESCE(montant_ht,0)) AS recettes FROM ventelot GROUP BY bande_id) v ON v.bande_id=b.id \
+         LEFT JOIN (SELECT af.bande_id,SUM(COALESCE(l.tonnage,0)/(SELECT COUNT(*) FROM affectationfacturebande n WHERE n.categorie='aliment' AND n.facture_id=l.id)) AS tonnes,SUM(COALESCE(l.montant_ht,0)/(SELECT COUNT(*) FROM affectationfacturebande n WHERE n.categorie='aliment' AND n.facture_id=l.id)) AS cout FROM livraisonaliment l JOIN affectationfacturebande af ON af.categorie='aliment' AND af.facture_id=l.id GROUP BY af.bande_id) a ON a.bande_id=b.id \
+         LEFT JOIN (SELECT bande_code,COUNT(*) AS truies FROM truie WHERE reformee=0 GROUP BY bande_code) t ON t.bande_code=b.code \
+         LEFT JOIN (SELECT bande_code,SUM(COALESCE(prix_total,0)) AS achat,SUM(COALESCE(effectif,0)) AS entres FROM receptionachat WHERE COALESCE(trim(bande_code),'')<>'' GROUP BY bande_code) r ON r.bande_code=b.code \
+         WHERE b.active=1 AND (v.porcs IS NOT NULL OR a.cout IS NOT NULL OR t.truies IS NOT NULL OR r.entres IS NOT NULL) \
+         ORDER BY b.date_mb IS NULL,b.date_mb,b.id";
+
 async fn gte(
     State(state): State<AppState>,
     Extension(session): Extension<SessionData>,
 ) -> AppResult<Html<String>> {
     #[allow(clippy::type_complexity)]
-    let rows: Vec<(i64, String, Option<String>, i64, f64, f64, f64, f64, i64)> = sqlx::query_as(
-        "SELECT b.id,b.code,b.site,\
-         CAST(COALESCE(v.porcs,0) AS INTEGER),CAST(COALESCE(v.poids,0) AS REAL),CAST(COALESCE(v.recettes,0) AS REAL),\
-         CAST(COALESCE(a.tonnes,0) AS REAL),CAST(COALESCE(a.cout,0) AS REAL),\
-         CAST(COALESCE(t.truies,0) AS INTEGER) \
-         FROM bande b \
-         LEFT JOIN (SELECT bande_id,SUM(COALESCE(nb_porcs,0)) AS porcs,SUM(COALESCE(poids_total,0)) AS poids,SUM(COALESCE(montant_ht,0)) AS recettes FROM ventelot GROUP BY bande_id) v ON v.bande_id=b.id \
-         LEFT JOIN (SELECT af.bande_id,SUM(COALESCE(l.tonnage,0)/(SELECT COUNT(*) FROM affectationfacturebande n WHERE n.categorie='aliment' AND n.facture_id=l.id)) AS tonnes,SUM(COALESCE(l.montant_ht,0)/(SELECT COUNT(*) FROM affectationfacturebande n WHERE n.categorie='aliment' AND n.facture_id=l.id)) AS cout FROM livraisonaliment l JOIN affectationfacturebande af ON af.categorie='aliment' AND af.facture_id=l.id GROUP BY af.bande_id) a ON a.bande_id=b.id \
-         LEFT JOIN (SELECT bande_code,COUNT(*) AS truies FROM truie WHERE reformee=0 GROUP BY bande_code) t ON t.bande_code=b.code \
-         WHERE b.active=1 AND (v.porcs IS NOT NULL OR a.cout IS NOT NULL OR t.truies IS NOT NULL) \
-         ORDER BY b.date_mb IS NULL,b.date_mb,b.id",
-    )
-    .fetch_all(&state.pool)
-    .await?;
+    let rows: Vec<(
+        i64,
+        String,
+        Option<String>,
+        i64,
+        f64,
+        f64,
+        f64,
+        f64,
+        i64,
+        f64,
+        i64,
+    )> = sqlx::query_as(GTE_LOTS_SQL).fetch_all(&state.pool).await?;
 
     let bandes: Vec<Value> = rows
         .into_iter()
         .map(
-            |(id, code, site, porcs, poids, recettes, tonnes, cout_aliment, truies)| {
+            |(
+                id,
+                code,
+                site,
+                porcs,
+                poids,
+                recettes,
+                tonnes,
+                cout_aliment,
+                truies,
+                cout_achat,
+                entres,
+            )| {
                 let aliment_kg = tonnes * 1000.0;
                 let ic = indice_consommation(aliment_kg, poids);
                 let cout_par_porc = cout_alimentaire_par_porc(cout_aliment, porcs);
                 let msa = marge_sur_cout_alimentaire(recettes, cout_aliment);
-                let marge_brute_truie = marge_brute_par_truie(msa, truies);
+                let achat_par_animal = cout_achat_par_animal_entre(cout_achat, entres);
+                // La marge brute par truie se calcule sur la marge réellement
+                // dégagée, donc après la charge d'entrée : sans réception
+                // d'achat le coût vaut 0 et le résultat est inchangé.
+                let marge_apres_achat = marge_apres_cout_achat(msa, cout_achat);
+                let marge_brute_truie = marge_brute_par_truie(marge_apres_achat, truies);
                 json!({
                     "id": id, "code": code, "site": site,
                     "porcs": porcs, "poids": (poids * 10.0).round() / 10.0,
@@ -7083,6 +7313,10 @@ async fn gte(
                     "ic": ic.map(|v| (v * 100.0).round() / 100.0),
                     "cout_par_porc": cout_par_porc.map(|v| (v * 100.0).round() / 100.0),
                     "msa": (msa * 100.0).round() / 100.0,
+                    "entres": entres,
+                    "cout_achat": (cout_achat * 100.0).round() / 100.0,
+                    "achat_par_animal": achat_par_animal.map(|v| (v * 100.0).round() / 100.0),
+                    "marge_apres_achat": (marge_apres_achat * 100.0).round() / 100.0,
                     "truies": truies,
                     "marge_brute_truie": marge_brute_truie.map(|v| (v * 100.0).round() / 100.0),
                 })
@@ -10209,7 +10443,7 @@ async fn genetique(
     }
     let lignees = generic_rows(
         &state.pool,
-        "SELECT id,nom,fournisseur,index_prolificite,index_croissance,index_ic,contrat_renouvellement,note FROM lignee_genetique ORDER BY nom",
+        "SELECT l.id,l.nom,l.fournisseur,l.index_prolificite,l.index_croissance,l.index_ic,l.contrat_renouvellement,l.note,(SELECT COUNT(*) FROM truie t WHERE t.lignee_id=l.id) AS truies FROM lignee_genetique l ORDER BY l.nom",
     )
     .await?;
     let mut ctx = context(&session);
@@ -10257,6 +10491,18 @@ async fn genetique_supprimer(
 ) -> AppResult<Response> {
     require_writer(&session)?;
     verify_csrf(&session, &form)?;
+    // `truie.lignee_id` référence cette table : supprimer une lignée encore
+    // utilisée déclencherait une violation de clé étrangère (erreur technique).
+    // On refuse explicitement, en indiquant combien de truies sont concernées.
+    let rattachees: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM truie WHERE lignee_id=?")
+        .bind(id)
+        .fetch_one(&state.pool)
+        .await?;
+    if rattachees > 0 {
+        return Err(AppError::Invalid(format!(
+            "Lignée utilisée par {rattachees} truie(s) : détache-les depuis leur fiche avant de la supprimer."
+        )));
+    }
     sqlx::query("DELETE FROM lignee_genetique WHERE id=?")
         .bind(id)
         .execute(&state.pool)

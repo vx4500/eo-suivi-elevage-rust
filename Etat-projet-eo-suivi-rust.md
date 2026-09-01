@@ -1,6 +1,21 @@
 # EO-Suivi Élevage Rust — État du projet
 
-Version actuelle : **2.2.51** — Dernière mise à jour de ce document : 1er septembre 2026.
+Version actuelle : **2.2.52** — Dernière mise à jour de ce document : 1er septembre 2026.
+
+### Version 2.2.52 — coût d'achat en GTE, lignées et import génétique
+
+- GTE : le coût d'achat des animaux reçus (`receptionachat`) est imputé au lot
+  comme charge d'entrée. La MSA, qui ne retient que l'aliment, surestimait la
+  marge des profils post-sevreur et engraisseur ; la marge brute par truie
+  repose désormais sur la marge après cette charge. Sans réception d'achat,
+  rien ne change pour un naisseur ou un naisseur-engraisseur.
+- Truies rattachables à une lignée du catalogue génétique (`truie.lignee_id`,
+  colonne additive) au lieu de la seule race en texte libre, qui est conservée.
+  Une lignée encore rattachée à des truies ne peut plus être supprimée.
+- Import CSV en masse des factures génétiques : modèle téléchargeable, aperçu
+  ligne à ligne et application transactionnelle, comme les imports existants.
+- Correction de deux erreurs `clippy` (`nonminimal_bool`) qui faisaient échouer
+  l'intégration continue sur Rust stable, donc bloquaient toute fusion.
 
 ### Version 2.2.51 — identité visuelle et sécurité des accès
 
@@ -357,16 +372,19 @@ août 2026 ; la priorité actuelle porte sur la fiabilité des effectifs
       dans l'UI, gardées pour la parité des routes Python) ; bouton renommé
       « Importer des documents PDF » (au lieu de « Analyser et lier
       automatiquement ») pour correspondre exactement à la demande.
-- [ ] Ajouter un modèle d'import des factures génétiques, téléchargeable.
-      *Non traité :* contrairement aux modèles CSV existants (truies, eau/
-      électricité), aucun n'est un simple document de référence — chacun est
-      systématiquement couplé à un vrai point d'entrée d'import en masse
-      (aperçu, doublons, transaction). Pour la génétique, seuls existent
-      aujourd'hui l'import PDF (déjà fonctionnel) et la saisie manuelle
-      ligne à ligne ; ajouter *seulement* un modèle CSV sans pipeline
-      d'import en masse pour le consommer aurait été trompeur. Construire
-      ce pipeline complet est un incrément à part entière, pas un
-      nettoyage rapide.
+- [x] Ajouter un modèle d'import des factures génétiques, téléchargeable.
+      Traité en 2.2.52 avec le pipeline complet qui manquait — un modèle CSV
+      seul, sans point d'entrée pour le consommer, aurait laissé croire à un
+      import possible. `/economique/genetique/modele.csv` (en-tête construit
+      à partir de la même liste de colonnes que l'analyse, donc impossible à
+      désynchroniser), aperçu ligne à ligne sans écriture
+      (`/economique/genetique/import`) puis application transactionnelle
+      (`.../confirmer`), avec les mêmes garde-fous que les imports existants :
+      empreinte SHA-256 du fichier, doublon interne, facture déjà en base,
+      contrôle rejoué au moment d'écrire, affectation automatique par bande
+      ensuite. Une bande inconnue n'invalide pas la ligne : la facture entre
+      non affectée, comme pour un import PDF. Six tests dans
+      `src/routes/genetique_import.rs`.
 
 ### Présentation et navigation
 - [x] Retirer l'ancien texte générique de mise à jour (« remplacer le dossier
@@ -558,7 +576,7 @@ l'arrêt déclenche le retour arrière ; la sauvegarde de la base est conservée
 ```bash
 systemctl status eo-suivi-rust --no-pager -l
 journalctl -u eo-suivi-rust -n 80 --no-pager -l -o cat
-curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.51"
+curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.52"
 ```
 
 Puis ouvrir `https://rust-elevage.basse-chevrie.ovh`.
@@ -601,10 +619,18 @@ gros commit unique sur une application en production.
       basculant un lot de naisseur-engraisseur à post-sevreur. 5 fonctions de
       calcul pures et testées unitairement (indice_consommation,
       cout_alimentaire_par_porc, marge_sur_cout_alimentaire,
-      marge_brute_par_truie, taux_renouvellement_pct). *Reste hors périmètre
-      de cette phase : l'imputation explicite du coût d'achat d'un animal
-      entrant comme charge d'entrée pour les profils achats (Phase 2), qui
-      affinera le MSA de ces profils dans un prochain incrément.*
+      marge_brute_par_truie, taux_renouvellement_pct). *Complété en 2.2.52 :*
+      le coût d'achat des animaux entrants (`receptionachat`, Phase 2) est
+      désormais imputé au lot comme charge d'entrée. La MSA garde sa
+      définition (recettes moins le seul aliment) ; une colonne « Marge après
+      achat » la corrige pour les profils acheteurs et sert de base à la marge
+      brute par truie. Sans réception d'achat, le coût vaut 0 et rien ne
+      change pour un naisseur ou un naisseur-engraisseur. Requête isolée en
+      constante `GTE_LOTS_SQL`, rejouée telle quelle par un test sur base
+      SQLite en mémoire. *Reste hors périmètre :* l'indice de consommation est
+      calculé sur le poids vendu, pas sur le gain de poids depuis l'entrée —
+      il reste donc optimiste pour un engraisseur qui achète des animaux déjà
+      lourds ; à traiter avec le poids d'entrée par lot.
 - [x] **Phase 4 — Modules optionnels (§0, §2, §4).** Cases à cocher
       « Génétique avancée » (décochée par défaut) et « Prestataires externes »
       (cochée par défaut, préserve le comportement des bases existantes) dans
@@ -617,9 +643,16 @@ gros commit unique sur une application en production.
       `/parametres/maj` (type d'élevage+modules, et informations générales) —
       soumettre l'un ne doit pas réinitialiser les cases à cocher de l'autre ;
       un garde-fou (`form.contains_key("type_elevage")`) l'empêche, testé par
-      soumission successive des deux formulaires. *Reste hors périmètre : le
-      rattachement d'une truie à une lignée du catalogue (actuellement
-      `truie.race` en texte libre uniquement) — prochain incrément naturel.*
+      soumission successive des deux formulaires. *Complété en 2.2.52 :* une
+      truie se rattache à une lignée du catalogue par la colonne additive
+      `truie.lignee_id` (`POST /truie/{id}/lignee`, sélecteur visible
+      seulement module actif). `truie.race`, texte libre historique, est
+      conservé tel quel : aucune donnée réécrite, aucun élevage obligé
+      d'utiliser le catalogue. Piège vérifié en conditions réelles :
+      `truie.lignee_id` étant une clé étrangère, supprimer une lignée encore
+      utilisée renvoyait une erreur technique — la suppression est désormais
+      refusée avec le nombre de truies concernées, et `/genetique` affiche
+      cette colonne.
 - [x] **Phase 5 — Capacités par étape (§0, §3).** Trois nouveaux réglages
       (`capacite_maternite`=60, `capacite_postsevrage`=300,
       `capacite_engraissement`=800, éditables comme `capacite_verraterie`
@@ -650,10 +683,12 @@ gros commit unique sur une application en production.
       visuel « en retard ». Un bug réel a été trouvé et corrigé en testant en
       conditions réelles : `printf('+%d day', jour)` produisait un modificateur
       SQLite invalide (`+-14 day`) pour un décalage négatif (ex. vaccin avant
-      mise-bas) ; corrigé en `printf('%+d day', jour)`. *Limite connue :* les
-      rappels verrats ne sont pas couverts (`acterealise.bande_id` est
-      obligatoire, un verrat n'appartient pas à une bande) — resterait à
-      traiter dans un incrément dédié si le besoin se confirme.
+      mise-bas) ; corrigé en `printf('%+d day', jour)`. *Limite levée depuis :*
+      l'historique des rappels verrats, annoncé ici comme non couvert, l'est
+      par la table additive `acterealiseverrat` et la route
+      `/sanitaire/fait-verrat` (voir §3, Sanitaire). Seule subsiste l'absence
+      d'échéance calculée pour ces rappels, faute de date de référence par
+      verrat en base.
 - [x] **Phase 7 — Fiche de mise-bas au format A4 définitif (§9).** Nouvel
       écran `/bande/{id}/fiche-mise-bas`, mise en page dédiée (`@page { size:
       A4; margin: 15mm; }`) distincte du dump générique `impression.html` :

@@ -572,3 +572,65 @@ async fn consommation_aliment_par_bande_repartit_une_facture_a_deux_bandes() -> 
     assert_eq!(rows, vec![("B1".to_string(), 5.0), ("B2".to_string(), 5.0)]);
     Ok(())
 }
+
+/// Rattachement d'une truie au catalogue de lignées (§2). Vérifie que la
+/// colonne additive existe bien, que `race` (texte libre historique) survit au
+/// rattachement, et que la clé étrangère protège une lignée encore utilisée —
+/// c'est ce dernier point qui justifie le garde-fou de `/genetique/{id}/supprimer`.
+#[tokio::test]
+async fn truie_se_rattache_a_une_lignee_sans_perdre_la_race() -> anyhow::Result<()> {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await?;
+    sqlx::raw_sql(include_str!("../migrations/0001_schema.sql"))
+        .execute(&pool)
+        .await?;
+
+    let lignee =
+        sqlx::query("INSERT INTO lignee_genetique(nom,fournisseur) VALUES('L1065','DanBred')")
+            .execute(&pool)
+            .await?
+            .last_insert_rowid();
+    let truie = sqlx::query(
+        "INSERT INTO truie(num_travail,race,statut,reformee,rang,mere_cochette) VALUES('T-LIG','Large White','active',0,0,0)",
+    )
+    .execute(&pool)
+    .await?
+    .last_insert_rowid();
+    sqlx::query("UPDATE truie SET lignee_id=? WHERE id=?")
+        .bind(lignee)
+        .bind(truie)
+        .execute(&pool)
+        .await?;
+
+    let (race, nom): (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT t.race,l.nom FROM truie t LEFT JOIN lignee_genetique l ON l.id=t.lignee_id WHERE t.id=?",
+    )
+    .bind(truie)
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(race.as_deref(), Some("Large White"));
+    assert_eq!(nom.as_deref(), Some("L1065"));
+
+    // Lignée encore rattachée : la suppression directe doit être rejetée.
+    let refus = sqlx::query("DELETE FROM lignee_genetique WHERE id=?")
+        .bind(lignee)
+        .execute(&pool)
+        .await;
+    assert!(
+        refus.is_err(),
+        "la clé étrangère doit protéger une lignée encore utilisée"
+    );
+
+    // Une fois la truie détachée, la lignée redevient supprimable.
+    sqlx::query("UPDATE truie SET lignee_id=NULL WHERE id=?")
+        .bind(truie)
+        .execute(&pool)
+        .await?;
+    sqlx::query("DELETE FROM lignee_genetique WHERE id=?")
+        .bind(lignee)
+        .execute(&pool)
+        .await?;
+    Ok(())
+}

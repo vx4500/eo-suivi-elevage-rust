@@ -54,6 +54,11 @@ pub async fn init(pool: &SqlitePool) -> anyhow::Result<()> {
         ("truie", "salle_id", "INTEGER"),
         ("truie", "case_id", "INTEGER"),
         ("truie", "source_import_id", "TEXT"),
+        (
+            "truie",
+            "lignee_id",
+            "INTEGER REFERENCES lignee_genetique(id)",
+        ),
         ("bande", "cs_mn_portee", "REAL"),
         ("bande", "cs_adoptes", "INTEGER"),
         ("bande", "cs_retires", "INTEGER"),

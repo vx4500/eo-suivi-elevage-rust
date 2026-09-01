@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Aperçu import génétique · EO-Suivi{% endblock %}
+{% block content %}
+<h1>Aperçu de l'import des factures génétiques</h1>
+<p><b>Fichier :</b> {{ nom_fichier }}</p>
+<p class="help">Rien n'est encore enregistré. Une ligne en erreur bloque l'import complet : corrigez le fichier et recommencez. Une bande inconnue n'est pas une erreur — la facture entre alors sans affectation, à ventiler depuis la page Économie.</p>
+<div class="rust-grid">
+  <div class="card"><h3>À ajouter</h3><strong>{{ resume.ajouter }}</strong></div>
+  <div class="card"><h3>À ignorer</h3><strong>{{ resume.ignorer }}</strong></div>
+  <div class="card"><h3>Erreurs</h3><strong>{{ resume.erreur }}</strong></div>
+</div>
+<div class="card rust-actions">
+  <form method="post" action="/economique/genetique/import/confirmer"><input type="hidden" name="csrf_token" value="{{ session.csrf }}"><input type="hidden" name="token" value="{{ token }}"><button {% if resume.erreur %}disabled title="Corrige les erreurs avant de recommencer"{% endif %}>Confirmer l'import complet</button></form>
+  <form method="post" action="/economique/genetique/import/annuler"><input type="hidden" name="csrf_token" value="{{ session.csrf }}"><input type="hidden" name="token" value="{{ token }}"><button class="ghost">Annuler</button></form>
+</div>
+<div class="rust-scroll"><table><thead><tr><th>Ligne</th><th>Action</th><th>Anomalie</th><th>Date</th><th>Facture</th><th>Fournisseur</th><th>Désignation</th><th>Animaux</th><th>Montant HT</th><th>Bande</th></tr></thead><tbody>{% for row in lignes %}<tr><td>{{ row.ligne }}</td><td><span class="rust-badge">{{ row.action }}</span></td><td>{{ row.anomalie or '—' }}</td><td>{{ row.date|date_fr if row.date else '—' }}</td><td>{{ row.num_facture or '—' }}</td><td>{{ row.fournisseur or '—' }}</td><td>{{ row.designation or '—' }}</td><td>{{ row.nb_animaux or '—' }}</td><td>{% if row.montant_ht is not none %}{{ row.montant_ht|euro }}{% else %}—{% endif %}</td><td>{{ row.bande_code or '—' }}</td></tr>{% endfor %}</tbody></table></div>
+{% endblock %}

@@ -66,6 +66,10 @@ pub fn build() -> anyhow::Result<Environment<'static>> {
         include_str!("../templates/economique_import_apercu.html"),
     )?;
     env.add_template(
+        "genetique_import_apercu.html",
+        include_str!("../templates/genetique_import_apercu.html"),
+    )?;
+    env.add_template(
         "vente_directe.html",
         include_str!("../templates/vente_directe.html"),
     )?;

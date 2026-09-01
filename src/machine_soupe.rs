@@ -79,7 +79,7 @@ fn est_produit_reel(nom: &str) -> bool {
     }
     let lower = nom.to_lowercase();
     match lower.strip_prefix("produit_") {
-        Some(suffix) => !(!suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit())),
+        Some(suffix) => suffix.is_empty() || !suffix.chars().all(|c| c.is_ascii_digit()),
         None => true,
     }
 }
