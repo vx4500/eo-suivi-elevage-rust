@@ -1387,6 +1387,87 @@ mod gte_tests {
         assert_eq!(taux_renouvellement_pct(9, 60), Some(15.0));
         assert_eq!(taux_renouvellement_pct(9, 0), None);
     }
+
+    #[test]
+    fn cout_achat_par_animal_ignore_lot_sans_reception() {
+        assert_eq!(cout_achat_par_animal_entre(3000.0, 60), Some(50.0));
+        assert_eq!(cout_achat_par_animal_entre(0.0, 0), None);
+    }
+
+    /// La requête réelle doit remonter le coût d'achat et l'effectif entré du
+    /// lot : sans cela l'écran afficherait une marge après achat identique à la
+    /// MSA pour un profil acheteur, c'est-à-dire surestimée.
+    #[tokio::test]
+    async fn la_requete_gte_impute_les_receptions_dachat_au_lot() -> AppResult<()> {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .map_err(AppError::from)?;
+        for migration in [
+            include_str!("../../migrations/0001_schema.sql"),
+            include_str!("../../migrations/0002_ventelot.sql"),
+            include_str!("../../migrations/0003_portee_effectif.sql"),
+        ] {
+            sqlx::raw_sql(migration)
+                .execute(&pool)
+                .await
+                .map_err(AppError::from)?;
+        }
+        sqlx::query("INSERT INTO bande(code,active) VALUES('B-ACHAT',1)")
+            .execute(&pool)
+            .await?;
+        // Deux réceptions sur le même lot : les coûts et les effectifs
+        // s'additionnent, ils ne sont pas écrasés par la dernière ligne.
+        sqlx::query(
+            "INSERT INTO receptionachat(date,bande_code,effectif,prix_total) VALUES('2026-01-10','B-ACHAT',40,2000.0),('2026-02-10','B-ACHAT',20,1000.0)",
+        )
+        .execute(&pool)
+        .await?;
+        // Une réception sans lot ne doit être imputée à aucune bande.
+        sqlx::query(
+            "INSERT INTO receptionachat(date,bande_code,effectif,prix_total) VALUES('2026-03-10','',10,500.0)",
+        )
+        .execute(&pool)
+        .await?;
+
+        #[allow(clippy::type_complexity)]
+        let rows: Vec<(
+            i64,
+            String,
+            Option<String>,
+            i64,
+            f64,
+            f64,
+            f64,
+            f64,
+            i64,
+            f64,
+            i64,
+        )> = sqlx::query_as(GTE_LOTS_SQL).fetch_all(&pool).await?;
+        assert_eq!(rows.len(), 1, "le lot acheteur doit apparaître sans vente");
+        let (_, code, _, _, _, recettes, _, cout_aliment, _, cout_achat, entres) = &rows[0];
+        assert_eq!(code, "B-ACHAT");
+        assert_eq!(*cout_achat, 3000.0);
+        assert_eq!(*entres, 60);
+        // Sans vente ni aliment, la marge après achat est bien négative du
+        // montant payé — le lot n'est pas silencieusement à l'équilibre.
+        let msa = marge_sur_cout_alimentaire(*recettes, *cout_aliment);
+        assert_eq!(marge_apres_cout_achat(msa, *cout_achat), -3000.0);
+        assert_eq!(
+            cout_achat_par_animal_entre(*cout_achat, *entres),
+            Some(50.0)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn marge_apres_achat_deduit_la_charge_dentree() {
+        // Profil acheteur : la MSA seule surestime la marge du lot.
+        assert_eq!(marge_apres_cout_achat(7500.0, 3000.0), 4500.0);
+        // Profil naisseur : aucune réception, la valeur reste la MSA.
+        assert_eq!(marge_apres_cout_achat(7500.0, 0.0), 7500.0);
+    }
 }
 
 #[cfg(test)]
@@ -7034,6 +7115,22 @@ fn marge_sur_cout_alimentaire(recettes: f64, cout_aliment: f64) -> f64 {
     recettes - cout_aliment
 }
 
+/// Coût d'achat des animaux entrés dans le lot, rapporté à un animal entré
+/// (§1bis). `None` si aucune réception n'est enregistrée pour ce lot.
+fn cout_achat_par_animal_entre(cout_achat: f64, effectif_entre: i64) -> Option<f64> {
+    (effectif_entre > 0).then(|| cout_achat / effectif_entre as f64)
+}
+
+/// Marge après imputation du coût d'achat des animaux entrants : la MSA ne
+/// retient que l'aliment, or un post-sevreur ou un engraisseur achète ses
+/// animaux — cette charge d'entrée doit être déduite pour que la marge du lot
+/// soit comparable à celle d'un naisseur-engraisseur, qui produit les siens.
+/// Pour un lot sans réception d'achat, `cout_achat` vaut 0 et la valeur est
+/// identique à la MSA (pas de régression pour les profils naisseurs).
+fn marge_apres_cout_achat(msa: f64, cout_achat: f64) -> f64 {
+    msa - cout_achat
+}
+
 /// Marge brute répartie par truie active du lot (non applicable si le lot n'a
 /// pas de truies, ex. profil post-sevreur/engraisseur seul).
 fn marge_brute_par_truie(marge_totale: f64, nb_truies: i64) -> Option<f64> {
@@ -7046,35 +7143,68 @@ fn taux_renouvellement_pct(reformees_periode: i64, effectif_actif: i64) -> Optio
     (effectif_actif > 0).then(|| 100.0 * reformees_periode as f64 / effectif_actif as f64)
 }
 
+/// Requête des indicateurs GTE par lot. Isolée en constante pour être
+/// rejouée telle quelle par les tests sur une base en mémoire : le calcul
+/// des charges (aliment, achat d'animaux) est en SQL, pas seulement dans
+/// les fonctions pures ci-dessus.
+const GTE_LOTS_SQL: &str = "SELECT b.id,b.code,b.site,\
+         CAST(COALESCE(v.porcs,0) AS INTEGER),CAST(COALESCE(v.poids,0) AS REAL),CAST(COALESCE(v.recettes,0) AS REAL),\
+         CAST(COALESCE(a.tonnes,0) AS REAL),CAST(COALESCE(a.cout,0) AS REAL),\
+         CAST(COALESCE(t.truies,0) AS INTEGER),\
+         CAST(COALESCE(r.achat,0) AS REAL),CAST(COALESCE(r.entres,0) AS INTEGER) \
+         FROM bande b \
+         LEFT JOIN (SELECT bande_id,SUM(COALESCE(nb_porcs,0)) AS porcs,SUM(COALESCE(poids_total,0)) AS poids,SUM(COALESCE(montant_ht,0)) AS recettes FROM ventelot GROUP BY bande_id) v ON v.bande_id=b.id \
+         LEFT JOIN (SELECT af.bande_id,SUM(COALESCE(l.tonnage,0)/(SELECT COUNT(*) FROM affectationfacturebande n WHERE n.categorie='aliment' AND n.facture_id=l.id)) AS tonnes,SUM(COALESCE(l.montant_ht,0)/(SELECT COUNT(*) FROM affectationfacturebande n WHERE n.categorie='aliment' AND n.facture_id=l.id)) AS cout FROM livraisonaliment l JOIN affectationfacturebande af ON af.categorie='aliment' AND af.facture_id=l.id GROUP BY af.bande_id) a ON a.bande_id=b.id \
+         LEFT JOIN (SELECT bande_code,COUNT(*) AS truies FROM truie WHERE reformee=0 GROUP BY bande_code) t ON t.bande_code=b.code \
+         LEFT JOIN (SELECT bande_code,SUM(COALESCE(prix_total,0)) AS achat,SUM(COALESCE(effectif,0)) AS entres FROM receptionachat WHERE COALESCE(trim(bande_code),'')<>'' GROUP BY bande_code) r ON r.bande_code=b.code \
+         WHERE b.active=1 AND (v.porcs IS NOT NULL OR a.cout IS NOT NULL OR t.truies IS NOT NULL OR r.entres IS NOT NULL) \
+         ORDER BY b.date_mb IS NULL,b.date_mb,b.id";
+
 async fn gte(
     State(state): State<AppState>,
     Extension(session): Extension<SessionData>,
 ) -> AppResult<Html<String>> {
     #[allow(clippy::type_complexity)]
-    let rows: Vec<(i64, String, Option<String>, i64, f64, f64, f64, f64, i64)> = sqlx::query_as(
-        "SELECT b.id,b.code,b.site,\
-         CAST(COALESCE(v.porcs,0) AS INTEGER),CAST(COALESCE(v.poids,0) AS REAL),CAST(COALESCE(v.recettes,0) AS REAL),\
-         CAST(COALESCE(a.tonnes,0) AS REAL),CAST(COALESCE(a.cout,0) AS REAL),\
-         CAST(COALESCE(t.truies,0) AS INTEGER) \
-         FROM bande b \
-         LEFT JOIN (SELECT bande_id,SUM(COALESCE(nb_porcs,0)) AS porcs,SUM(COALESCE(poids_total,0)) AS poids,SUM(COALESCE(montant_ht,0)) AS recettes FROM ventelot GROUP BY bande_id) v ON v.bande_id=b.id \
-         LEFT JOIN (SELECT af.bande_id,SUM(COALESCE(l.tonnage,0)/(SELECT COUNT(*) FROM affectationfacturebande n WHERE n.categorie='aliment' AND n.facture_id=l.id)) AS tonnes,SUM(COALESCE(l.montant_ht,0)/(SELECT COUNT(*) FROM affectationfacturebande n WHERE n.categorie='aliment' AND n.facture_id=l.id)) AS cout FROM livraisonaliment l JOIN affectationfacturebande af ON af.categorie='aliment' AND af.facture_id=l.id GROUP BY af.bande_id) a ON a.bande_id=b.id \
-         LEFT JOIN (SELECT bande_code,COUNT(*) AS truies FROM truie WHERE reformee=0 GROUP BY bande_code) t ON t.bande_code=b.code \
-         WHERE b.active=1 AND (v.porcs IS NOT NULL OR a.cout IS NOT NULL OR t.truies IS NOT NULL) \
-         ORDER BY b.date_mb IS NULL,b.date_mb,b.id",
-    )
-    .fetch_all(&state.pool)
-    .await?;
+    let rows: Vec<(
+        i64,
+        String,
+        Option<String>,
+        i64,
+        f64,
+        f64,
+        f64,
+        f64,
+        i64,
+        f64,
+        i64,
+    )> = sqlx::query_as(GTE_LOTS_SQL).fetch_all(&state.pool).await?;
 
     let bandes: Vec<Value> = rows
         .into_iter()
         .map(
-            |(id, code, site, porcs, poids, recettes, tonnes, cout_aliment, truies)| {
+            |(
+                id,
+                code,
+                site,
+                porcs,
+                poids,
+                recettes,
+                tonnes,
+                cout_aliment,
+                truies,
+                cout_achat,
+                entres,
+            )| {
                 let aliment_kg = tonnes * 1000.0;
                 let ic = indice_consommation(aliment_kg, poids);
                 let cout_par_porc = cout_alimentaire_par_porc(cout_aliment, porcs);
                 let msa = marge_sur_cout_alimentaire(recettes, cout_aliment);
-                let marge_brute_truie = marge_brute_par_truie(msa, truies);
+                let achat_par_animal = cout_achat_par_animal_entre(cout_achat, entres);
+                // La marge brute par truie se calcule sur la marge réellement
+                // dégagée, donc après la charge d'entrée : sans réception
+                // d'achat le coût vaut 0 et le résultat est inchangé.
+                let marge_apres_achat = marge_apres_cout_achat(msa, cout_achat);
+                let marge_brute_truie = marge_brute_par_truie(marge_apres_achat, truies);
                 json!({
                     "id": id, "code": code, "site": site,
                     "porcs": porcs, "poids": (poids * 10.0).round() / 10.0,
@@ -7083,6 +7213,10 @@ async fn gte(
                     "ic": ic.map(|v| (v * 100.0).round() / 100.0),
                     "cout_par_porc": cout_par_porc.map(|v| (v * 100.0).round() / 100.0),
                     "msa": (msa * 100.0).round() / 100.0,
+                    "entres": entres,
+                    "cout_achat": (cout_achat * 100.0).round() / 100.0,
+                    "achat_par_animal": achat_par_animal.map(|v| (v * 100.0).round() / 100.0),
+                    "marge_apres_achat": (marge_apres_achat * 100.0).round() / 100.0,
                     "truies": truies,
                     "marge_brute_truie": marge_brute_truie.map(|v| (v * 100.0).round() / 100.0),
                 })
