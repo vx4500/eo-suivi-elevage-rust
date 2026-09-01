@@ -98,6 +98,10 @@ CREATE TABLE IF NOT EXISTS truie (
     bande_code TEXT,
     salle_id INTEGER REFERENCES salle(id),
     case_id INTEGER REFERENCES casesalle(id),
+    -- Rattachement au catalogue de lignées (§2, module « Génétique avancée »).
+    -- `race` reste le texte libre historique : il n'est ni supprimé ni écrasé,
+    -- les deux coexistent pour les bases qui n'utilisent pas le catalogue.
+    lignee_id INTEGER REFERENCES lignee_genetique(id),
     source_import_id TEXT
 );
 

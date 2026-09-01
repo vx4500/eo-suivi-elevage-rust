@@ -153,6 +153,7 @@ pub fn router(state: AppState) -> Router {
         .route("/truie/{id}", get(truie_detail))
         .route("/truie/{id}/imprimer", get(truie_imprimer))
         .route("/truie/{id}/bande", post(truie_bande))
+        .route("/truie/{id}/lignee", post(truie_lignee))
         .route("/truie/{id}/emplacement", post(truie_emplacement))
         .route("/truie/{id}/reformer", post(truie_reformer))
         .route("/truie/{id}/annuler-sortie", post(truie_annuler_sortie))
@@ -2572,8 +2573,8 @@ async fn archives(
     .await
 }
 
-const TRUIE_FIELDS: &str = "id,num_travail,num_national,rfid,race,date_entree,statut,note,rang,date_naissance,reformee,date_reforme,motif_sortie,mere_cochette,bande_code,salle_id,case_id,perf_nt,perf_nv,perf_mn,perf_sevres,perf_tx_perte";
-const TRUIE_SELECT_BY_BAND: &str = "SELECT id,num_travail,num_national,rfid,race,date_entree,statut,note,rang,date_naissance,reformee,date_reforme,motif_sortie,mere_cochette,bande_code,salle_id,case_id,perf_nt,perf_nv,perf_mn,perf_sevres,perf_tx_perte FROM truie WHERE bande_code=? AND reformee=0 ORDER BY num_travail";
+const TRUIE_FIELDS: &str = "id,num_travail,num_national,rfid,race,date_entree,statut,note,rang,date_naissance,reformee,date_reforme,motif_sortie,mere_cochette,bande_code,salle_id,case_id,lignee_id,perf_nt,perf_nv,perf_mn,perf_sevres,perf_tx_perte";
+const TRUIE_SELECT_BY_BAND: &str = "SELECT id,num_travail,num_national,rfid,race,date_entree,statut,note,rang,date_naissance,reformee,date_reforme,motif_sortie,mere_cochette,bande_code,salle_id,case_id,lignee_id,perf_nt,perf_nv,perf_mn,perf_sevres,perf_tx_perte FROM truie WHERE bande_code=? AND reformee=0 ORDER BY num_travail";
 
 async fn truies(
     State(state): State<AppState>,
@@ -2613,6 +2614,18 @@ async fn truies(
         serde_json::to_value(bands).unwrap_or_default(),
     );
     ctx.insert("q".into(), json!(q));
+    if session.module_genetique {
+        ctx.insert(
+            "lignees".into(),
+            Value::Array(
+                generic_rows(
+                    &state.pool,
+                    "SELECT id,nom FROM lignee_genetique ORDER BY nom",
+                )
+                .await?,
+            ),
+        );
+    }
     render(&state, "truies.html", Value::Object(ctx))
 }
 
@@ -2633,9 +2646,16 @@ async fn truie_ajouter(
     if duplicate > 0 {
         return Err(AppError::Invalid("Ce numéro de travail existe déjà".into()));
     }
-    let result = sqlx::query("INSERT INTO truie(num_travail,num_national,rfid,race,date_entree,bande_code,statut,reformee,rang,mere_cochette) VALUES(?,?,?,?,?,?,'active',0,0,0)")
+    // La lignée n'est proposée que si le module Génétique avancée est actif :
+    // une valeur envoyée sans le module est ignorée plutôt que refusée.
+    let lignee_id = session
+        .module_genetique
+        .then(|| form_i64(&form, "lignee_id"))
+        .flatten();
+    let result = sqlx::query("INSERT INTO truie(num_travail,num_national,rfid,race,date_entree,bande_code,lignee_id,statut,reformee,rang,mere_cochette) VALUES(?,?,?,?,?,?,?,'active',0,0,0)")
         .bind(&number).bind(form_text(&form,"num_national")).bind(form_text(&form,"rfid"))
         .bind(form_text(&form,"race")).bind(form_date(&form,"date_entree")?).bind(form_text(&form,"bande_code"))
+        .bind(lignee_id)
         .execute(&state.pool).await?;
     Ok(Redirect::to(&format!("/truie/{}", result.last_insert_rowid())).into_response())
 }
@@ -2788,7 +2808,70 @@ async fn truie_detail(
         .unwrap_or(Value::Null),
     );
     ctx.insert("mises_bas".into(), Value::Array(generic_rows(&state.pool,&format!("SELECT * FROM evenement WHERE truie_id={id} AND type='mise_bas' ORDER BY date DESC,id DESC")).await?));
+    // Rattachement au catalogue de lignées (§2) : uniquement quand le module
+    // Génétique avancée est actif, sinon la fiche garde `race` en texte libre.
+    if session.module_genetique {
+        ctx.insert(
+            "lignees".into(),
+            Value::Array(
+                generic_rows(
+                    &state.pool,
+                    "SELECT id,nom,fournisseur FROM lignee_genetique ORDER BY nom",
+                )
+                .await?,
+            ),
+        );
+        ctx.insert(
+            "lignee".into(),
+            generic_rows(
+                &state.pool,
+                &format!("SELECT l.nom,l.fournisseur,l.index_prolificite,l.index_croissance,l.index_ic FROM lignee_genetique l JOIN truie t ON t.lignee_id=l.id WHERE t.id={id}"),
+            )
+            .await?
+            .into_iter()
+            .next()
+            .unwrap_or(Value::Null),
+        );
+    }
     render(&state, "truie.html", Value::Object(ctx))
+}
+
+/// Rattache la truie à une lignée du catalogue (§2). `race`, texte libre
+/// historique, n'est pas modifié : les élevages qui n'activent pas le module
+/// Génétique avancée continuent de fonctionner comme avant.
+async fn truie_lignee(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Path(id): Path<i64>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_writer(&session)?;
+    verify_csrf(&session, &form)?;
+    if !session.module_genetique {
+        return Err(AppError::Invalid(
+            "Le module Génétique avancée n'est pas activé (Paramètres > Type d'élevage et modules).".into(),
+        ));
+    }
+    let lignee_id = form_i64(&form, "lignee_id");
+    if let Some(lignee) = lignee_id {
+        let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM lignee_genetique WHERE id=?")
+            .bind(lignee)
+            .fetch_one(&state.pool)
+            .await?;
+        if exists == 0 {
+            return Err(AppError::Invalid("Lignée introuvable".into()));
+        }
+    }
+    let result =
+        sqlx::query("UPDATE truie SET lignee_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=?")
+            .bind(lignee_id)
+            .bind(id)
+            .execute(&state.pool)
+            .await?;
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound);
+    }
+    Ok(Redirect::to(&format!("/truie/{id}#identification")).into_response())
 }
 
 async fn truie_bande(
@@ -10343,7 +10426,7 @@ async fn genetique(
     }
     let lignees = generic_rows(
         &state.pool,
-        "SELECT id,nom,fournisseur,index_prolificite,index_croissance,index_ic,contrat_renouvellement,note FROM lignee_genetique ORDER BY nom",
+        "SELECT l.id,l.nom,l.fournisseur,l.index_prolificite,l.index_croissance,l.index_ic,l.contrat_renouvellement,l.note,(SELECT COUNT(*) FROM truie t WHERE t.lignee_id=l.id) AS truies FROM lignee_genetique l ORDER BY l.nom",
     )
     .await?;
     let mut ctx = context(&session);
@@ -10391,6 +10474,18 @@ async fn genetique_supprimer(
 ) -> AppResult<Response> {
     require_writer(&session)?;
     verify_csrf(&session, &form)?;
+    // `truie.lignee_id` référence cette table : supprimer une lignée encore
+    // utilisée déclencherait une violation de clé étrangère (erreur technique).
+    // On refuse explicitement, en indiquant combien de truies sont concernées.
+    let rattachees: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM truie WHERE lignee_id=?")
+        .bind(id)
+        .fetch_one(&state.pool)
+        .await?;
+    if rattachees > 0 {
+        return Err(AppError::Invalid(format!(
+            "Lignée utilisée par {rattachees} truie(s) : détache-les depuis leur fiche avant de la supprimer."
+        )));
+    }
     sqlx::query("DELETE FROM lignee_genetique WHERE id=?")
         .bind(id)
         .execute(&state.pool)

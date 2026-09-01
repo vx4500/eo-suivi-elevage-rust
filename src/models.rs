@@ -58,6 +58,7 @@ pub struct Truie {
     pub bande_code: Option<String>,
     pub salle_id: Option<i64>,
     pub case_id: Option<i64>,
+    pub lignee_id: Option<i64>,
     pub perf_nt: Option<f64>,
     pub perf_nv: Option<f64>,
     pub perf_mn: Option<f64>,
@@ -161,10 +162,10 @@ mod tests {
         sqlx::query("INSERT INTO truie(num_travail,statut,rang,reformee,mere_cochette) VALUES('NULL-SOW','active',0,0,0)")
             .execute(&pool)
             .await?;
-        let sow = sqlx::query_as::<_, Truie>("SELECT id,num_travail,num_national,rfid,race,date_entree,statut,note,rang,date_naissance,reformee,date_reforme,motif_sortie,mere_cochette,bande_code,salle_id,case_id,perf_nt,perf_nv,perf_mn,perf_sevres,perf_tx_perte FROM truie WHERE num_travail='NULL-SOW'")
+        let sow = sqlx::query_as::<_, Truie>("SELECT id,num_travail,num_national,rfid,race,date_entree,statut,note,rang,date_naissance,reformee,date_reforme,motif_sortie,mere_cochette,bande_code,salle_id,case_id,lignee_id,perf_nt,perf_nv,perf_mn,perf_sevres,perf_tx_perte FROM truie WHERE num_travail='NULL-SOW'")
             .fetch_one(&pool)
             .await?;
-        assert!(sow.date_reforme.is_none() && sow.perf_nv.is_none());
+        assert!(sow.date_reforme.is_none() && sow.perf_nv.is_none() && sow.lignee_id.is_none());
 
         sqlx::query("INSERT INTO evenement(type,date,suivi_actif) VALUES('note','2026-08-17',0)")
             .execute(&pool)
