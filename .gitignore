@@ -8,3 +8,15 @@
 
 
 __pycache__/
+
+# Application Android : sorties de compilation et APK produits. L'APK se
+# reconstruit depuis les sources (dossier android/) et se distribue par une
+# Release GitHub, pas en le versionnant — six mégaoctets de binaire par
+# version alourdiraient l'historique pour rien.
+*.apk
+*.aab
+*.keystore
+/android/.gradle/
+/android/build/
+/android/app/build/
+/android/local.properties

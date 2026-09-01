@@ -1,0 +1,7 @@
+# Sortie de compilation et configuration locale du SDK : jamais versionnées.
+build/
+app/build/
+.gradle/
+local.properties
+*.apk
+*.keystore

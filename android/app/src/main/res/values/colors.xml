@@ -1,0 +1,7 @@
+<resources>
+    <!-- Vert de la barre de navigation du site, pour que l'application et le
+         site ne se contredisent pas visuellement. -->
+    <color name="vert_eo">#173F32</color>
+    <color name="vert_eo_clair">#2A6B54</color>
+    <color name="blanc">#FFFFFF</color>
+</resources>

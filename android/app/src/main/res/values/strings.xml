@@ -1,0 +1,23 @@
+<resources>
+    <string name="app_name">EO-Suivi</string>
+    <string name="titre_connexion">Choisir le serveur</string>
+    <string name="recherche_titre">Serveurs trouvés sur ce réseau</string>
+    <string name="recherche_en_cours">Recherche en cours…</string>
+    <string name="aucun_serveur">Aucun serveur trouvé sur ce réseau. Saisissez l\'adresse ci-dessous.</string>
+    <string name="rechercher">Rechercher à nouveau</string>
+    <string name="saisie_titre">Ou saisir l\'adresse</string>
+    <string name="adresse_interne">Adresse sur le réseau de l\'élevage</string>
+    <string name="adresse_interne_aide">Exemple : 192.168.1.108 — le port 8080 est ajouté automatiquement.</string>
+    <string name="adresse_externe">Adresse depuis l\'extérieur (facultatif)</string>
+    <string name="adresse_externe_aide">Exemple : elevage.mon-domaine.fr — à laisser vide sans accès internet.</string>
+    <string name="adresse_invalide">Adresse non reconnue</string>
+    <string name="valider">Se connecter</string>
+    <string name="reessayer">Réessayer</string>
+    <string name="changer_serveur">Changer de serveur</string>
+    <string name="recharger">Recharger</string>
+    <string name="serveur_injoignable">Serveur injoignable à l\'adresse %1$s.\n\n%2$s\n\nVérifiez que le téléphone est bien sur le réseau de l\'élevage et que le serveur est allumé.</string>
+    <plurals name="serveurs_trouves">
+        <item quantity="one">%d serveur trouvé</item>
+        <item quantity="other">%d serveurs trouvés</item>
+    </plurals>
+</resources>
