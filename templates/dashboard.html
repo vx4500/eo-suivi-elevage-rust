@@ -70,15 +70,20 @@
       <span>Avancement du cycle</span>
       <b>{{ l.progression }} %</b>
     </div>
-    <div class="band-progress" role="progressbar" aria-label="Avancement de la bande {{ l.code }}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ l.progression }}"><span style="width:{{ l.progression }}%"></span></div>
+    <div class="band-progress" role="progressbar" aria-label="Avancement de la bande {{ l.code }}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ l.progression }}"><span style="width:{{ l.progression }}%"></span><i class="band-progress-arrow" style="left:{{ l.progression }}%" aria-hidden="true">➜</i></div>
 
     <div class="band-flow-strip" aria-label="Flux de la bande {{ l.code }}">
+      <span><small>Truies ayant mis bas</small><b>{{ l.flux.naissances.truies_mises_bas }}</b></span>
+      <span><small>Porcelets nés au total</small><b>{{ l.flux.naissances.porcelets_nes }}</b></span>
+      <span><small>Moyenne par truie</small><b>{{ l.flux.naissances.moyenne_par_truie }}</b></span>
       <span><small>Truies → verraterie</small><b>{{ l.flux.verraterie }}</b></span>
       <span><small>Truies en attente</small><b>{{ l.flux.attente }}</b></span>
       <span><small>Truies réformées</small><b>{{ l.flux.reformees }}</b></span>
       <span><small>Porcelets sevrés</small><b>{{ l.flux.sevres }}</b></span>
       <span><small>Porcs vendus</small><b>{{ l.flux.vendus }}</b>{% if l.flux.derniere_vente %}<em>{{ l.flux.derniere_vente|date_fr }}</em>{% endif %}</span>
     </div>
+
+    {% if l.flux.emplacements %}<div class="band-locations" aria-label="Emplacement actuel des animaux de la bande {{ l.code }}"><strong>Emplacements actuels</strong>{% for e in l.flux.emplacements %}<span><b>{{ e.animaux }}</b> · {{ e.batiment }} / {{ e.salle }} · {{ e.effectif }}</span>{% endfor %}</div>{% endif %}
 
     <div class="band-steps" role="list" aria-label="Étapes techniques de la bande {{ l.code }}">
       {% for e in l.etapes %}

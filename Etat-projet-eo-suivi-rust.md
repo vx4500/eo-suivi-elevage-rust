@@ -1,6 +1,12 @@
 # EO-Suivi Élevage Rust — État du projet
 
-Version actuelle : **2.2.53** — Dernière mise à jour de ce document : 1er septembre 2026.
+Version actuelle : **2.2.54** — Dernière mise à jour de ce document : 1er septembre 2026.
+
+### Version 2.2.54 — progression des bandes et commandes clients
+
+- Statistiques de mise bas par bande : truies ayant mis bas, porcelets nés et moyenne par truie.
+- Flèche d’avancement, stades réels de Gestation, Lactation, Post-sevrage et Engraissement, avec bâtiment et salle des animaux.
+- Rappel visible du lien et du code permettant au client de modifier sa commande de vente directe.
 
 ### Version 2.2.53 — accès utilisateurs, bandes et ventilation économique
 
@@ -582,7 +588,7 @@ l'arrêt déclenche le retour arrière ; la sauvegarde de la base est conservée
 ```bash
 systemctl status eo-suivi-rust --no-pager -l
 journalctl -u eo-suivi-rust -n 80 --no-pager -l -o cat
-curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.53"
+curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.54"
 ```
 
 Puis ouvrir `https://rust-elevage.basse-chevrie.ovh`.

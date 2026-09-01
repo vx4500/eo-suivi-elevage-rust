@@ -1786,14 +1786,12 @@ impl BandSchedule {
             ("Planifiée", "Insémination")
         } else if age < echo_day {
             ("Verraterie", "Échographie")
-        } else if age < -self.maternity_before_farrowing {
-            ("Gestante", "Entrée maternité")
         } else if age < 0 {
-            ("Maternité (préparation)", "Mise-bas")
+            ("Gestation", "Mise-bas")
         } else if age < self.weaning {
-            ("Maternité", "Sevrage")
+            ("Lactation", "Sevrage")
         } else if age < self.transfer_finishing {
-            ("Post-sevrage", "Transfert engraissement")
+            ("Post-sevrage (PS)", "Transfert engraissement")
         } else if age < self.departure {
             ("Engraissement", "Départ abattoir")
         } else {
@@ -1849,7 +1847,13 @@ pub(crate) async fn load_band_schedule(pool: &SqlitePool) -> AppResult<BandSched
     Ok(schedule)
 }
 
-fn band_view(band: &Bande, sow_count: i64, schedule: BandSchedule, flux: Value) -> BandView {
+fn band_view(
+    band: &Bande,
+    sow_count: i64,
+    schedule: BandSchedule,
+    flux: Value,
+    actual_stage: Option<String>,
+) -> BandView {
     let today = Local::now().date_naive();
     let date = band.date_mb.as_deref().and_then(parse_stored_date);
     let age = date.map(|date| (today - date).num_days());
@@ -1911,7 +1915,7 @@ fn band_view(band: &Bande, sow_count: i64, schedule: BandSchedule, flux: Value) 
         date_mb: band.date_mb.clone(),
         site: band.site.clone(),
         age,
-        stade: stade.to_string(),
+        stade: actual_stage.unwrap_or_else(|| stade.to_string()),
         prochaine: prochaine.to_string(),
         prochaine_date,
         prochaine_delai,
@@ -1921,6 +1925,23 @@ fn band_view(band: &Bande, sow_count: i64, schedule: BandSchedule, flux: Value) 
         etapes,
         flux,
     }
+}
+
+async fn actual_band_stage(pool: &SqlitePool, band: &Bande) -> AppResult<Option<String>> {
+    let state = sqlx::query_as::<_, (i64, i64, i64)>(
+        "SELECT EXISTS(SELECT 1 FROM evenement WHERE bande_id=? AND type IN('echo','echographie') AND date<=date('now') AND lower(COALESCE(resultat,'')) IN('positive','positif','pleine','oui')),EXISTS(SELECT 1 FROM evenement WHERE bande_id=? AND type='mise_bas' AND date<=date('now')),EXISTS(SELECT 1 FROM evenement WHERE bande_id=? AND type='sevrage' AND date<=date('now'))",
+    )
+    .bind(band.id)
+    .bind(band.id)
+    .bind(band.id)
+    .fetch_one(pool)
+    .await?;
+    Ok(match state {
+        (_, _, 1) => None,
+        (_, 1, 0) => Some("Lactation".into()),
+        (1, 0, 0) => Some("Gestation".into()),
+        _ => None,
+    })
 }
 
 async fn band_flow_summary(pool: &SqlitePool, band: &Bande) -> AppResult<Value> {
@@ -1951,6 +1972,26 @@ async fn band_flow_summary(pool: &SqlitePool, band: &Bande) -> AppResult<Value> 
         .and_then(|row| row.get("date"))
         .cloned()
         .unwrap_or(Value::Null);
+    let births = generic_rows(
+        pool,
+        &format!(
+            "SELECT COUNT(*) AS truies_mises_bas,CAST(COALESCE(SUM(COALESCE(nes_totaux,COALESCE(nes_vifs,0)+COALESCE(mort_nes,0)+COALESCE(momifies,0))),0) AS INTEGER) AS porcelets_nes,ROUND(COALESCE(AVG(COALESCE(nes_totaux,COALESCE(nes_vifs,0)+COALESCE(mort_nes,0)+COALESCE(momifies,0))),0),1) AS moyenne_par_truie FROM evenement WHERE bande_id={} AND type='mise_bas' AND date<=date('now')",
+            band.id
+        ),
+    )
+    .await?
+    .into_iter()
+    .next()
+    .unwrap_or_else(|| json!({"truies_mises_bas":0,"porcelets_nes":0,"moyenne_par_truie":0}));
+    let location_rows = sqlx::query(
+        "WITH mouvements(salle_id,nombre) AS (SELECT COALESCE(t.salle_dest_id,cd.salle_id),COALESCE(t.nombre,0) FROM transfert t LEFT JOIN casesalle cd ON cd.id=t.case_dest_id WHERE t.bande_id=? AND t.espece='porc' UNION ALL SELECT COALESCE(t.salle_source_id,cs.salle_id),-COALESCE(t.nombre,0) FROM transfert t LEFT JOIN casesalle cs ON cs.id=t.case_source_id WHERE t.bande_id=? AND t.espece='porc'), porcs AS (SELECT salle_id,SUM(nombre) AS effectif FROM mouvements WHERE salle_id IS NOT NULL GROUP BY salle_id HAVING SUM(nombre)>0), truies AS (SELECT COALESCE(t.salle_id,c.salle_id) AS salle_id,COUNT(*) AS effectif FROM truie t LEFT JOIN casesalle c ON c.id=t.case_id WHERE t.bande_code=? AND t.reformee=0 AND COALESCE(t.salle_id,c.salle_id) IS NOT NULL GROUP BY COALESCE(t.salle_id,c.salle_id)), animaux AS (SELECT salle_id,effectif,'Porcs' AS animaux FROM porcs UNION ALL SELECT salle_id,effectif,'Truies' AS animaux FROM truies) SELECT COALESCE(NULLIF(si.nom,''),si.code) AS batiment,s.nom AS salle,a.animaux,a.effectif FROM animaux a JOIN salle s ON s.id=a.salle_id JOIN site si ON si.id=s.site_id ORDER BY batiment,salle,a.animaux",
+    )
+    .bind(band.id)
+    .bind(band.id)
+    .bind(&band.code)
+    .fetch_all(pool)
+    .await?;
+    let locations = rows_to_json(location_rows)?;
     Ok(json!({
         "truies_cycle": sow_flow.0,
         "verraterie": sow_flow.1,
@@ -1960,6 +2001,8 @@ async fn band_flow_summary(pool: &SqlitePool, band: &Bande) -> AppResult<Value> 
         "vendus": vendus,
         "derniere_vente": derniere_vente,
         "ventes": sales,
+        "naissances": births,
+        "emplacements": locations,
     }))
 }
 
@@ -1982,7 +2025,8 @@ async fn dashboard(
                 .fetch_one(&state.pool)
                 .await?;
         let flux = band_flow_summary(&state.pool, band).await?;
-        views.push(band_view(band, count, schedule, flux));
+        let actual_stage = actual_band_stage(&state.pool, band).await?;
+        views.push(band_view(band, count, schedule, flux, actual_stage));
     }
     let truies: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM truie WHERE reformee=0")
         .fetch_one(&state.pool)
@@ -2139,7 +2183,8 @@ async fn bandes(
                 .fetch_one(&state.pool)
                 .await?;
         let flux = band_flow_summary(&state.pool, &band).await?;
-        views.push(band_view(&band, count, schedule, flux));
+        let actual_stage = actual_band_stage(&state.pool, &band).await?;
+        views.push(band_view(&band, count, schedule, flux, actual_stage));
     }
     let mut ctx = context(&session);
     ctx.insert(
@@ -12033,10 +12078,10 @@ mod gttt_tests {
         let schedule = BandSchedule::default();
         assert_eq!(schedule.stage(-116).0, "Planifiée");
         assert_eq!(schedule.stage(-115).0, "Verraterie");
-        assert_eq!(schedule.stage(-87).0, "Gestante");
-        assert_eq!(schedule.stage(-5).0, "Maternité (préparation)");
-        assert_eq!(schedule.stage(0).0, "Maternité");
-        assert_eq!(schedule.stage(28).0, "Post-sevrage");
+        assert_eq!(schedule.stage(-87).0, "Gestation");
+        assert_eq!(schedule.stage(-5).0, "Gestation");
+        assert_eq!(schedule.stage(0).0, "Lactation");
+        assert_eq!(schedule.stage(28).0, "Post-sevrage (PS)");
         assert_eq!(schedule.stage(71).0, "Engraissement");
         assert_eq!(schedule.stage(215).0, "Départ / terminé");
     }
