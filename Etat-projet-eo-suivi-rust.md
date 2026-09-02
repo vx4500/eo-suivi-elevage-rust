@@ -1,6 +1,35 @@
 # EO-Suivi Élevage Rust — État du projet
 
-Version actuelle : **2.2.57** — Dernière mise à jour de ce document : 2 septembre 2026.
+Version actuelle : **2.2.58** — Dernière mise à jour de ce document : 2 septembre 2026.
+
+### Version 2.2.58 — synthèse GTE à la structure du livret GT-Porc
+
+Le filtre de période ajouté en 2.2.56 s'applique au détail par lot. La 2.2.58
+ajoute au-dessus la synthèse que publie le livret GT-Porc : l'élevage entier
+sur la période, en quatre blocs (résultats techniques, post-sevrage,
+engraissement, sevrage-vente), avec la référence nationale de l'orientation
+active et l'écart. C'est cette présentation qui rend la comparaison possible.
+
+La synthèse réutilise les bornes du sélecteur existant plutôt que d'en poser
+un second — deux sélecteurs sur le même écran donneraient deux réponses à la
+même question. Sans bornes saisies, elle prend les douze mois glissants et le
+dit : une mise à l'année sur une période indéterminée n'aurait aucun sens.
+
+Deux précautions assumées : les indicateurs IFIP « technique » et
+« standardisé » reposent sur des courbes de croissance non publiées et ne sont
+pas reproduits — tiret et raison affichés, plutôt qu'un chiffre faux qui
+invaliderait la comparaison ; les poids vifs sont déduits des poids carcasse
+au rendement forfaitaire de 76,5 % retenu par le livret lui-même, modifiable
+par le réglage `rendement_carcasse_pct`. Les indicateurs qui demandent une
+pesée au changement de salle affichent la même mention et se rempliront seuls
+si ces pesées sont saisies un jour.
+
+Un vrai bug trouvé en confrontant les ordres de grandeur aux références : la
+consommation d'aliment par truie utilisait l'aliment total de l'élevage et
+sortait à plus de 7 000 kg contre une référence à 1 258 — le livret ne compte
+à cette ligne que l'aliment des truies. Le calcul passait tous les tests
+unitaires ; seule la comparaison l'a révélé. Un test fige désormais l'écart
+maximal admis sur sept lignes.
 
 ### Version 2.2.57 — historique GTE conservé
 
@@ -608,7 +637,7 @@ l'arrêt déclenche le retour arrière ; la sauvegarde de la base est conservée
 ```bash
 systemctl status eo-suivi-rust --no-pager -l
 journalctl -u eo-suivi-rust -n 80 --no-pager -l -o cat
-curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.57"
+curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.58"
 ```
 
 Puis ouvrir `https://rust-elevage.basse-chevrie.ovh`.

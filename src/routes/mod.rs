@@ -30,6 +30,7 @@ pub(crate) mod documents;
 mod factures;
 mod feuille_mise_bas;
 mod genetique_import;
+mod gte_periode;
 mod historique_truie;
 mod import_historique;
 mod maternite_suivi;
@@ -7493,12 +7494,60 @@ async fn gte(
         None
     };
 
+    // Synthèse à la structure du livret IFIP GT-Porc, au-dessus du détail par
+    // lot. Elle réutilise les bornes du sélecteur de période ci-dessus plutôt
+    // que d'en proposer un second : deux sélecteurs de dates sur le même écran
+    // donneraient deux réponses différentes à la même question. Sans bornes
+    // saisies (« toute la période »), la synthèse prend les douze mois
+    // glissants, faute de quoi la mise à l'année n'aurait aucun sens.
+    let (defaut_debut, defaut_fin) = gte_periode::periode_par_defaut();
+    let synthese_debut = start.clone().unwrap_or(defaut_debut);
+    let synthese_fin = end.clone().unwrap_or(defaut_fin);
+    let synthese_jours = gte_periode::jours_periode(&synthese_debut, &synthese_fin)
+        .ok_or_else(|| AppError::Invalid("Période invalide pour la synthèse GTE.".into()))?;
+    let (orientation, livret, rendement_defaut) = gte_periode::references(&session.type_elevage)?;
+    let rendement = reglage_i64(&state.pool, "rendement_carcasse_pct", 0)
+        .await
+        .ok()
+        .filter(|valeur| *valeur > 0)
+        .map(|valeur| valeur as f64)
+        .unwrap_or(rendement_defaut);
+    let conduite = gte_periode::Conduite {
+        sevrage_j: reglage_i64(&state.pool, "sevrage", 28).await?,
+        transfert_engraissement_j: reglage_i64(&state.pool, "transfert_engr", 71).await?,
+        depart_j: reglage_i64(&state.pool, "depart", 215).await?,
+    };
+    let donnees = gte_periode::charger(&state.pool, &synthese_debut, &synthese_fin).await?;
+    let blocs = gte_periode::tableau(
+        &donnees,
+        synthese_jours,
+        rendement,
+        conduite,
+        &orientation,
+        session.a_truies(),
+    );
+
     let mut ctx = context(&session);
     ctx.insert("bandes".into(), Value::Array(bandes));
     ctx.insert("renouvellement".into(), json!(renouvellement));
     ctx.insert("date_debut".into(), json!(start));
     ctx.insert("date_fin".into(), json!(end));
     ctx.insert("periode".into(), json!(shortcut_months));
+    ctx.insert("blocs".into(), Value::Array(blocs));
+    ctx.insert("synthese_debut".into(), json!(synthese_debut));
+    ctx.insert("synthese_fin".into(), json!(synthese_fin));
+    ctx.insert("synthese_jours".into(), json!(synthese_jours));
+    ctx.insert(
+        "synthese_par_defaut".into(),
+        json!(start.is_none() || end.is_none()),
+    );
+    ctx.insert("orientation".into(), orientation);
+    ctx.insert("livret".into(), livret);
+    ctx.insert("rendement".into(), json!(rendement));
+    ctx.insert(
+        "aliment_non_ventile_kg".into(),
+        json!((donnees.aliment_non_ventile_kg * 10.0).round() / 10.0),
+    );
     render(&state, "gte.html", Value::Object(ctx))
 }
 
