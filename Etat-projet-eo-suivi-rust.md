@@ -1,6 +1,11 @@
 # EO-Suivi Élevage Rust — État du projet
 
-Version actuelle : **2.2.56** — Dernière mise à jour de ce document : 2 septembre 2026.
+Version actuelle : **2.2.57** — Dernière mise à jour de ce document : 2 septembre 2026.
+
+### Version 2.2.57 — historique GTE conservé
+
+- Les bandes archivées restent visibles dans la GTE dès qu’elles possèdent des ventes, des charges d’aliment, des achats ou des effectifs.
+- Le filtre de période continue de s’appliquer aux chiffres historiques sans masquer les lots clôturés.
 
 ### Version 2.2.56 — périodes GTE, accès et mortalité fiable
 
@@ -603,7 +608,7 @@ l'arrêt déclenche le retour arrière ; la sauvegarde de la base est conservée
 ```bash
 systemctl status eo-suivi-rust --no-pager -l
 journalctl -u eo-suivi-rust -n 80 --no-pager -l -o cat
-curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.56"
+curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.57"
 ```
 
 Puis ouvrir `https://rust-elevage.basse-chevrie.ovh`.

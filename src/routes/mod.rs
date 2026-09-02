@@ -1436,7 +1436,8 @@ mod gte_tests {
                 .await
                 .map_err(AppError::from)?;
         }
-        sqlx::query("INSERT INTO bande(code,active) VALUES('B-ACHAT',1)")
+        // Une bande archivée conserve toute sa valeur économique en GTE.
+        sqlx::query("INSERT INTO bande(code,active) VALUES('B-ACHAT',0)")
             .execute(&pool)
             .await?;
         // Deux réceptions sur le même lot : les coûts et les effectifs
@@ -7353,7 +7354,7 @@ const GTE_LOTS_SQL: &str = "SELECT b.id,b.code,b.site,\
          LEFT JOIN (SELECT af.bande_id,SUM(COALESCE(l.tonnage,0)/(SELECT COUNT(*) FROM affectationfacturebande n WHERE n.categorie='aliment' AND n.facture_id=l.id)) AS tonnes,SUM(COALESCE(l.montant_ht,0)/(SELECT COUNT(*) FROM affectationfacturebande n WHERE n.categorie='aliment' AND n.facture_id=l.id)) AS cout FROM livraisonaliment l JOIN affectationfacturebande af ON af.categorie='aliment' AND af.facture_id=l.id GROUP BY af.bande_id) a ON a.bande_id=b.id \
          LEFT JOIN (SELECT bande_code,COUNT(*) AS truies FROM truie WHERE reformee=0 GROUP BY bande_code) t ON t.bande_code=b.code \
          LEFT JOIN (SELECT bande_code,SUM(COALESCE(prix_total,0)) AS achat,SUM(COALESCE(effectif,0)) AS entres FROM receptionachat WHERE COALESCE(trim(bande_code),'')<>'' GROUP BY bande_code) r ON r.bande_code=b.code \
-         WHERE b.active=1 AND (v.porcs IS NOT NULL OR a.cout IS NOT NULL OR t.truies IS NOT NULL OR r.entres IS NOT NULL) \
+         WHERE (v.porcs IS NOT NULL OR a.cout IS NOT NULL OR t.truies IS NOT NULL OR r.entres IS NOT NULL) \
          ORDER BY b.date_mb IS NULL,b.date_mb,b.id";
 
 const GTE_LOTS_PERIOD_SQL: &str = "WITH periode(debut,fin) AS (VALUES(?,?)) \
@@ -7367,7 +7368,7 @@ const GTE_LOTS_PERIOD_SQL: &str = "WITH periode(debut,fin) AS (VALUES(?,?)) \
          LEFT JOIN (SELECT af.bande_id,SUM(COALESCE(l.tonnage,0)/(SELECT COUNT(*) FROM affectationfacturebande n WHERE n.categorie='aliment' AND n.facture_id=l.id)) AS tonnes,SUM(COALESCE(l.montant_ht,0)/(SELECT COUNT(*) FROM affectationfacturebande n WHERE n.categorie='aliment' AND n.facture_id=l.id)) AS cout FROM livraisonaliment l JOIN affectationfacturebande af ON af.categorie='aliment' AND af.facture_id=l.id CROSS JOIN periode WHERE (debut IS NULL OR date(COALESCE(NULLIF(l.date_reference,''),l.date))>=date(debut)) AND (fin IS NULL OR date(COALESCE(NULLIF(l.date_reference,''),l.date))<=date(fin)) GROUP BY af.bande_id) a ON a.bande_id=b.id \
          LEFT JOIN (SELECT bande_code,COUNT(*) AS truies FROM truie WHERE reformee=0 GROUP BY bande_code) t ON t.bande_code=b.code \
          LEFT JOIN (SELECT bande_code,SUM(COALESCE(prix_total,0)) AS achat,SUM(COALESCE(effectif,0)) AS entres FROM receptionachat,periode WHERE COALESCE(trim(bande_code),'')<>'' AND (debut IS NULL OR date(receptionachat.date)>=date(debut)) AND (fin IS NULL OR date(receptionachat.date)<=date(fin)) GROUP BY bande_code) r ON r.bande_code=b.code \
-         WHERE b.active=1 AND (v.porcs IS NOT NULL OR a.cout IS NOT NULL OR t.truies IS NOT NULL OR r.entres IS NOT NULL) \
+         WHERE (v.porcs IS NOT NULL OR a.cout IS NOT NULL OR t.truies IS NOT NULL OR r.entres IS NOT NULL) \
          ORDER BY b.date_mb IS NULL,b.date_mb,b.id";
 
 async fn gte(
