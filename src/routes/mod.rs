@@ -1140,11 +1140,14 @@ async fn api_bande_json(
         .fetch_all(&state.pool)
         .await?;
     let litters = load_gttt_litters(&state.pool, Some(&band.code)).await?;
-    let technical_summary = if litters.is_empty() {
+    let mut technical_summary = if litters.is_empty() {
         gttt_band_fallback(&band, &events)
     } else {
         gttt_summary(&litters)
     };
+    if band.active && !band_has_recorded_weaning(&events) {
+        technical_summary.mortalite_allaitement = None;
+    }
     let schedule = load_band_schedule(&state.pool).await?;
     let porcs_presents = total_band_pigs(&state.pool, band.id, &band.code).await?;
     let emplacements = generic_rows(
@@ -1477,6 +1480,27 @@ mod gte_tests {
             cout_achat_par_animal_entre(*cout_achat, *entres),
             Some(50.0)
         );
+        #[allow(clippy::type_complexity)]
+        let period_rows: Vec<(
+            i64,
+            String,
+            Option<String>,
+            i64,
+            f64,
+            f64,
+            f64,
+            f64,
+            i64,
+            f64,
+            i64,
+        )> = sqlx::query_as(GTE_LOTS_PERIOD_SQL)
+            .bind("2026-01-15")
+            .bind("2026-02-28")
+            .fetch_all(&pool)
+            .await?;
+        assert_eq!(period_rows.len(), 1);
+        assert_eq!(period_rows[0].9, 1000.0);
+        assert_eq!(period_rows[0].10, 20);
         Ok(())
     }
 
@@ -2366,11 +2390,14 @@ async fn bande_detail(
         .fetch_all(&state.pool)
         .await?;
     let litters = load_gttt_litters(&state.pool, Some(&band.code)).await?;
-    let technical_summary = if litters.is_empty() {
+    let mut technical_summary = if litters.is_empty() {
         gttt_band_fallback(&band, &events)
     } else {
         gttt_summary(&litters)
     };
+    if band.active && !band_has_recorded_weaning(&events) {
+        technical_summary.mortalite_allaitement = None;
+    }
     let schedule = load_band_schedule(&state.pool).await?;
     let dates = key_dates(band.date_mb.as_deref(), schedule);
     let porcs_presents = total_band_pigs(&state.pool, band.id, &band.code).await?;
@@ -4817,6 +4844,18 @@ fn gttt_summary(litters: &[GtttLitter]) -> GtttSummary {
             None
         },
     }
+}
+
+/// Une valeur `sev=0` préparée avant le sevrage n'est pas un résultat : sans
+/// événement de sevrage réellement daté, afficher 100 % convertirait à tort
+/// tous les nés vifs de la bande active en pertes sous la mère.
+fn band_has_recorded_weaning(events: &[Evenement]) -> bool {
+    let today = Local::now().date_naive();
+    events.iter().any(|event| {
+        event.r#type == "sevrage"
+            && event.nb_sevres.is_some()
+            && parse_stored_date(&event.date).is_some_and(|date| date <= today)
+    })
 }
 
 fn gttt_band_fallback(band: &Bande, events: &[Evenement]) -> GtttSummary {
@@ -7303,6 +7342,7 @@ fn taux_renouvellement_pct(reformees_periode: i64, effectif_actif: i64) -> Optio
 /// rejouée telle quelle par les tests sur une base en mémoire : le calcul
 /// des charges (aliment, achat d'animaux) est en SQL, pas seulement dans
 /// les fonctions pures ci-dessus.
+#[cfg(test)]
 const GTE_LOTS_SQL: &str = "SELECT b.id,b.code,b.site,\
          CAST(COALESCE(v.porcs,0) AS INTEGER),CAST(COALESCE(v.poids,0) AS REAL),CAST(COALESCE(v.recettes,0) AS REAL),\
          CAST(COALESCE(a.tonnes,0) AS REAL),CAST(COALESCE(a.cout,0) AS REAL),\
@@ -7316,10 +7356,58 @@ const GTE_LOTS_SQL: &str = "SELECT b.id,b.code,b.site,\
          WHERE b.active=1 AND (v.porcs IS NOT NULL OR a.cout IS NOT NULL OR t.truies IS NOT NULL OR r.entres IS NOT NULL) \
          ORDER BY b.date_mb IS NULL,b.date_mb,b.id";
 
+const GTE_LOTS_PERIOD_SQL: &str = "WITH periode(debut,fin) AS (VALUES(?,?)) \
+         SELECT b.id,b.code,b.site,\
+         CAST(COALESCE(v.porcs,0) AS INTEGER),CAST(COALESCE(v.poids,0) AS REAL),CAST(COALESCE(v.recettes,0) AS REAL),\
+         CAST(COALESCE(a.tonnes,0) AS REAL),CAST(COALESCE(a.cout,0) AS REAL),\
+         CAST(COALESCE(t.truies,0) AS INTEGER),\
+         CAST(COALESCE(r.achat,0) AS REAL),CAST(COALESCE(r.entres,0) AS INTEGER) \
+         FROM bande b \
+         LEFT JOIN (SELECT bande_id,SUM(COALESCE(nb_porcs,0)) AS porcs,SUM(COALESCE(poids_total,0)) AS poids,SUM(COALESCE(montant_ht,0)) AS recettes FROM ventelot,periode WHERE (debut IS NULL OR date(ventelot.date)>=date(debut)) AND (fin IS NULL OR date(ventelot.date)<=date(fin)) GROUP BY bande_id) v ON v.bande_id=b.id \
+         LEFT JOIN (SELECT af.bande_id,SUM(COALESCE(l.tonnage,0)/(SELECT COUNT(*) FROM affectationfacturebande n WHERE n.categorie='aliment' AND n.facture_id=l.id)) AS tonnes,SUM(COALESCE(l.montant_ht,0)/(SELECT COUNT(*) FROM affectationfacturebande n WHERE n.categorie='aliment' AND n.facture_id=l.id)) AS cout FROM livraisonaliment l JOIN affectationfacturebande af ON af.categorie='aliment' AND af.facture_id=l.id CROSS JOIN periode WHERE (debut IS NULL OR date(COALESCE(NULLIF(l.date_reference,''),l.date))>=date(debut)) AND (fin IS NULL OR date(COALESCE(NULLIF(l.date_reference,''),l.date))<=date(fin)) GROUP BY af.bande_id) a ON a.bande_id=b.id \
+         LEFT JOIN (SELECT bande_code,COUNT(*) AS truies FROM truie WHERE reformee=0 GROUP BY bande_code) t ON t.bande_code=b.code \
+         LEFT JOIN (SELECT bande_code,SUM(COALESCE(prix_total,0)) AS achat,SUM(COALESCE(effectif,0)) AS entres FROM receptionachat,periode WHERE COALESCE(trim(bande_code),'')<>'' AND (debut IS NULL OR date(receptionachat.date)>=date(debut)) AND (fin IS NULL OR date(receptionachat.date)<=date(fin)) GROUP BY bande_code) r ON r.bande_code=b.code \
+         WHERE b.active=1 AND (v.porcs IS NOT NULL OR a.cout IS NOT NULL OR t.truies IS NOT NULL OR r.entres IS NOT NULL) \
+         ORDER BY b.date_mb IS NULL,b.date_mb,b.id";
+
 async fn gte(
     State(state): State<AppState>,
     Extension(session): Extension<SessionData>,
+    Query(query): Query<HashMap<String, String>>,
 ) -> AppResult<Html<String>> {
+    let today = Local::now().date_naive();
+    let shortcut_months = query
+        .get("periode")
+        .and_then(|value| value.parse::<u32>().ok())
+        .filter(|value| matches!(value, 3 | 12 | 24 | 36));
+    let parse_bound = |name: &str| -> AppResult<Option<NaiveDate>> {
+        match query
+            .get(name)
+            .map(|value| value.trim())
+            .filter(|v| !v.is_empty())
+        {
+            Some(value) => parse_stored_date(value)
+                .map(Some)
+                .ok_or_else(|| AppError::Invalid(format!("Date {name} invalide"))),
+            None => Ok(None),
+        }
+    };
+    let mut date_debut = parse_bound("debut")?;
+    let mut date_fin = parse_bound("fin")?;
+    if let Some(months) = shortcut_months {
+        date_fin = Some(today);
+        date_debut = today.checked_sub_months(chrono::Months::new(months));
+    }
+    if date_debut
+        .zip(date_fin)
+        .is_some_and(|(start, end)| start > end)
+    {
+        return Err(AppError::Invalid(
+            "La date de début doit précéder la date de fin".into(),
+        ));
+    }
+    let start = date_debut.map(|date| date.format("%Y-%m-%d").to_string());
+    let end = date_fin.map(|date| date.format("%Y-%m-%d").to_string());
     #[allow(clippy::type_complexity)]
     let rows: Vec<(
         i64,
@@ -7333,7 +7421,11 @@ async fn gte(
         i64,
         f64,
         i64,
-    )> = sqlx::query_as(GTE_LOTS_SQL).fetch_all(&state.pool).await?;
+    )> = sqlx::query_as(GTE_LOTS_PERIOD_SQL)
+        .bind(start.as_deref())
+        .bind(end.as_deref())
+        .fetch_all(&state.pool)
+        .await?;
 
     let bandes: Vec<Value> = rows
         .into_iter()
@@ -7384,8 +7476,12 @@ async fn gte(
     // sens que pour les profils qui conduisent des truies.
     let renouvellement = if session.a_truies() {
         let reformees_12m: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM truie WHERE reformee=1 AND date_reforme>=date('now','-12 months')",
+            "SELECT COUNT(*) FROM truie WHERE reformee=1 AND (? IS NULL OR date(date_reforme)>=date(?)) AND (? IS NULL OR date(date_reforme)<=date(?))",
         )
+        .bind(start.as_deref())
+        .bind(start.as_deref())
+        .bind(end.as_deref())
+        .bind(end.as_deref())
         .fetch_one(&state.pool)
         .await?;
         let effectif_actif: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM truie WHERE reformee=0")
@@ -7399,6 +7495,9 @@ async fn gte(
     let mut ctx = context(&session);
     ctx.insert("bandes".into(), Value::Array(bandes));
     ctx.insert("renouvellement".into(), json!(renouvellement));
+    ctx.insert("date_debut".into(), json!(start));
+    ctx.insert("date_fin".into(), json!(end));
+    ctx.insert("periode".into(), json!(shortcut_months));
     render(&state, "gte.html", Value::Object(ctx))
 }
 
@@ -12046,6 +12145,50 @@ mod gttt_tests {
     fn mortalite_allaitement_tient_compte_adoptions_retraits() {
         let summary = gttt_summary(&[litter(13.0, 1.0, None, 11.0, 2.0, 1.0)]);
         assert_eq!(summary.mortalite_allaitement, Some(21.4));
+    }
+
+    #[test]
+    fn mortalite_attend_un_sevrage_reel_meme_si_zero_est_prepare() {
+        let event = |kind: &str, date: &str, weaned: Option<i64>| Evenement {
+            id: 1,
+            r#type: kind.into(),
+            date: date.into(),
+            truie_id: Some(1),
+            bande_id: Some(1),
+            nes_totaux: None,
+            nes_vifs: None,
+            mort_nes: None,
+            momifies: None,
+            nb_sevres: weaned,
+            poids_moyen: None,
+            adoptes: None,
+            retires: None,
+            produit: None,
+            motif: None,
+            resultat: None,
+            nb_doses: None,
+            creneaux_ia: None,
+            case_id: None,
+            suivi_actif: false,
+            delivrance_ok: None,
+            note: None,
+        };
+        assert!(!band_has_recorded_weaning(&[]));
+        assert!(!band_has_recorded_weaning(&[event(
+            "mise_bas",
+            "2026-08-01",
+            Some(0)
+        )]));
+        assert!(band_has_recorded_weaning(&[event(
+            "sevrage",
+            "2026-08-29",
+            Some(0)
+        )]));
+        assert!(!band_has_recorded_weaning(&[event(
+            "sevrage",
+            "2999-08-29",
+            Some(0)
+        )]));
     }
 
     #[test]

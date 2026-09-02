@@ -1,6 +1,12 @@
 # EO-Suivi Élevage Rust — État du projet
 
-Version actuelle : **2.2.55** — Dernière mise à jour de ce document : 1er septembre 2026.
+Version actuelle : **2.2.56** — Dernière mise à jour de ce document : 2 septembre 2026.
+
+### Version 2.2.56 — périodes GTE, accès et mortalité fiable
+
+- Résultats GTE filtrables entre deux dates, avec raccourcis sur les 3, 12, 24 et 36 derniers mois.
+- Présentation clarifiée des rôles et pages visibles de chaque utilisateur.
+- La mortalité sous la mère reste indéterminée avant un sevrage réellement enregistré, au lieu d’afficher 100 % à tort.
 
 ### Version 2.2.55 — découverte du serveur sur le réseau local
 
@@ -597,7 +603,7 @@ l'arrêt déclenche le retour arrière ; la sauvegarde de la base est conservée
 ```bash
 systemctl status eo-suivi-rust --no-pager -l
 journalctl -u eo-suivi-rust -n 80 --no-pager -l -o cat
-curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.55"
+curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.56"
 ```
 
 Puis ouvrir `https://rust-elevage.basse-chevrie.ovh`.
