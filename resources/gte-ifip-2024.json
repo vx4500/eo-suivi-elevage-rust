@@ -1,0 +1,106 @@
+{
+  "source": "IFIP GT-Porc 2024, édition 2025 — Gestion technico-économique, résultats nationaux par orientation, période du 01/01/2024 au 31/12/2024",
+  "avertissement": "Les indicateurs IFIP nommés « technique » ou « standardisé » sont ramenés à des bornes de poids fixes (8-30, 30-115 kg) par les courbes de croissance et de consommation de l'IFIP, non publiées dans le livret. Les valeurs de l'élevage affichées à côté sont les valeurs réelles mesurées sur la période : la comparaison est indicative, elle n'est pas une équivalence de méthode.",
+  "rendement_carcasse_pct": 76.5,
+  "rendement_carcasse_source": "Rendement carcasse forfaitaire moyen retenu par l'IFIP dans ce livret (page 10).",
+  "orientations": {
+    "naisseur": {
+      "libelle": "Naisseur, vente au sevrage",
+      "elevages": 40,
+      "truies_presentes": 789,
+      "valeurs": {
+        "porcs_truie_an": 26.8,
+        "aliment_truie_an": 1278,
+        "ic_global": 5.31
+      }
+    },
+    "naisseur_engraisseur": {
+      "libelle": "Naisseur engraisseur",
+      "elevages": 1062,
+      "truies_presentes": 279,
+      "valeurs": {
+        "porcs_truie_an": 25.9,
+        "kg_vifs_truie_an": 3089,
+        "aliment_truie_an": 1258,
+        "ic_global": 2.74,
+        "ps_poids_entree": 6.7,
+        "ps_poids_sortie": 30.3,
+        "ps_taux_pertes": 2.8,
+        "ps_aliment_par_porcelet": 41,
+        "ps_ic_8_30": 1.71,
+        "ps_gmq_8_30": 474,
+        "ps_age_30kg": 76,
+        "engr_poids_entree": 30.4,
+        "engr_poids_sortie": 122.4,
+        "engr_taux_pertes": 3.4,
+        "engr_aliment_porc_jour": 2.27,
+        "engr_ic_30_115": 2.61,
+        "engr_gmq_30_115": 858,
+        "sv_poids_entree": 6.7,
+        "sv_poids_sortie": 122.3,
+        "sv_taux_pertes": 6.2,
+        "sv_ic_8_115": 2.41,
+        "sv_gmq_8_115": 730,
+        "sv_age_115kg": 175,
+        "sv_tmp": 61.2,
+        "sv_pct_gamme": 83.1
+      }
+    },
+    "postsevreur_engraisseur": {
+      "libelle": "Post-sevreur engraisseur",
+      "elevages": 289,
+      "porcs_entres": 3603,
+      "valeurs": {
+        "ic_global": 2.63,
+        "ps_poids_entree": 8.0,
+        "ps_poids_sortie": 30.8,
+        "ps_taux_pertes": 1.8,
+        "ps_aliment_par_porcelet": 41,
+        "ps_ic_8_30": 1.77,
+        "ps_gmq_8_30": 488,
+        "engr_poids_entree": 30.8,
+        "engr_poids_sortie": 122.4,
+        "engr_taux_pertes": 3.7,
+        "engr_aliment_porc_jour": 2.32,
+        "engr_ic_30_115": 2.7,
+        "engr_gmq_30_115": 845,
+        "sv_poids_entree": 8.2,
+        "sv_poids_sortie": 123.1,
+        "sv_taux_pertes": 5.5,
+        "sv_ic_8_115": 2.51,
+        "sv_gmq_8_115": 733,
+        "sv_tmp": 60.7,
+        "sv_pct_gamme": 85.2
+      }
+    },
+    "postsevreur": {
+      "libelle": "Post-sevreur (bloc post-sevrage des post-sevreurs engraisseurs)",
+      "elevages": 289,
+      "porcs_entres": 3603,
+      "valeurs": {
+        "ps_poids_entree": 8.0,
+        "ps_poids_sortie": 30.8,
+        "ps_taux_pertes": 1.8,
+        "ps_aliment_par_porcelet": 41,
+        "ps_ic_8_30": 1.77,
+        "ps_gmq_8_30": 488
+      }
+    },
+    "engraisseur": {
+      "libelle": "Engraisseur seul",
+      "elevages": 86,
+      "porcs_entres": 1810,
+      "valeurs": {
+        "ic_global": 2.93,
+        "engr_poids_entree": 26.9,
+        "engr_poids_sortie": 124.2,
+        "engr_taux_pertes": 4.1,
+        "engr_aliment_porc_jour": 2.41,
+        "engr_ic_30_115": 2.83,
+        "engr_gmq_30_115": 853,
+        "sv_tmp": 60.5,
+        "sv_pct_gamme": 83.5
+      }
+    }
+  }
+}

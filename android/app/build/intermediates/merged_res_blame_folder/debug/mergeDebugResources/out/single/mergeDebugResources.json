@@ -1,0 +1,30 @@
+[
+    {
+        "merged": "fr.eosuivi.elevage.app-debug-34:/menu_principal.xml.flat",
+        "source": "fr.eosuivi.elevage.app-main-36:/menu/principal.xml"
+    },
+    {
+        "merged": "fr.eosuivi.elevage.app-debug-34:/mipmap-anydpi-v26_ic_launcher_round.xml.flat",
+        "source": "fr.eosuivi.elevage.app-main-36:/mipmap-anydpi-v26/ic_launcher_round.xml"
+    },
+    {
+        "merged": "fr.eosuivi.elevage.app-debug-34:/layout_activity_connexion.xml.flat",
+        "source": "fr.eosuivi.elevage.app-main-36:/layout/activity_connexion.xml"
+    },
+    {
+        "merged": "fr.eosuivi.elevage.app-debug-34:/drawable_ic_launcher_foreground.xml.flat",
+        "source": "fr.eosuivi.elevage.app-main-36:/drawable/ic_launcher_foreground.xml"
+    },
+    {
+        "merged": "fr.eosuivi.elevage.app-debug-34:/xml_network_security_config.xml.flat",
+        "source": "fr.eosuivi.elevage.app-main-36:/xml/network_security_config.xml"
+    },
+    {
+        "merged": "fr.eosuivi.elevage.app-debug-34:/layout_activity_main.xml.flat",
+        "source": "fr.eosuivi.elevage.app-main-36:/layout/activity_main.xml"
+    },
+    {
+        "merged": "fr.eosuivi.elevage.app-debug-34:/mipmap-anydpi-v26_ic_launcher.xml.flat",
+        "source": "fr.eosuivi.elevage.app-main-36:/mipmap-anydpi-v26/ic_launcher.xml"
+    }
+]

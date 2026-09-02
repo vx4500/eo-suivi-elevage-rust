@@ -4,6 +4,29 @@
 <h1>GTE — Gestion Technico-Économique</h1>
 <p>Indicateurs par lot, bandes actives et archivées comprises. Le périmètre calculé dépend des phases réellement présentes pour ce lot (aliment livré, ventes enregistrées, truies rattachées, animaux achetés) — une case vide signifie une donnée manquante, pas un résultat nul.</p>
 <form class="card gte-period" method="get" action="/gte"><div><h2>Période des résultats</h2><p class="muted">Les ventes, livraisons d’aliment et achats d’animaux sont calculés uniquement entre ces deux dates.</p></div><label>Date de début<input type="date" name="debut" value="{{ date_debut or '' }}"></label><label>Date de fin<input type="date" name="fin" value="{{ date_fin or '' }}"></label><button>Calculer</button><div class="gte-shortcuts" aria-label="Périodes rapides">{% for mois in [3,12,24,36] %}<a class="button{% if periode == mois %} active{% endif %}" href="/gte?periode={{ mois }}">{{ mois }} derniers mois</a>{% endfor %}<a href="/gte">Toute la période</a></div></form>
+
+<h2>Synthèse GTE — structure du livret GT-Porc</h2>
+<p class="help">Période du {{ synthese_debut|date_fr }} au {{ synthese_fin|date_fr }}, soit {{ synthese_jours }} jours{% if synthese_par_defaut %} — douze mois glissants, faute de bornes saisies ci-dessus{% endif %}. Tout est recalculé en direct depuis les saisies.</p>
+{% if orientation %}
+<p class="help">Référence : <b>{{ orientation.libelle }}</b>{% if orientation.elevages %}, {{ orientation.elevages }} élevages{% endif %}. {{ livret.source }}<br>{{ livret.avertissement }}</p>
+{% else %}
+<p class="help">Le livret ne publie pas de colonne pour le type d’élevage actif : les références restent vides, les valeurs de l’élevage sont calculées normalement.</p>
+{% endif %}
+{% for bloc in blocs %}
+<h3>{{ bloc.titre }}</h3>
+<div class="rust-scroll"><table><thead><tr><th>Indicateur</th><th>Élevage</th><th>Référence IFIP</th><th>Écart</th></tr></thead><tbody>
+{% for l in bloc.lignes %}<tr>
+<td>{{ l.libelle }}{% if l.raison %}<br><small class="muted">{{ l.raison }}</small>{% endif %}</td>
+<td><b>{{ l.valeur if l.valeur is not none else '—' }}</b></td>
+<td>{{ l.reference if l.reference is not none else '—' }}</td>
+<td>{% if l.valeur is not none and l.reference is not none %}{{ ((l.valeur - l.reference) * 100)|round / 100 }}{% else %}—{% endif %}</td>
+</tr>{% endfor %}
+</tbody></table></div>
+{% endfor %}
+{% if aliment_non_ventile_kg %}<p class="help">{{ aliment_non_ventile_kg }} kg d’aliment de la période ne sont rattachés à aucun stade (livraisons « tous stades » ou stade non renseigné). Ils comptent dans l’indice de consommation global, pas dans les indices par phase. Précisez leur stade depuis Économie &gt; Aliment pour affiner.</p>{% endif %}
+<p class="help">Poids vifs déduits des poids carcasse au rendement de {{ rendement }} %. {{ livret.rendement_source }} Modifiable par le réglage <code>rendement_carcasse_pct</code>.</p>
+
+<h2>Détail par lot</h2>
 {% if session.recoit_achats %}<p class="help">Les animaux reçus par achat (écran Réception) sont imputés comme charge d'entrée du lot : la MSA ne retient que l'aliment, la colonne « Marge après achat » déduit en plus le prix payé pour les animaux.</p>{% endif %}
 {% if session.a_truies %}<section class="card"><h2>Renouvellement du cheptel</h2><p>Taux de renouvellement (12 mois glissants) : <b>{{ renouvellement }}{% if renouvellement is not none %} %{% endif %}{% if renouvellement is none %}—{% endif %}</b></p></section>{% endif %}
 <div class="rust-scroll"><table><thead><tr>

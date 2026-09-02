@@ -1,0 +1,10 @@
+[
+    {
+        "merged": "fr.eosuivi.elevage.app-mergeDebugResources-33:/layout/activity_main.xml",
+        "source": "fr.eosuivi.elevage.app-main-36:/layout/activity_main.xml"
+    },
+    {
+        "merged": "fr.eosuivi.elevage.app-mergeDebugResources-33:/layout/activity_connexion.xml",
+        "source": "fr.eosuivi.elevage.app-main-36:/layout/activity_connexion.xml"
+    }
+]

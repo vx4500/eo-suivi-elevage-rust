@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="fr.eosuivi.elevage.AdresseTest" tests="8" skipped="0" failures="0" errors="0" timestamp="2026-09-01T17:40:09" hostname="manu-Laptop" time="0.048">
+  <properties/>
+  <testcase name="un service decouvert donne une url http directe" classname="fr.eosuivi.elevage.AdresseTest" time="0.01"/>
+  <testcase name="un schema explicite prime sur la deduction" classname="fr.eosuivi.elevage.AdresseTest" time="0.035"/>
+  <testcase name="les espaces le chemin et la barre finale sont ignores" classname="fr.eosuivi.elevage.AdresseTest" time="0.001"/>
+  <testcase name="les plages privees sont reconnues et les publiques non" classname="fr.eosuivi.elevage.AdresseTest" time="0.0"/>
+  <testcase name="une saisie vide ou absurde est refusee" classname="fr.eosuivi.elevage.AdresseTest" time="0.001"/>
+  <testcase name="un nom public passe en https sans port ajoute" classname="fr.eosuivi.elevage.AdresseTest" time="0.0"/>
+  <testcase name="une IP privee devient du http avec le port du serveur" classname="fr.eosuivi.elevage.AdresseTest" time="0.001"/>
+  <testcase name="un port deja saisi est respecte" classname="fr.eosuivi.elevage.AdresseTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
