@@ -1,6 +1,23 @@
 # EO-Suivi Élevage Rust — État du projet
 
-Version actuelle : **2.2.59** — Dernière mise à jour de ce document : 3 septembre 2026.
+Version actuelle : **2.2.60** — Dernière mise à jour de ce document : 3 septembre 2026.
+
+### Version 2.2.60 — imports de factures et de ventes plus tolérants
+
+Un PDF illisible n'entraîne plus le rejet des autres fichiers du même dépôt, et
+une ligne incomprise n'empêche plus d'importer les lignes voisines : les lignes
+écartées sont listées, à saisir à la main si besoin. Une référence déjà
+enregistrée n'est plus une impasse : la ligne propose le remplacement, à cocher
+document par document, ce qui permet de reprendre une facture corrigée par le
+fournisseur. Un fichier dont l'aperçu a expiré ou été annulé peut être redéposé.
+Nouveauté : un import CSV des factures tous secteurs (aliment, vétérinaire,
+semence, génétique) sert de porte de sortie quand le PDF du fournisseur n'est pas
+reconnu, avec le même aperçu et le même choix des bandes. Les PDF scannés passent
+par la reconnaissance de caractères lorsque poppler-utils et tesseract-ocr sont
+installés sur le serveur. La frappe des synthèses Uniporc n'est plus figée à la
+forme DA000 et les valeurs sont lues derrière leur libellé plutôt qu'à une
+position de colonne. Enfin, l'import économique suit désormais les mêmes droits
+que la saisie économique manuelle.
 
 ### Version 2.2.59 — GTE imprimable et saisies sans rechargement
 
@@ -646,7 +663,7 @@ l'arrêt déclenche le retour arrière ; la sauvegarde de la base est conservée
 ```bash
 systemctl status eo-suivi-rust --no-pager -l
 journalctl -u eo-suivi-rust -n 80 --no-pager -l -o cat
-curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.59"
+curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.60"
 ```
 
 Puis ouvrir `https://rust-elevage.basse-chevrie.ovh`.
