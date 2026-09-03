@@ -1,6 +1,15 @@
 # EO-Suivi Élevage Rust — État du projet
 
-Version actuelle : **2.2.58** — Dernière mise à jour de ce document : 2 septembre 2026.
+Version actuelle : **2.2.59** — Dernière mise à jour de ce document : 3 septembre 2026.
+
+### Version 2.2.59 — GTE imprimable et saisies sans rechargement
+
+La page GTE s'imprime en A4 paysage : tableaux déroulés en entier, en-têtes de
+colonnes répétés sur chaque page, filtres de période remplacés par un rappel des
+dates. Partout ailleurs, l'enregistrement d'une modification ne recharge plus la
+page d'un coup : le contenu est remplacé sur place et la position de lecture est
+conservée. Une erreur n'ouvre plus une page séparée, elle s'affiche dans un
+encart en haut de la page en cours.
 
 ### Version 2.2.58 — synthèse GTE à la structure du livret GT-Porc
 
@@ -637,7 +646,7 @@ l'arrêt déclenche le retour arrière ; la sauvegarde de la base est conservée
 ```bash
 systemctl status eo-suivi-rust --no-pager -l
 journalctl -u eo-suivi-rust -n 80 --no-pager -l -o cat
-curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.58"
+curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.59"
 ```
 
 Puis ouvrir `https://rust-elevage.basse-chevrie.ovh`.
