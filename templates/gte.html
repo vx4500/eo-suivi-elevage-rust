@@ -1,6 +1,31 @@
 {% extends "base.html" %}
 {% block title %}GTE · EO-Suivi{% endblock %}
 {% block content %}
+<style>
+/* Impression du GTE : A4 paysage, tableaux déroulés, en-têtes répétés */
+@media print{
+  @page{size:A4 landscape;margin:10mm}
+  body{background:#fff}
+  .no-print,.gte-period,.gte-shortcuts,#page-alert{display:none!important}
+  .gte-print-entete{display:block!important}
+  .rust-scroll{overflow:visible!important}
+  table{width:100%;font-size:9.5pt;border-collapse:collapse}
+  thead{display:table-header-group}
+  tr,section,.card{break-inside:avoid;page-break-inside:avoid}
+  h1{font-size:16pt;margin:0 0 6px}
+  h2{font-size:13pt;margin:14px 0 4px;break-after:avoid;page-break-after:avoid}
+  h3{font-size:11pt;margin:10px 0 3px;break-after:avoid;page-break-after:avoid}
+  p,.help{font-size:9pt;margin:3px 0}
+  a{color:#000;text-decoration:none}
+  th,td{padding:3px 5px;border:1px solid #bbb}
+  th{background:#eee;print-color-adjust:exact;-webkit-print-color-adjust:exact}
+}
+.gte-print-entete{display:none}
+</style>
+<div class="no-print rust-actions" style="justify-content:flex-end">
+  <button type="button" onclick="window.print()">Imprimer le GTE</button>
+</div>
+<p class="gte-print-entete">GTE — période du {{ synthese_debut|date_fr }} au {{ synthese_fin|date_fr }}</p>
 <h1>GTE — Gestion Technico-Économique</h1>
 <p>Indicateurs par lot, bandes actives et archivées comprises. Le périmètre calculé dépend des phases réellement présentes pour ce lot (aliment livré, ventes enregistrées, truies rattachées, animaux achetés) — une case vide signifie une donnée manquante, pas un résultat nul.</p>
 <form class="card gte-period" method="get" action="/gte"><div><h2>Période des résultats</h2><p class="muted">Les ventes, livraisons d’aliment et achats d’animaux sont calculés uniquement entre ces deux dates.</p></div><label>Date de début<input type="date" name="debut" value="{{ date_debut or '' }}"></label><label>Date de fin<input type="date" name="fin" value="{{ date_fin or '' }}"></label><button>Calculer</button><div class="gte-shortcuts" aria-label="Périodes rapides">{% for mois in [3,12,24,36] %}<a class="button{% if periode == mois %} active{% endif %}" href="/gte?periode={{ mois }}">{{ mois }} derniers mois</a>{% endfor %}<a href="/gte">Toute la période</a></div></form>

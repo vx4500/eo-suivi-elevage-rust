@@ -28,11 +28,14 @@ impl IntoResponse for AppError {
                     .to_string(),
             ),
         };
+        // Le message est aussi porté par `data-app-error` : le script global de base.html
+        // le récupère pour l'afficher dans un encart sur la page en cours, sans navigation.
+        let escaped = html_escape(&message);
         (
             status,
             Html(format!(
-                "<!doctype html><meta charset='utf-8'><main style='font-family:sans-serif;max-width:760px;margin:60px auto'><h1>EO-Suivi</h1><p>{}</p><p><a href='/'>Retour à l’accueil</a></p></main>",
-                html_escape(&message)
+                "<!doctype html><meta charset='utf-8'><main style='font-family:sans-serif;max-width:760px;margin:60px auto'><h1>EO-Suivi</h1><p data-app-error=\"{}\">{}</p><p><a href='/'>Retour à l’accueil</a></p></main>",
+                escaped, escaped
             )),
         )
             .into_response()
