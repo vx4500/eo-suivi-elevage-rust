@@ -58,12 +58,81 @@ pub fn extract_pdf_text(bytes: &[u8]) -> Result<String, String> {
         .extract_text_with_limit(&pages, MAX_DECOMPRESSED_PAGE)
         .map_err(|_| "Le contenu du PDF est illisible ou trop volumineux".to_string())?;
     if text.trim().chars().count() < 40 {
-        return Err(
-            "Ce PDF semble être un scan sans texte. L'OCR des photos sera ajouté dans une prochaine version"
-                .into(),
-        );
+        return Err(SCAN_SANS_TEXTE.into());
     }
     Ok(text)
+}
+
+/// Message renvoyé quand aucun texte n'est extractible : l'appelant peut alors
+/// tenter la reconnaissance de caractères.
+pub const SCAN_SANS_TEXTE: &str =
+    "Ce PDF semble être un scan sans texte : aucune reconnaissance de caractères disponible sur ce serveur (installez poppler-utils et tesseract-ocr)";
+
+/// Nombre de pages OCRisées au maximum : au-delà, la reconnaissance dure trop
+/// longtemps pour une requête web.
+const MAX_OCR_PAGES: usize = 5;
+
+fn commande_disponible(name: &str) -> bool {
+    std::process::Command::new(name)
+        .arg("-v")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok()
+}
+
+/// Reconnaissance de caractères d'un PDF scanné, uniquement si `pdftoppm`
+/// (poppler-utils) et `tesseract` sont installés sur la machine. Aucune
+/// dépendance n'est ajoutée au binaire : sans ces outils, le document reste
+/// simplement à saisir à la main ou à passer par l'import CSV.
+/// Appel bloquant : à lancer hors du fil d'exécution des requêtes.
+pub fn ocr_pdf_text(bytes: &[u8]) -> Result<String, String> {
+    if !commande_disponible("pdftoppm") || !commande_disponible("tesseract") {
+        return Err(SCAN_SANS_TEXTE.into());
+    }
+    let dossier = std::env::temp_dir().join(format!("eo-ocr-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir_all(&dossier).map_err(|error| error.to_string())?;
+    let resultat = ocr_dans_dossier(bytes, &dossier);
+    let _ = std::fs::remove_dir_all(&dossier);
+    resultat
+}
+
+fn ocr_dans_dossier(bytes: &[u8], dossier: &std::path::Path) -> Result<String, String> {
+    let source = dossier.join("source.pdf");
+    std::fs::write(&source, bytes).map_err(|error| error.to_string())?;
+    let sortie = std::process::Command::new("pdftoppm")
+        .args(["-r", "300", "-png", "-f", "1", "-l"])
+        .arg(MAX_OCR_PAGES.to_string())
+        .arg(&source)
+        .arg(dossier.join("page"))
+        .output()
+        .map_err(|error| error.to_string())?;
+    if !sortie.status.success() {
+        return Err("La conversion du PDF en images a échoué".into());
+    }
+    let mut images: Vec<_> = std::fs::read_dir(dossier)
+        .map_err(|error| error.to_string())?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("png"))
+        .collect();
+    images.sort();
+    let mut texte = String::new();
+    for image in images {
+        let page = std::process::Command::new("tesseract")
+            .arg(&image)
+            .arg("stdout")
+            .args(["-l", "fra"])
+            .output()
+            .map_err(|error| error.to_string())?;
+        if page.status.success() {
+            texte.push_str(&String::from_utf8_lossy(&page.stdout));
+            texte.push('\n');
+        }
+    }
+    if texte.trim().chars().count() < 40 {
+        return Err("La reconnaissance de caractères n'a rien donné d'exploitable".into());
+    }
+    Ok(texte)
 }
 
 /// Certains logiciels d'export (constaté avec « LDPRX » sur un bordereau
@@ -1139,8 +1208,30 @@ fn labeled_amount(text: &str, labels: &[&str]) -> Option<f64> {
     })
 }
 
+/// La frappe (estampille de l'élevage) n'a pas de forme unique : on la lit
+/// d'abord derrière son libellé, puis on retombe sur les formes courantes
+/// (deux lettres et trois chiffres, ou un identifiant court isolé).
+fn frappe_uniporc(text: &str) -> Option<String> {
+    // Le libellé est cherché sans tenir compte de la casse, la frappe elle-même
+    // reste en majuscules et comporte toujours au moins un chiffre : sans cette
+    // condition, un simple mot qui suit le libellé passerait pour une frappe.
+    capture(
+        text,
+        r"(?i:frappe|tatouage|estampille|marquage)[^A-Za-z0-9]{0,12}([A-Z0-9]{3,8})",
+        1,
+    )
+    .or_else(|| capture(text, r"\b([A-Z]{2}[0-9]{3})\b", 1))
+    .or_else(|| capture(text, r"\b(FR[0-9]{2}[A-Z0-9]{3,6})\b", 1))
+    .filter(|value| {
+        value.chars().any(|c| c.is_ascii_digit()) && value.chars().any(|c| c.is_ascii_alphabetic())
+    })
+}
+
+/// Les valeurs sont d'abord cherchées derrière leur libellé ; la lecture par
+/// position ne sert que de repli, car un changement de colonne côté Uniporc la
+/// rendrait fausse sans le moindre signal.
 fn parse_synthese(text: &str) -> Result<ImportDocument, String> {
-    let frappe = capture(text, r"\b(DA[0-9]{3})\b", 1);
+    let frappe = frappe_uniporc(text);
     let date = capture(
         text,
         r"(?i)Date d.abattage[^0-9]*([0-9]{2}/[0-9]{2}/[0-9]{2,4})",
@@ -1149,20 +1240,35 @@ fn parse_synthese(text: &str) -> Result<ImportDocument, String> {
     .and_then(|value| iso_date(&value));
     let range_rate =
         capture(text, r"(?i)([0-9]+)%\s*dans la gamme", 1).and_then(|value| number(&value));
-    let mut pigs = None;
-    let mut average_weight = None;
-    let mut tmp = None;
-    let mut plus_value = None;
-    if let Some(reference) = frappe.as_deref() {
+    let mut pigs = capture(
+        text,
+        r"(?i)(?:nombre de porcs|nb de porcs|porcs pes[ée]s|effectif)[^0-9-]{0,14}([0-9]{1,5})",
+        1,
+    )
+    .and_then(|value| integer(&value));
+    let mut average_weight = labeled_amount(
+        text,
+        &[
+            "poids moyen carcasse",
+            "poids carcasse moyen",
+            "poids moyen",
+        ],
+    );
+    let mut tmp = labeled_amount(text, &["TMP moyen", "T.M.P.", "TMP"]);
+    let mut plus_value = labeled_amount(text, &["plus-value", "plus value", "plus-values"]);
+    if let Some(reference) = frappe.as_deref().filter(|_| {
+        pigs.is_none() || average_weight.is_none() || tmp.is_none() || plus_value.is_none()
+    }) {
         for line in text.lines().filter(|line| line.contains(reference)) {
             let values: Vec<_> = line.split_whitespace().collect();
             if let Some(index) = values.iter().position(|value| *value == reference) {
                 let sequence = &values[index + 1..];
                 if sequence.len() >= 8 {
-                    pigs = integer(sequence[0]);
-                    average_weight = number(sequence[3]);
-                    tmp = number(sequence[4]);
-                    plus_value = sequence.last().and_then(|value| number(value));
+                    pigs = pigs.or_else(|| integer(sequence[0]));
+                    average_weight = average_weight.or_else(|| number(sequence[3]));
+                    tmp = tmp.or_else(|| number(sequence[4]));
+                    plus_value =
+                        plus_value.or_else(|| sequence.last().and_then(|value| number(value)));
                     break;
                 }
             }
@@ -1697,6 +1803,40 @@ mod tests {
     /// Les 10 libellés de plus-value demandés en §3 : vérifie qu'ils sont
     /// tous reconnus (`canonical_label` ne retombe pas sur le texte brut
     /// nettoyé, seul indice qu'aucune correspondance de `mappings` n'a joué).
+    #[test]
+    fn la_frappe_uniporc_se_lit_derriere_son_libelle() {
+        assert_eq!(
+            frappe_uniporc("TATOUAGE : ZZ421 abattage"),
+            Some("ZZ421".into())
+        );
+        // Repli sur la forme historique deux lettres + trois chiffres.
+        assert_eq!(frappe_uniporc("lot DA905 pesé"), Some("DA905".into()));
+        assert_eq!(frappe_uniporc("aucune estampille ici"), None);
+    }
+
+    #[test]
+    fn la_synthese_lit_les_valeurs_derriere_leurs_libelles() {
+        let texte = "SYNTHESE DES INDICES UNIPORC\n\
+             Date d'abattage 12/02/2026\n\
+             Frappe DA905\n\
+             Nombre de porcs 148\n\
+             Poids moyen carcasse 94,20\n\
+             TMP moyen 61,40\n\
+             Plus-value 1 254,30\n\
+             92% dans la gamme\n";
+        let document = parse_document(texte).expect("synthèse reconnue");
+        let line = &document.lines[0];
+        assert_eq!(line.reference.as_deref(), Some("DA905"));
+        assert_eq!(import_test_detail_f64(line, "poids_moyen"), Some(94.20));
+        assert_eq!(import_test_detail_f64(line, "tmp"), Some(61.40));
+        assert_eq!(import_test_detail_f64(line, "plus_value"), Some(1254.30));
+        assert_eq!(line.quantity, Some(148.0));
+    }
+
+    fn import_test_detail_f64(line: &ImportLine, key: &str) -> Option<f64> {
+        line.details.get(key).and_then(Value::as_f64)
+    }
+
     #[test]
     fn les_10_libelles_de_plus_value_demandes_sont_reconnus() {
         for raw in [

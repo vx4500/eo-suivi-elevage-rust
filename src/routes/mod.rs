@@ -28,6 +28,7 @@ mod ameliorations;
 mod demo_portal;
 pub(crate) mod documents;
 mod factures;
+mod factures_csv;
 mod feuille_mise_bas;
 mod genetique_import;
 mod gte_periode;
@@ -38,6 +39,21 @@ mod parity;
 mod surfaces;
 mod ventes;
 
+/// Encodage minimal pour glisser un message dans une redirection.
+fn encode_query(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(*byte as char)
+            }
+            b' ' => encoded.push('+'),
+            other => encoded.push_str(&format!("%{other:02X}")),
+        }
+    }
+    encoded
+}
+
 fn contenu_sha256(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
@@ -46,11 +62,14 @@ async fn refuser_fichier_deja_importe(
     transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     digest: &str,
 ) -> AppResult<()> {
-    let existe: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM importjournal WHERE contenu_sha256=?")
-            .bind(digest)
-            .fetch_one(&mut **transaction)
-            .await?;
+    // Un aperçu expiré ou abandonné ne doit pas condamner le fichier : seul un
+    // import réellement appliqué, ou un aperçu encore ouvert, bloque le dépôt.
+    let existe: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM importjournal WHERE contenu_sha256=? AND statut IN ('applique','apercu')",
+    )
+    .bind(digest)
+    .fetch_one(&mut **transaction)
+    .await?;
     if existe > 0 {
         return Err(AppError::Invalid(
             "Ce fichier a déjà été importé, même sous un autre nom".into(),
@@ -317,6 +336,11 @@ pub fn router(state: AppState) -> Router {
             "/economique/genetique/modele.csv",
             get(genetique_import::modele_csv),
         )
+        .route(
+            "/economique/factures/modele.csv",
+            get(factures_csv::modele_csv),
+        )
+        .route("/economique/factures/import", post(factures_csv::importer))
         .route(
             "/economique/genetique/import",
             post(genetique_import::importer),
@@ -7281,6 +7305,8 @@ async fn economique(
     ctx.insert("import_ok".into(), json!(query.get("import_ok")));
     ctx.insert("liaisons".into(), json!(query.get("liaisons")));
     ctx.insert("imports_prets".into(), json!(query.get("imports_prets")));
+    ctx.insert("ecartes".into(), json!(query.get("ecartes")));
+    ctx.insert("ignorees".into(), json!(query.get("ignorees")));
     ctx.insert(
         "today".into(),
         json!(Local::now().date_naive().format("%Y-%m-%d").to_string()),
@@ -7551,12 +7577,11 @@ async fn gte(
     render(&state, "gte.html", Value::Object(ctx))
 }
 
+/// L'accès à la section « economique » est déjà filtré par le middleware de
+/// pages ; un profil autorisé à saisir une facture à la main doit pouvoir
+/// l'importer, sinon la restriction n'empêche rien et complique le travail.
 fn require_economic_import(session: &SessionData) -> AppResult<()> {
-    if matches!(session.role.as_str(), "admin" | "eleveur") {
-        Ok(())
-    } else {
-        Err(AppError::Forbidden)
-    }
+    require_writer(session)
 }
 
 fn import_detail_str<'a>(line: &'a ImportLine, key: &str) -> Option<&'a str> {
@@ -7647,15 +7672,15 @@ async fn economic_preview_action(
             .bind(reference).fetch_one(&mut **transaction).await?,
         _ => return Ok(("erreur".into(),Some("Type de ligne non pris en charge".into()))),
     };
-    let action = if exists > 0 {
+    if exists > 0 {
         return Ok((
-            "erreur".into(),
-            Some("Référence déjà importée : modification interdite".into()),
+            "remplacer".into(),
+            Some(
+                "Référence déjà présente : cochez « remplacer » pour écraser la valeur enregistrée, sinon la ligne sera ignorée".into(),
+            ),
         ));
-    } else {
-        "ajouter"
-    };
-    Ok((action.into(), None))
+    }
+    Ok(("ajouter".into(), None))
 }
 
 async fn economique_import_pdf(
@@ -7714,21 +7739,39 @@ async fn economique_import_pdf(
             "Lot de PDF trop volumineux (maximum 40 Mo)".into(),
         ));
     }
+    // Un fichier illisible ne condamne plus ses voisins : on analyse ce qui
+    // peut l'être et on rend compte des fichiers écartés.
     let mut documents = Vec::new();
+    let mut rejected = Vec::<String>::new();
     for (filename, bytes) in files {
         if bytes.len() > 8 * 1024 * 1024 {
-            return Err(AppError::Invalid(format!("{filename} dépasse 8 Mo")));
+            rejected.push(format!("{filename} : dépasse 8 Mo"));
+            continue;
         }
         if !filename.to_lowercase().ends_with(".pdf") {
-            return Err(AppError::Invalid(format!(
-                "{filename} n'est pas un fichier PDF"
-            )));
+            rejected.push(format!("{filename} : n'est pas un fichier PDF"));
+            continue;
         }
-        let text = economic_import::extract_pdf_text(&bytes)
-            .map_err(|error| AppError::Invalid(format!("{filename} : {error}")))?;
-        let parsed = economic_import::parse_document(&text)
-            .map_err(|error| AppError::Invalid(format!("{filename} : {error}")))?;
-        documents.push((filename, contenu_sha256(&bytes), parsed));
+        // Un scan sans couche texte passe par la reconnaissance de caractères
+        // lorsque les outils système sont présents (appel bloquant, donc isolé).
+        let contenu = bytes.to_vec();
+        let texte = match economic_import::extract_pdf_text(&contenu) {
+            Ok(texte) => Ok(texte),
+            Err(error) if error == economic_import::SCAN_SANS_TEXTE => {
+                tokio::task::spawn_blocking(move || economic_import::ocr_pdf_text(&contenu))
+                    .await
+                    .map_err(|error| AppError::Internal(error.into()))?
+            }
+            Err(error) => Err(error),
+        };
+        let parsed = texte.and_then(|text| economic_import::parse_document(&text));
+        match parsed {
+            Ok(parsed) => documents.push((filename, contenu_sha256(&bytes), parsed)),
+            Err(error) => rejected.push(format!("{filename} : {error}")),
+        }
+    }
+    if documents.is_empty() {
+        return Err(AppError::Invalid(rejected.join(" · ")));
     }
     let mut transaction = state.pool.begin().await?;
     sqlx::query(
@@ -7739,7 +7782,10 @@ async fn economique_import_pdf(
     let mut tokens = Vec::new();
     for (filename, digest, parsed) in documents {
         let token = uuid::Uuid::new_v4().simple().to_string();
-        refuser_fichier_deja_importe(&mut transaction, &digest).await?;
+        if let Err(error) = refuser_fichier_deja_importe(&mut transaction, &digest).await {
+            rejected.push(format!("{filename} : {error}"));
+            continue;
+        }
         sqlx::query("INSERT INTO importjournal(token,type_import,nom_fichier,statut,cree_par,contenu_sha256) VALUES(?,?,?,'apercu',?,?)")
             .bind(&token).bind(format!("economique:{}",parsed.document_type)).bind(&filename).bind(session.uid).bind(&digest)
             .execute(&mut *transaction).await?;
@@ -7770,10 +7816,22 @@ async fn economique_import_pdf(
         tokens.push(token);
     }
     transaction.commit().await?;
-    if tokens.len() == 1 {
+    if tokens.is_empty() {
+        return Err(AppError::Invalid(rejected.join(" · ")));
+    }
+    let ecartes = if rejected.is_empty() {
+        String::new()
+    } else {
+        format!("&ecartes={}", encode_query(&rejected.join(" · ")))
+    };
+    if tokens.len() == 1 && rejected.is_empty() {
         Ok(Redirect::to(&format!("/economique/import/{}", tokens[0])).into_response())
     } else {
-        Ok(Redirect::to(&format!("/economique?imports_prets={}", tokens.len())).into_response())
+        Ok(Redirect::to(&format!(
+            "/economique?imports_prets={}{ecartes}",
+            tokens.len()
+        ))
+        .into_response())
     }
 }
 
@@ -7798,10 +7856,23 @@ async fn economique_import_apercu(
             serde_json::from_str(&raw).map_err(|error| AppError::Internal(error.into()))?;
         let (suggested_band, suggestion_note) = if line.kind == "vente" {
             ventes::suggestion(import_detail_str(&line, "frappe"), &bands)
+        } else if let Some(code) = import_detail_str(&line, "bande_code") {
+            // Ligne issue d'un CSV : la bande est nommée par son code.
+            match bands
+                .iter()
+                .find(|bande| bande["code"].as_str() == Some(code))
+                .and_then(|bande| bande["id"].as_i64())
+            {
+                Some(id) => (Some(id), "Bande reprise du fichier"),
+                None => (None, "Bande du fichier inconnue : à choisir ici"),
+            }
         } else {
             (None, "")
         };
-        rows.push(json!({"sites_suggeres":factures::suggest_sites(import_detail_str(&line,"destination"),&sites),"details":line.details.clone(),"suggested_band":suggested_band,"suggestion_note":suggestion_note,"lot_ref":import_detail_str(&line,"frappe"),"ligne":number,"action":action,"anomalie":anomaly,"type":line.kind,"date":line.date,"reference":line.reference,"libelle":line.label,"quantite":line.quantity,"prix_unitaire":line.unit_price,"montant":line.amount}));
+        let detected_stage = (line.kind == "aliment").then(|| {
+            crate::affectation::feed_stage(import_detail_str(&line, "produit").unwrap_or_default())
+        });
+        rows.push(json!({"stade_detecte":detected_stage,"sites_suggeres":factures::suggest_sites(import_detail_str(&line,"destination"),&sites),"details":line.details.clone(),"suggested_band":suggested_band,"suggestion_note":suggestion_note,"lot_ref":import_detail_str(&line,"frappe"),"ligne":number,"action":action,"anomalie":anomaly,"type":line.kind,"date":line.date,"reference":line.reference,"libelle":line.label,"quantite":line.quantity,"prix_unitaire":line.unit_price,"montant":line.amount}));
     }
     let summary = journal
         .2
@@ -7929,40 +8000,49 @@ async fn economique_import_confirmer(
     if owner != Some(session.uid) && !session.est_admin() {
         return Err(AppError::Forbidden);
     }
-    let errors: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM importligne WHERE token=? AND action='erreur'")
-            .bind(&token)
-            .fetch_one(&mut *transaction)
-            .await?;
-    if errors > 0 {
-        return Err(AppError::Invalid(
-            "L'import contient une erreur bloquante".into(),
-        ));
-    }
+    // Les lignes illisibles ne bloquent plus le document : elles restent
+    // simplement de côté et l'éleveur les saisit à la main s'il le souhaite.
+    let ignored: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM importligne WHERE token=? AND action IN ('erreur','ignorer')",
+    )
+    .bind(&token)
+    .fetch_one(&mut *transaction)
+    .await?;
     let band_id = form_i64(&form, "bande_id");
-    let stored = sqlx::query_as::<_,(i64,String)>("SELECT numero_ligne,donnees_json FROM importligne WHERE token=? AND action NOT IN ('erreur','ignorer') ORDER BY numero_ligne")
+    let stored = sqlx::query_as::<_,(i64,String)>("SELECT numero_ligne,donnees_json FROM importligne WHERE token=? AND action IN ('ajouter','remplacer') ORDER BY numero_ligne")
         .bind(&token).fetch_all(&mut *transaction).await?;
-    let mut lines = Vec::new();
+    let mut candidates = Vec::new();
     for (number, raw) in stored {
         let line: ImportLine = serde_json::from_str(&raw)
             .map_err(|_| AppError::Invalid(format!("Données invalides à la ligne {number}")))?;
-        lines.push((number, line));
+        candidates.push((number, line));
     }
     // Revérification atomique au moment de confirmer : un autre import peut
-    // avoir été appliqué depuis l'affichage de l'aperçu.
+    // avoir été appliqué depuis l'affichage de l'aperçu. Une ligne devenue
+    // conflictuelle n'est reprise que si le remplacement est demandé.
     let mut confirmation_seen = HashSet::new();
-    for (_, line) in &lines {
-        let (action, anomaly) =
-            economic_preview_action(&mut transaction, line, &mut confirmation_seen).await?;
-        if action != "ajouter" {
-            return Err(AppError::Invalid(anomaly.unwrap_or_else(|| {
-                "Import en conflit avec des données déjà présentes".into()
-            })));
+    let mut lines = Vec::new();
+    let mut skipped = 0_i64;
+    for (number, line) in candidates {
+        let (action, _) =
+            economic_preview_action(&mut transaction, &line, &mut confirmation_seen).await?;
+        let replace = form.contains_key(&format!("remplacer_{number}"));
+        match action.as_str() {
+            "ajouter" => lines.push((number, line, false)),
+            "remplacer" if replace => lines.push((number, line, true)),
+            _ => skipped += 1,
         }
+    }
+    if lines.is_empty() {
+        return Err(AppError::Invalid(
+            "Aucune ligne à enregistrer : tout est déjà présent ou illisible.".into(),
+        ));
     }
     let mut affected_apports = HashSet::new();
     let mut applied = 0_i64;
-    for (number, line) in &lines {
+    for (number, line, replace) in &lines {
+        let number = *number;
+        let replace = *replace;
         // La bande globale reste un raccourci, mais chaque ligne (et donc
         // chaque lot d'un apport) peut être ventilée indépendamment.
         let band_id =
@@ -8017,6 +8097,15 @@ async fn economique_import_confirmer(
                     })
                     .or_else(|| import_detail_str(line, "date_livraison").map(str::to_string))
                     .or_else(|| line.date.clone());
+                if replace {
+                    if line.kind == "aliment" {
+                        sqlx::query("DELETE FROM livraisonaliment WHERE COALESCE(num_facture,'')=? AND lower(COALESCE(produit,''))=lower(?) AND COALESCE(silo,'')=COALESCE(?, '')")
+                            .bind(reference).bind(import_detail_str(line,"produit")).bind(import_detail_str(line,"silo")).execute(&mut *transaction).await?;
+                    } else {
+                        sqlx::query("DELETE FROM achatveto WHERE COALESCE(num_facture,'')=? AND lower(COALESCE(produit,''))=lower(?)")
+                            .bind(reference).bind(import_detail_str(line,"produit")).execute(&mut *transaction).await?;
+                    }
+                }
                 let inserted = if line.kind == "aliment" {
                     sqlx::query("INSERT INTO livraisonaliment(date,fournisseur,produit,silo,tonnage,pu_ht,montant_ht,num_facture,bande_id,date_reference,sites_json) VALUES(?,?,?,?,?,?,?,?,?,?,?)")
                         .bind(line.date.as_deref()).bind(import_detail_str(line,"fournisseur")).bind(import_detail_str(line,"produit")).bind(import_detail_str(line,"silo")).bind(import_detail_f64(line,"tonnage")).bind(import_detail_f64(line,"pu_ht")).bind(line.amount).bind(reference).bind(band_id).bind(reference_date).bind(json!(sites).to_string()).execute(&mut *transaction).await?.last_insert_rowid()
@@ -8095,6 +8184,10 @@ async fn economique_import_confirmer(
                 }
             }
             "valorisation" | "retenue" => {
+                if replace {
+                    sqlx::query("DELETE FROM valorisationapport WHERE COALESCE(num_apport,'')=? AND libelle=? AND categorie=?")
+                        .bind(reference).bind(&line.label).bind(&line.kind).execute(&mut *transaction).await?;
+                }
                 sqlx::query("INSERT INTO valorisationapport(num_apport,date,libelle,montant,categorie) VALUES(?,?,?,?,?)")
                     .bind(reference).bind(line.date.as_deref()).bind(&line.label).bind(line.amount).bind(&line.kind).execute(&mut *transaction).await?;
             }
@@ -8152,7 +8245,8 @@ async fn economique_import_confirmer(
     )
     .await;
     Ok(Redirect::to(&format!(
-        "/economique?import_ok={applied}&liaisons={auto_linked}"
+        "/economique?import_ok={applied}&liaisons={auto_linked}&ignorees={}",
+        ignored + skipped
     ))
     .into_response())
 }
