@@ -38,6 +38,7 @@ mod maternite_suivi;
 mod parity;
 mod surfaces;
 mod ventes;
+pub(crate) mod vocal;
 
 /// Encodage minimal pour glisser un message dans une redirection.
 fn encode_query(value: &str) -> String {
@@ -274,6 +275,17 @@ pub fn router(state: AppState) -> Router {
         .route("/api/cases", get(api_cases))
         .route("/api/cases-capacity", get(api_cases_capacity))
         .route("/api/causes-perte", get(api_causes_perte))
+        // Saisie vocale : analyse sans écriture, puis validation après
+        // relecture à l'écran. Les deux étapes sont volontairement séparées.
+        .route("/api/vocal/contexte", get(vocal::contexte))
+        .route(
+            "/api/vocal/analyser",
+            post(vocal::analyser).layer(DefaultBodyLimit::max(vocal::TAILLE_MAX_AUDIO)),
+        )
+        .route("/api/vocal/valider", post(vocal::valider))
+        .route("/api/vocal/journal", get(vocal::journal))
+        .route("/api/vocal/{id}/abandonner", post(vocal::abandonner))
+        .route("/api/vocal/{id}/audio", get(vocal::audio))
         .route("/api/alertes-elevage", get(api_alertes_elevage))
         .route("/energie", get(energie))
         .route("/aliment-previsions", get(aliment_previsions))

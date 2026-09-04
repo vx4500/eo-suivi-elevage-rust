@@ -13,6 +13,7 @@ mod mdns;
 mod models;
 mod routes;
 mod templates;
+mod vocal;
 
 use axum::middleware;
 use config::Config;
@@ -84,6 +85,18 @@ async fn main() -> anyhow::Result<()> {
         nom_elevage.as_deref(),
         env!("CARGO_PKG_VERSION"),
     );
+
+    // Rétention des enregistrements vocaux : l'audio ne sert qu'au diagnostic
+    // des dictées mal comprises, il s'efface seul au bout du délai prévu.
+    let purge_pool = pool.clone();
+    tokio::spawn(async move {
+        loop {
+            if let Err(e) = routes::vocal::purger_audio(&purge_pool).await {
+                tracing::error!(error=%e,"Purge des enregistrements vocaux impossible");
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(6 * 3600)).await;
+        }
+    });
 
     let templates = templates::build()?;
     let state = AppState::new(config.clone(), pool, templates);

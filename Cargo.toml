@@ -26,7 +26,7 @@ sha2 = "0.10"
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "chrono", "migrate"] }
 subtle = "2.6"
 thiserror = "2.0"
-tokio = { version = "1.43", features = ["macros", "rt-multi-thread", "signal", "fs", "time"] }
+tokio = { version = "1.43", features = ["macros", "process", "rt-multi-thread", "signal", "fs", "time"] }
 tower-http = { version = "0.6", features = ["compression-full", "fs", "limit", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }

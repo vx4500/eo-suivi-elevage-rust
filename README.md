@@ -120,6 +120,42 @@ La base est conservée dans le volume `eo_data`.
 | `EO_SECURE_COOKIES` | `false` | mettre `true` lorsque le site est servi en HTTPS |
 | `EO_MDNS` | activé | `0` coupe l'annonce du serveur sur le réseau local |
 | `RUST_LOG` | `info` | niveau du journal |
+| `EO_VOCAL_WHISPER` | — | chemin du binaire whisper.cpp ; vide = saisie vocale sans transcription |
+| `EO_VOCAL_MODELE` | — | chemin du modèle ggml français (`small` suffit) |
+| `EO_VOCAL_FFMPEG` | `ffmpeg` | commande de conversion de l'audio du téléphone |
+
+### Saisie vocale
+
+L'application mobile enregistre l'énoncé, le serveur le transcrit et le
+comprend, et l'éleveur relit à l'écran avant que quoi que ce soit ne soit
+enregistré. Un ordre ressemble à « truie cinq zéro zéro trois deux cinq, deux
+porcelets écrasés » : les numéros se dictent chiffre par chiffre, c'est ce qui
+résiste le mieux au bruit d'un bâtiment.
+
+Le découpage suit ce parcours :
+
+1. `POST /api/vocal/analyser` — champ `audio` (ou `texte` déjà transcrit).
+   Transcrit, reconnaît le numéro, la quantité et la cause, cherche la portée
+   en cours. **Aucune écriture dans l'élevage à cette étape.**
+2. l'application affiche la relecture : numéro, effectif présent de la portée,
+   perte annoncée, texte brut de la transcription, et propose les numéros
+   voisins quand celui compris n'existe pas au cheptel ;
+3. `POST /api/vocal/valider` — enregistre ce qui a été relu, en passant par les
+   mêmes contrôles que la saisie manuelle (portée non sevrée, cause
+   configurée, perte inférieure à l'effectif présent, J+28).
+
+`GET /api/vocal/contexte` fournit à l'application le jeton CSRF, les causes de
+perte de l'élevage et la longueur des numéros de travail. Les causes ne sont
+jamais inventées : seules celles configurées dans l'élevage sont proposées.
+
+Sans `EO_VOCAL_WHISPER` et `EO_VOCAL_MODELE`, tout reste utilisable avec un
+texte déjà transcrit — par le téléphone, par exemple — et seule la
+transcription côté serveur est indisponible.
+
+Les enregistrements audio sont conservés dix jours, le temps de comprendre les
+dictées mal transcrites (`GET /api/vocal/journal`, puis
+`GET /api/vocal/{id}/audio`), puis effacés automatiquement. Le texte transcrit,
+lui, reste.
 
 ### Découverte sur le réseau local
 

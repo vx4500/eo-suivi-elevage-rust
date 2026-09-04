@@ -5,6 +5,9 @@ pub async fn init(pool: &SqlitePool) -> anyhow::Result<()> {
     sqlx::raw_sql(include_str!("../migrations/0001_schema.sql"))
         .execute(pool)
         .await?;
+    sqlx::raw_sql(include_str!("../migrations/0004_saisie_vocale.sql"))
+        .execute(pool)
+        .await?;
     verify_sqlite_pragmas(pool).await?;
 
     // Migrations additives pour les bases anciennes 1.55–1.65. Une colonne déjà
