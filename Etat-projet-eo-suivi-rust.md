@@ -1,6 +1,22 @@
 # EO-Suivi Élevage Rust — État du projet
 
-Version actuelle : **2.2.60** — Dernière mise à jour de ce document : 3 septembre 2026.
+Version actuelle : **2.2.61** — Dernière mise à jour de ce document : 3 septembre 2026.
+
+### Version 2.2.61 — navigation refondue avant les essais éleveurs
+
+Neuf menus déroulants deviennent quatre rubriques nommées comme on travaille :
+Aujourd'hui, Mes animaux, Mes résultats, Ma gestion. Les cinq écrans d'analyse
+(GTTT, productivité, GTE, IFIP, retours d'abattoir) sont réunis sous une seule
+porte. Les menus s'ouvrent au clic et non plus au survol — le survol est
+intenable au doigt et invisible au clavier ; Échap et le clic à côté referment.
+Chaque page indique désormais où elle se trouve : rubrique soulignée, fil
+d'Ariane, et onglets des pages voisines sous le titre. Chaque entrée de menu
+porte une ligne d'explication, ce qui lève le jargon (GTTT, GTE, IFIP) pour qui
+découvre le logiciel. Sur téléphone, la navigation descend sous le pouce avec une
+barre fixe en bas dont le bouton central ouvre la saisie rapide. La recherche est
+sortie du fouillis, et le menu du compte réunit enfin mot de passe, aide et
+administration. Des tests interdisent désormais un lien de menu sans page et une
+section d'accès sans entrée de menu.
 
 ### Version 2.2.60 — imports de factures et de ventes plus tolérants
 
@@ -663,7 +679,7 @@ l'arrêt déclenche le retour arrière ; la sauvegarde de la base est conservée
 ```bash
 systemctl status eo-suivi-rust --no-pager -l
 journalctl -u eo-suivi-rust -n 80 --no-pager -l -o cat
-curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.60"
+curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.61"
 ```
 
 Puis ouvrir `https://rust-elevage.basse-chevrie.ovh`.
