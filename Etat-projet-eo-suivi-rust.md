@@ -1,6 +1,15 @@
 # EO-Suivi Élevage Rust — État du projet
 
-Version actuelle : **2.2.61** — Dernière mise à jour de ce document : 3 septembre 2026.
+Version actuelle : **2.2.62** — Dernière mise à jour de ce document : 3 septembre 2026.
+
+### Version 2.2.62 — barre du bas réellement visible sur téléphone
+
+La barre de navigation du bas était bien fixée à l'écran, mais un seul élément
+trop large — un tableau non encadré, par exemple — suffisait à élargir la page :
+le navigateur affichait alors tout dézoomé et ancrait la barre en bas d'une zone
+plus grande que l'écran, obligeant à descendre jusqu'en bas pour la voir. Les
+tableaux qui n'étaient pas déjà dans un cadre défilant le sont désormais, et la
+page ne peut plus dépasser la largeur de l'écran sur téléphone.
 
 ### Version 2.2.61 — navigation refondue avant les essais éleveurs
 
@@ -679,7 +688,7 @@ l'arrêt déclenche le retour arrière ; la sauvegarde de la base est conservée
 ```bash
 systemctl status eo-suivi-rust --no-pager -l
 journalctl -u eo-suivi-rust -n 80 --no-pager -l -o cat
-curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.61"
+curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.62"
 ```
 
 Puis ouvrir `https://rust-elevage.basse-chevrie.ovh`.

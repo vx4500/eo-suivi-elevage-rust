@@ -71,6 +71,11 @@
     /* ===== Barre du bas sur téléphone ===== */
     .nav-pouce{display:none}
     @media(max-width:850px){
+      /* Un seul élément trop large élargit le viewport de mise en page :
+         tout est alors dézoomé et la barre du bas, fixée à ce viewport,
+         se retrouve hors de l'écran. `clip` l'empêche sans casser le
+         `sticky` de la barre du haut, contrairement à `hidden`. */
+      html,body{overflow-x:clip;max-width:100%}
       .rust-nav{position:sticky;flex-wrap:wrap;padding:0 8px}
       .rust-nav .grow{display:none}
       .rust-nav .rust-menu:not(.rust-menu-fin){display:none}
@@ -942,6 +947,24 @@
       showAlert('Enregistrement impossible : ' + ((err && err.message) ? err.message : 'connexion interrompue') + '.', 'error');
     });
   });
+})();
+</script>
+<script>
+/* Un tableau plus large que l'écran doit défiler dans son cadre, jamais
+   élargir la page : sur téléphone, une page trop large est affichée dézoomée
+   et la barre du bas se retrouve en dehors de la zone visible. */
+(function(){
+  function envelopper(racine){
+    (racine || document).querySelectorAll('table').forEach(function(table){
+      if(table.closest('.rust-scroll')) return;
+      var cadre = document.createElement('div');
+      cadre.className = 'rust-scroll';
+      table.parentNode.insertBefore(cadre, table);
+      cadre.appendChild(table);
+    });
+  }
+  envelopper(document);
+  document.addEventListener('eo:contenu-actualise', function(){ envelopper(document); });
 })();
 </script>
 <script>
