@@ -171,3 +171,12 @@ fn le_jargon_des_indicateurs_est_explique_dans_le_menu() {
         );
     }
 }
+
+/// Sur téléphone, une page plus large que l'écran est affichée dézoomée et la
+/// barre du bas, fixée au viewport de mise en page, sort de la zone visible.
+/// Deux garde-fous : le rognage horizontal et l'enveloppement des tableaux.
+#[test]
+fn rien_ne_peut_elargir_la_page_sur_telephone() {
+    assert!(BASE.contains("html,body{overflow-x:clip;max-width:100%}"));
+    assert!(BASE.contains("if(table.closest('.rust-scroll')) return;"));
+}
