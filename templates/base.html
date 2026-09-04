@@ -8,15 +8,96 @@
   <link rel="apple-touch-icon" href="/static/favicon.png?v={{ app_version }}">
   <link rel="stylesheet" href="/static/style.css?v={{ app_version }}">
   <style>
-    .rust-nav{display:flex;gap:8px;align-items:center;overflow:visible;padding:10px 14px;background:#173f32;color:white;position:sticky;top:0;z-index:20}
-    .rust-nav a{color:white;text-decoration:none;padding:7px 10px;border-radius:8px;white-space:nowrap}.rust-nav a:hover{background:#ffffff22}
-    .rust-nav .rust-menu{position:relative;white-space:nowrap}.rust-nav .rust-menu>span{display:block;padding:7px 10px;cursor:pointer}.rust-nav .rust-sub{display:none;position:absolute;top:100%;left:0;min-width:210px;padding:7px;background:#173f32;border-radius:0 0 10px 10px;box-shadow:0 12px 25px #0004}.rust-nav .rust-menu:hover .rust-sub{display:grid}.rust-nav .rust-sub a{padding:8px 10px}
-    .rust-search{display:flex;gap:5px;align-items:center}.rust-search input{width:150px;padding:6px 8px}.rust-search button{padding:6px 9px}
-    body{min-height:100vh;display:flex;flex-direction:column}.rust-nav .grow{flex:1}.rust-main{width:100%;max-width:1320px;margin:0 auto;padding:18px 18px 96px;flex:1}.rust-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
-    .rust-actions{display:flex;gap:8px;align-items:end;flex-wrap:wrap}.rust-actions label{min-width:130px}.rust-empty{padding:25px;text-align:center;color:#667085}
-    .rust-badge{display:inline-block;padding:3px 8px;border-radius:99px;background:#eef7f0;color:#1e4d3a;font-size:12px}.danger{color:#b42318}.rust-scroll{overflow:auto}
+    /* ===== Barre de navigation : quatre rubriques, ouverture au clic ===== */
+    .rust-nav{display:flex;gap:2px;align-items:center;padding:0 12px;background:#173f32;color:#fff;
+      position:sticky;top:0;z-index:60;flex-wrap:wrap}
+    .rust-nav .site-brand{display:flex;align-items:center;gap:9px;color:#fff;text-decoration:none;
+      font-weight:700;font-size:.92rem;letter-spacing:.02em;padding:10px 12px 10px 0;white-space:nowrap}
+    .rust-nav .site-brand img{width:26px;height:26px;border-radius:7px}
+    .rust-menu{position:relative}
+    .rust-menu>button{background:transparent;border:0;border-radius:0;box-shadow:none;color:#fff;
+      font:inherit;font-weight:600;padding:14px 14px;cursor:pointer;
+      border-bottom:3px solid transparent;white-space:nowrap}
+    .rust-menu>button:hover{background:#ffffff16}
+    .rust-menu>button[aria-expanded=true]{background:#ffffff22}
+    .rust-menu>button:focus-visible{outline:2px solid #f6c68a;outline-offset:-3px}
+    .rust-menu.rubrique-active>button{border-bottom-color:#b06a2c}
+    .rust-menu .chevron{font-size:.7em;opacity:.8;margin-left:5px}
+    .rust-sub{display:none;position:absolute;top:100%;left:0;background:#fff;color:#1d2620;
+      border-top:3px solid #b06a2c;box-shadow:0 22px 40px rgba(11,36,27,.24);z-index:70;
+      padding:18px 20px 20px;border-radius:0 0 12px 12px;
+      grid-template-columns:repeat(auto-fit,minmax(228px,1fr));gap:4px 24px;min-width:270px}
+    .rust-sub.large{width:min(78vw,860px)}
+    .rust-menu>button[aria-expanded=true]+.rust-sub{display:grid}
+    .rust-menu-fin .rust-sub{left:auto;right:0}
+    .rust-sub-groupe h3{margin:0 0 5px;font-size:.71rem;text-transform:uppercase;letter-spacing:.09em;
+      color:#667c72;font-weight:700}
+    .rust-sub a{display:block;padding:8px 10px;border-radius:8px;color:#1d2620;text-decoration:none;line-height:1.3}
+    .rust-sub a:hover,.rust-sub a:focus-visible{background:#eef4f0}
+    .rust-sub a b{display:block;font-weight:600}
+    .rust-sub a small{color:#667c72;font-size:.79rem}
+    .rust-sub a[aria-current=page]{background:#eef4f0;box-shadow:inset 3px 0 0 #b06a2c}
+    .rust-search{display:flex;gap:4px;align-items:center;background:#ffffff1a;border:1px solid #ffffff33;
+      border-radius:9px;padding:0 6px 0 10px;margin:0 6px}
+    .rust-search input{background:transparent;border:0;color:#fff;font:inherit;padding:9px 6px;width:200px;outline:none}
+    .rust-search input::placeholder{color:#ffffffaa}
+    .rust-search button{background:transparent;border:0;color:#fff;font:inherit;font-weight:700;padding:8px;cursor:pointer}
+
+    /* ===== Fil d'Ariane et onglets de la rubrique ===== */
+    .fil-ariane{background:#eef2ef;border-bottom:1px solid #e2e8e3;font-size:.87rem;color:#667c72}
+    .fil-ariane:empty{display:none}
+    .fil-ariane .dedans{max-width:1320px;margin:0 auto;padding:10px 18px;display:flex;gap:7px;
+      align-items:center;flex-wrap:wrap}
+    .fil-ariane a{color:#1e4d3a;text-decoration:none}
+    .fil-ariane a:hover{text-decoration:underline}
+    .fil-ariane .ici{color:#1d2620;font-weight:600}
+    /* Enfant direct d'un body en flex : min-width:0 lui interdit de s'élargir
+       au-delà de l'écran, sans quoi la page entière défile sur téléphone. */
+    #onglets-section{max-width:1320px;width:100%;min-width:0;margin:14px auto 0;padding:0 18px;
+      overflow-x:auto;-webkit-overflow-scrolling:touch}
+    #onglets-section[hidden]{display:none}
+    .fil-ariane{min-width:0}
+    .rust-main{min-width:0}
+
+    body{min-height:100vh;display:flex;flex-direction:column}.rust-nav .grow{flex:1}
+    .rust-main{width:100%;max-width:1320px;margin:0 auto;padding:18px 18px 96px;flex:1}
+    .rust-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+    .rust-actions{display:flex;gap:8px;align-items:end;flex-wrap:wrap}.rust-actions label{min-width:130px}
+    .rust-empty{padding:25px;text-align:center;color:#667085}
+    .rust-badge{display:inline-block;padding:3px 8px;border-radius:99px;background:#eef7f0;color:#1e4d3a;font-size:12px}
+    .danger{color:#b42318}.rust-scroll{overflow:auto}
     .rust-footer{text-align:center;padding:14px 18px;color:#6b7773;font-size:12px;border-top:1px solid #e2e8e3;background:#fff}
-    @media(max-width:850px){.rust-nav{position:static;flex-wrap:wrap}.rust-nav .grow{display:none}.rust-search{order:10;width:100%}.rust-search input{flex:1}.rust-nav .rust-sub{position:fixed;left:10px;right:10px;top:auto;max-height:70vh;overflow:auto}}
+
+    /* ===== Barre du bas sur téléphone ===== */
+    .nav-pouce{display:none}
+    @media(max-width:850px){
+      .rust-nav{position:sticky;flex-wrap:wrap;padding:0 8px}
+      .rust-nav .grow{display:none}
+      .rust-nav .rust-menu:not(.rust-menu-fin){display:none}
+      .rust-search{order:10;width:100%;margin:0 0 8px}
+      .rust-search input{flex:1;width:auto}
+      .rust-menu-fin .rust-sub{position:fixed;left:8px;right:8px;top:auto;width:auto;
+        max-height:70vh;overflow:auto;border-radius:12px}
+      .rust-main{padding-bottom:104px}
+      /* la saisie rapide passe dans la barre du bas */
+      #fab{display:none}
+      .nav-pouce{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:150;background:#fff;
+        border-top:1px solid #e2e8e3;padding:6px 2px calc(8px + env(safe-area-inset-bottom));
+        align-items:flex-end;justify-content:space-around;flex-wrap:nowrap;
+        box-shadow:0 -6px 18px rgba(11,36,27,.08)}
+      .nav-pouce a,.nav-pouce button{background:transparent;border:0;border-radius:10px;box-shadow:none;
+        font:inherit;font-size:.68rem;font-weight:600;color:#667c72;text-decoration:none;display:grid;
+        justify-items:center;gap:3px;padding:6px 4px;cursor:pointer;min-width:0;white-space:nowrap}
+      .nav-pouce .ic{width:22px;height:22px;display:block}
+      .nav-pouce a[aria-current=page]{color:#1e4d3a}
+      .nav-pouce .saisir{background:#b06a2c;color:#fff;border-radius:16px;padding:10px 14px;
+        box-shadow:0 6px 16px rgba(176,106,44,.4);transform:translateY(-9px)}
+      /* La saisie rapide occupe la largeur de l'écran, au-dessus de la barre. */
+      #fab-panel{left:8px;right:8px;width:auto;max-width:none;bottom:88px;
+        max-height:calc(100vh - 190px);overflow:auto}
+      .nav-pouce .saisir .ic{width:24px;height:24px}
+      #onglets-section{margin-top:10px}
+    }
   </style>
   <style>
     /* Capacity badge styles */
@@ -43,40 +124,105 @@
 </head>
 <body class="{% block body_class %}{% endblock %}">
 {% if session %}
-<nav class="rust-nav">
+<nav class="rust-nav" aria-label="Navigation principale">
   <a class="site-brand" href="/" aria-label="EI ORY Emmanuel — Accueil"><img src="/static/favicon.png?v={{ app_version }}" alt=""><span>EI ORY EMMANUEL</span></a>
-  <a href="/">Accueil</a>
-  {% if session.a_truies and ('bandes' in session.pages or 'truies' in session.pages or 'reformes' in session.pages or 'cochettes' in session.pages or 'archives' in session.pages) %}<div class="rust-menu"><span>Reproduction ▾</span><div class="rust-sub">
-    {% if 'bandes' in session.pages %}<a href="/bandes">Bandes</a><a href="/maternite">Maternité / Mise-bas</a>{% endif %}{% if 'truies' in session.pages %}<a href="/truies">Truies</a><a href="/inseminations">Inséminations</a>{% endif %}
-    {% if 'reformes' in session.pages %}<a href="/reformes">Réformes</a>{% endif %}{% if 'cochettes' in session.pages %}<a href="/cochettes">Cochettes</a>{% endif %}{% if 'archives' in session.pages %}<a href="/archives">Archives</a>{% endif %}
+
+  {% if 'quotidien' in session.pages or 'planning' in session.pages or 'entretien' in session.pages %}
+  <div class="rust-menu" data-rubrique="Aujourd’hui"><button type="button" aria-expanded="false">Aujourd’hui <span class="chevron" aria-hidden="true">▾</span></button><div class="rust-sub">
+    <div class="rust-sub-groupe"><h3>Le travail du jour</h3>
+      {% if 'quotidien' in session.pages %}<a href="/quotidien"><b>Quotidien</b><small>Saisies du jour, notes, mortalités</small></a>{% endif %}
+      {% if 'planning' in session.pages %}<a href="/planning"><b>Planning</b><small>Ce qui tombe cette semaine, par bande</small></a>{% endif %}
+      {% if 'entretien' in session.pages %}<a href="/taches"><b>Tâches et entretien</b><small>Travaux, réparations, matériel</small></a>{% endif %}
+    </div>
   </div></div>{% endif %}
-  {% if 'planning' in session.pages or 'quotidien' in session.pages or 'transferts' in session.pages or 'structure' in session.pages or 'reception' in session.pages or 'genetique' in session.pages or 'charcutiers' in session.pages or 'engraissement' in session.pages or 'entretien' in session.pages %}<div class="rust-menu"><span>Élevage ▾</span><div class="rust-sub">
-    {% if 'planning' in session.pages %}<a href="/planning">Planning</a>{% endif %}{% if 'quotidien' in session.pages %}<a href="/quotidien">Quotidien</a>{% endif %}{% if 'transferts' in session.pages %}<a href="/transferts">Transferts</a>{% endif %}
-    {% if 'structure' in session.pages %}<a href="/structure">Structure</a>{% endif %}{% if session.recoit_achats and 'reception' in session.pages %}<a href="/reception">Réception</a>{% endif %}{% if session.module_genetique and 'genetique' in session.pages %}<a href="/genetique">Génétique</a>{% endif %}{% if session.engraisse and session.module_charcutiers_rfid and 'charcutiers' in session.pages %}<a href="/charcutiers">Charcutiers RFID</a>{% endif %}{% if session.engraisse and session.module_prestataires and 'engraissement' in session.pages %}<a href="/engraissement">Prestataire</a>{% endif %}
-    {% if 'entretien' in session.pages %}<a href="/taches">Tâches et entretien</a>{% endif %}
+
+  {% if 'bandes' in session.pages or 'truies' in session.pages or 'cochettes' in session.pages or 'reformes' in session.pages or 'structure' in session.pages or 'transferts' in session.pages or 'reception' in session.pages or 'genetique' in session.pages or 'archives' in session.pages %}
+  <div class="rust-menu" data-rubrique="Mes animaux"><button type="button" aria-expanded="false">Mes animaux <span class="chevron" aria-hidden="true">▾</span></button><div class="rust-sub large">
+    {% if session.a_truies %}<div class="rust-sub-groupe"><h3>Reproduction</h3>
+      {% if 'bandes' in session.pages %}<a href="/bandes"><b>Bandes</b><small>Cycles en cours et archivés</small></a>
+      <a href="/maternite"><b>Maternité / Mise-bas</b><small>Portées, adoptions, sevrage</small></a>{% endif %}
+      {% if 'truies' in session.pages %}<a href="/truies"><b>Truies</b><small>Fiches, historique, ELD</small></a>
+      <a href="/inseminations"><b>Inséminations</b><small>IA, retours, échographies</small></a>{% endif %}
+    </div>
+    <div class="rust-sub-groupe"><h3>Renouvellement</h3>
+      {% if 'cochettes' in session.pages %}<a href="/cochettes"><b>Cochettes</b><small>Quarantaine, mise en lot</small></a>{% endif %}
+      {% if 'reformes' in session.pages %}<a href="/reformes"><b>Réformes</b><small>Sélection et sorties de truies</small></a>{% endif %}
+      {% if session.module_genetique and 'genetique' in session.pages %}<a href="/genetique"><b>Génétique</b><small>Lignées, verrats, doses</small></a>{% endif %}
+    </div>{% endif %}
+    <div class="rust-sub-groupe"><h3>Bâtiments et mouvements</h3>
+      {% if 'structure' in session.pages %}<a href="/structure"><b>Structure</b><small>Sites, salles, cases, capacités</small></a>{% endif %}
+      {% if 'transferts' in session.pages %}<a href="/transferts"><b>Transferts</b><small>Déplacements entre cases</small></a>{% endif %}
+      {% if session.recoit_achats and 'reception' in session.pages %}<a href="/reception"><b>Réception</b><small>Animaux achetés à l’entrée</small></a>{% endif %}
+      {% if 'archives' in session.pages %}<a href="/archives"><b>Archives</b><small>Bandes terminées</small></a>{% endif %}
+    </div>
   </div></div>{% endif %}
-  {% if 'productivite' in session.pages or 'economique' in session.pages or 'ifip' in session.pages or 'charcutiers' in session.pages %}<div class="rust-menu"><span>Indicateurs ▾</span><div class="rust-sub">
-    {% if session.a_truies and 'productivite' in session.pages %}<a href="/gttt">GTTT</a><a href="/productivite">Productivité</a>{% endif %}
-    {% if 'economique' in session.pages %}<a href="/gte">GTE</a>{% endif %}{% if 'ifip' in session.pages %}<a href="/ifip">IFIP</a>{% endif %}{% if 'charcutiers' in session.pages %}<a href="/abattoir">Abattoir</a>{% endif %}
-  </div></div>
-  {% endif %}
-  {% if 'economique' in session.pages or 'stock' in session.pages or 'energie' in session.pages %}<div class="rust-menu"><span>Économie ▾</span><div class="rust-sub">
-    {% if 'economique' in session.pages %}<a href="/economique">Économie</a>{% endif %}{% if 'stock' in session.pages %}<a href="/aliment-previsions">Prévisions aliment</a><a href="/stock">Stocks</a>{% endif %}{% if 'energie' in session.pages %}<a href="/energie">Eau & électricité</a>{% endif %}
+
+  {% if 'productivite' in session.pages or 'economique' in session.pages or 'ifip' in session.pages or 'charcutiers' in session.pages or 'engraissement' in session.pages %}
+  <div class="rust-menu" data-rubrique="Mes résultats"><button type="button" aria-expanded="false">Mes résultats <span class="chevron" aria-hidden="true">▾</span></button><div class="rust-sub">
+    {% if session.a_truies and 'productivite' in session.pages %}<div class="rust-sub-groupe"><h3>Technique</h3>
+      <a href="/gttt"><b>GTTT</b><small>Résultats de reproduction : portées, sevrés</small></a>
+      <a href="/productivite"><b>Productivité</b><small>Porcs produits par truie et par an</small></a>
+    </div>{% endif %}
+    <div class="rust-sub-groupe"><h3>Économique</h3>
+      {% if 'economique' in session.pages %}<a href="/gte"><b>GTE</b><small>Coûts, marges et indice de consommation</small></a>{% endif %}
+      {% if 'ifip' in session.pages %}<a href="/ifip"><b>Références IFIP</b><small>Comparaison à la moyenne nationale</small></a>{% endif %}
+    </div>
+    {% if 'charcutiers' in session.pages or 'engraissement' in session.pages %}<div class="rust-sub-groupe"><h3>Abattoir et engraissement</h3>
+      {% if 'charcutiers' in session.pages %}<a href="/abattoir"><b>Retours d’abattoir</b><small>TMP, poids, plus-value, saisies</small></a>{% endif %}
+      {% if session.engraisse and session.module_charcutiers_rfid and 'charcutiers' in session.pages %}<a href="/charcutiers"><b>Charcutiers RFID</b><small>Suivi individuel des porcs bagués</small></a>{% endif %}
+      {% if session.engraisse and session.module_prestataires and 'engraissement' in session.pages %}<a href="/engraissement"><b>Prestataire</b><small>Engraissement confié à un tiers</small></a>{% endif %}
+    </div>{% endif %}
   </div></div>{% endif %}
-  {% if session.module_vente_directe %}{% if 'vente' in session.pages %}<div class="rust-menu"><span>Vente ▾</span><div class="rust-sub">
-    <a href="/vente-directe">Vente directe</a><a href="/vente-directe/commandes">Commandes clients</a><a href="/vente-directe/bilan">Récapitulatif</a><a href="/vente-directe/sessions">Sessions de vente</a><a href="/vente-directe/communications">Communications clients</a><a href="/commande">Page de commande</a>
-  </div></div>{% endif %}{% endif %}
-  {% if 'documents' in session.pages or 'sanitaire' in session.pages or 'imports' in session.pages %}<div class="rust-menu"><span>Exploitation ▾</span><div class="rust-sub">
-    {% if 'documents' in session.pages %}<a href="/documents-obligatoires">Documents obligatoires</a>{% endif %}{% if 'sanitaire' in session.pages %}<a href="/sanitaire">Sanitaire</a><a href="/resolution-problemes">Résolution de problèmes</a><a href="/pharmacie">Pharmacie</a>{% endif %}{% if 'imports' in session.pages %}<a href="/imports">Importer un document</a>{% endif %}
+
+  {% if 'economique' in session.pages or 'stock' in session.pages or 'energie' in session.pages or 'sanitaire' in session.pages or 'documents' in session.pages or 'imports' in session.pages or session.module_vente_directe %}
+  <div class="rust-menu" data-rubrique="Ma gestion"><button type="button" aria-expanded="false">Ma gestion <span class="chevron" aria-hidden="true">▾</span></button><div class="rust-sub large">
+    <div class="rust-sub-groupe"><h3>Achats et ventes</h3>
+      {% if 'economique' in session.pages %}<a href="/economique"><b>Économie</b><small>Factures, apports, affectation par bande</small></a>{% endif %}
+      {% if session.module_vente_directe %}{% if 'vente' in session.pages %}<a href="/vente-directe"><b>Vente directe</b><small>Commandes, clients, sessions</small></a>
+      <a href="/vente-directe/commandes"><b>Commandes clients</b><small>À préparer et à livrer</small></a>
+      <a href="/vente-directe/bilan"><b>Récapitulatif des ventes</b><small>Sessions, marges, communications</small></a>{% endif %}{% endif %}
+      {% if 'imports' in session.pages %}<a href="/imports"><b>Importer un document</b><small>PDF fournisseur, CSV, relevés</small></a>{% endif %}
+    </div>
+    <div class="rust-sub-groupe"><h3>Stocks et consommations</h3>
+      {% if 'stock' in session.pages %}<a href="/aliment-previsions"><b>Aliment</b><small>Livraisons, silos, prévisions de commande</small></a>
+      <a href="/stock"><b>Stocks</b><small>Inventaires et consommables</small></a>{% endif %}
+      {% if 'energie' in session.pages %}<a href="/energie"><b>Eau et électricité</b><small>Relevés de compteurs</small></a>{% endif %}
+    </div>
+    <div class="rust-sub-groupe"><h3>Sanitaire et papiers</h3>
+      {% if 'sanitaire' in session.pages %}<a href="/sanitaire"><b>Sanitaire</b><small>Protocoles, traitements, délais d’attente</small></a>
+      <a href="/pharmacie"><b>Pharmacie</b><small>Stock de produits et ordonnances</small></a>
+      <a href="/resolution-problemes"><b>Résolution de problèmes</b><small>Conduite à tenir devant un symptôme</small></a>{% endif %}
+      {% if 'documents' in session.pages %}<a href="/documents-obligatoires"><b>Documents obligatoires</b><small>Registre d’élevage, contrôles</small></a>{% endif %}
+    </div>
   </div></div>{% endif %}
-  <button type="button" id="farm-alert-button" class="farm-alert-button" aria-label="Alertes de l’élevage" aria-controls="farm-alert-panel" aria-expanded="false"><span aria-hidden="true">!</span><b id="farm-alert-count">…</b></button>
+
   <span class="grow"></span>
-  <form class="rust-search" action="/recherche" method="get"><input name="q" placeholder="Rechercher…"><button type="submit">OK</button></form>
-  <div class="rust-menu"><span>Aide ▾</span><div class="rust-sub"><a href="/correctifs">Correctifs</a><a href="/apropos">À propos</a><a href="/contact">Diagnostic</a><a href="/etat-donnees">État des données</a></div></div>
-  <span>{{ session.nom }}</span>
-  {% if session.role == 'admin' %}<div class="rust-menu"><span>Administration ▾</span><div class="rust-sub"><a href="/utilisateurs">Utilisateurs</a><a href="/parametres">Paramètres</a><a href="/reglages">Réglages</a><a href="/journal">Journal</a><a href="/maj">Mise à jour et sauvegardes</a></div></div>{% endif %}
-  <a href="/logout">Déconnexion</a>
+  <form class="rust-search" action="/recherche" method="get" role="search"><span aria-hidden="true">🔍</span><input name="q" placeholder="Truie, bande, facture…" aria-label="Rechercher dans l’élevage"><button type="submit">OK</button></form>
+  <button type="button" id="farm-alert-button" class="farm-alert-button" aria-label="Alertes de l’élevage" aria-controls="farm-alert-panel" aria-expanded="false"><span aria-hidden="true">!</span><b id="farm-alert-count">…</b></button>
+
+  <div class="rust-menu rust-menu-fin" data-rubrique="Mon compte"><button type="button" aria-expanded="false">{{ session.nom }} <span class="chevron" aria-hidden="true">▾</span></button><div class="rust-sub">
+    <div class="rust-sub-groupe"><h3>Mon compte</h3>
+      <a href="/mon-compte/mdp"><b>Mot de passe</b><small>Changer mon mot de passe</small></a>
+      <a href="/logout"><b>Déconnexion</b><small>Fermer la session</small></a>
+    </div>
+    <div class="rust-sub-groupe"><h3>Aide</h3>
+      <a href="/correctifs"><b>Nouveautés</b><small>Ce qui a changé, version par version</small></a>
+      <a href="/apropos"><b>À propos</b><small>Le logiciel et ses limites</small></a>
+      <a href="/contact"><b>Diagnostic et contact</b><small>État du serveur, signaler un problème</small></a>
+      {% if session.role != 'salarie' %}<a href="/etat-donnees"><b>État des données</b><small>Incohérences à corriger</small></a>{% endif %}
+    </div>
+    {% if session.role == 'admin' %}<div class="rust-sub-groupe"><h3>Administration</h3>
+      <a href="/utilisateurs"><b>Utilisateurs</b><small>Comptes et droits par page</small></a>
+      <a href="/parametres"><b>Paramètres</b><small>Élevage, aliments, modules</small></a>
+      <a href="/reglages"><b>Réglages</b><small>Valeurs de calcul et seuils</small></a>
+      <a href="/journal"><b>Journal</b><small>Historique des actions</small></a>
+      <a href="/maj"><b>Mise à jour</b><small>Version du serveur</small></a>
+      <a href="/sauvegarde"><b>Sauvegardes</b><small>Télécharger et restaurer la base</small></a>
+    </div>{% endif %}
+  </div></div>
 </nav>
+<div id="fil-ariane" class="fil-ariane" aria-label="Vous êtes ici"></div>
+<div id="onglets-section" class="section-tabs" role="navigation" aria-label="Pages de la rubrique" hidden></div>
 <aside id="farm-alert-panel" class="farm-alert-panel" aria-label="Problèmes et informations attendues" hidden><div class="farm-alert-head"><div><b>État de l’élevage</b><small id="farm-alert-summary">Chargement…</small></div><button type="button" id="farm-alert-close" aria-label="Fermer">✕</button></div><div id="farm-alert-list" class="farm-alert-list"></div>{% if session.role != 'salarie' %}<a class="farm-alert-all" href="/etat-donnees">Ouvrir tous les contrôles</a>{% endif %}</aside>
 {% endif %}
 <main class="rust-main">
@@ -85,6 +231,21 @@
   {% block content %}{% endblock %}
 </main>
 <div id="toast-container" aria-hidden="true"></div>
+{% if session %}<nav class="nav-pouce" aria-label="Navigation rapide">
+  {% if 'quotidien' in session.pages %}<a href="/quotidien" data-pouce="/quotidien"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.6v2.2M12 19.2v2.2M2.6 12h2.2M19.2 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M18.7 5.3l-1.6 1.6M6.9 17.1l-1.6 1.6"/></svg>Aujourd’hui</a>
+  {% elif 'planning' in session.pages %}<a href="/planning" data-pouce="/quotidien"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.6v2.2M12 19.2v2.2M2.6 12h2.2M19.2 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M18.7 5.3l-1.6 1.6M6.9 17.1l-1.6 1.6"/></svg>Aujourd’hui</a>{% endif %}
+  {% if 'bandes' in session.pages %}<a href="/bandes" data-pouce="/bandes"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.4 6.6 5 4l3.1.9M17.6 6.6 19 4l-3.1.9"/><path d="M12 20.2c4 0 7.1-3 7.1-6.9S16 6.4 12 6.4 4.9 9.4 4.9 13.3s3.1 6.9 7.1 6.9Z"/><ellipse cx="12" cy="14.8" rx="2.9" ry="2.1"/><path d="M9.2 11.2h.01M14.8 11.2h.01"/></svg>Animaux</a>
+  {% elif 'truies' in session.pages %}<a href="/truies" data-pouce="/bandes"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.4 6.6 5 4l3.1.9M17.6 6.6 19 4l-3.1.9"/><path d="M12 20.2c4 0 7.1-3 7.1-6.9S16 6.4 12 6.4 4.9 9.4 4.9 13.3s3.1 6.9 7.1 6.9Z"/><ellipse cx="12" cy="14.8" rx="2.9" ry="2.1"/><path d="M9.2 11.2h.01M14.8 11.2h.01"/></svg>Animaux</a>
+  {% elif 'structure' in session.pages %}<a href="/structure" data-pouce="/bandes"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.4 6.6 5 4l3.1.9M17.6 6.6 19 4l-3.1.9"/><path d="M12 20.2c4 0 7.1-3 7.1-6.9S16 6.4 12 6.4 4.9 9.4 4.9 13.3s3.1 6.9 7.1 6.9Z"/><ellipse cx="12" cy="14.8" rx="2.9" ry="2.1"/><path d="M9.2 11.2h.01M14.8 11.2h.01"/></svg>Animaux</a>{% endif %}
+  {% if session.peut_modifier %}<button type="button" class="saisir" id="pouce-saisir" aria-label="Ouvrir la saisie rapide"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5.4v13.2M5.4 12h13.2"/></svg>Saisir</button>{% endif %}
+  {% if 'economique' in session.pages %}<a href="/gte" data-pouce="/gte"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.4V4.6M4 19.4h15.6"/><path d="m7.4 15.4 3.4-4.2 3 2.4 4.2-5.6"/></svg>Résultats</a>
+  {% elif 'productivite' in session.pages %}<a href="/gttt" data-pouce="/gte"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.4V4.6M4 19.4h15.6"/><path d="m7.4 15.4 3.4-4.2 3 2.4 4.2-5.6"/></svg>Résultats</a>
+  {% elif 'charcutiers' in session.pages %}<a href="/abattoir" data-pouce="/gte"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.4V4.6M4 19.4h15.6"/><path d="m7.4 15.4 3.4-4.2 3 2.4 4.2-5.6"/></svg>Résultats</a>{% endif %}
+  {% if 'economique' in session.pages %}<a href="/economique" data-pouce="/economique"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.6 6.6c0-.9.7-1.6 1.6-1.6h3.4l1.8 2.2h8.4c.9 0 1.6.7 1.6 1.6v8.6c0 .9-.7 1.6-1.6 1.6H5.2c-.9 0-1.6-.7-1.6-1.6V6.6Z"/></svg>Gestion</a>
+  {% elif 'stock' in session.pages %}<a href="/stock" data-pouce="/economique"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.6 6.6c0-.9.7-1.6 1.6-1.6h3.4l1.8 2.2h8.4c.9 0 1.6.7 1.6 1.6v8.6c0 .9-.7 1.6-1.6 1.6H5.2c-.9 0-1.6-.7-1.6-1.6V6.6Z"/></svg>Gestion</a>
+  {% elif 'sanitaire' in session.pages %}<a href="/sanitaire" data-pouce="/economique"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.6 6.6c0-.9.7-1.6 1.6-1.6h3.4l1.8 2.2h8.4c.9 0 1.6.7 1.6 1.6v8.6c0 .9-.7 1.6-1.6 1.6H5.2c-.9 0-1.6-.7-1.6-1.6V6.6Z"/></svg>Gestion</a>
+  {% elif 'documents' in session.pages %}<a href="/documents-obligatoires" data-pouce="/economique"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.6 6.6c0-.9.7-1.6 1.6-1.6h3.4l1.8 2.2h8.4c.9 0 1.6.7 1.6 1.6v8.6c0 .9-.7 1.6-1.6 1.6H5.2c-.9 0-1.6-.7-1.6-1.6V6.6Z"/></svg>Gestion</a>{% endif %}
+</nav>{% endif %}
 {% if session and session.peut_modifier %}
 <button id="fab" type="button" title="Saisie rapide" aria-label="Ouvrir la saisie rapide" aria-controls="fab-panel" aria-expanded="false">+</button>
 <aside id="fab-panel" aria-label="Saisie rapide" aria-hidden="true">
@@ -781,6 +942,141 @@
       showAlert('Enregistrement impossible : ' + ((err && err.message) ? err.message : 'connexion interrompue') + '.', 'error');
     });
   });
+})();
+</script>
+<script>
+/* Navigation : menus au clic (jamais au survol), rubrique et page marquées,
+   fil d'Ariane et onglets des pages sœurs construits depuis les liens du menu.
+   Une seule source : ce qui est dans le menu est ce qui est proposé ailleurs. */
+(function(){
+  var menus = Array.prototype.slice.call(document.querySelectorAll('.rust-nav .rust-menu'));
+  if(!menus.length) return;
+
+  function fermerTout(sauf){
+    menus.forEach(function(menu){
+      if(menu === sauf) return;
+      menu.querySelector('button').setAttribute('aria-expanded','false');
+    });
+  }
+  menus.forEach(function(menu){
+    var bouton = menu.querySelector('button');
+    bouton.addEventListener('click', function(event){
+      event.stopPropagation();
+      var ouvert = bouton.getAttribute('aria-expanded') === 'true';
+      fermerTout(menu);
+      bouton.setAttribute('aria-expanded', String(!ouvert));
+    });
+  });
+  document.addEventListener('click', function(){ fermerTout(null); });
+  document.addEventListener('keydown', function(event){
+    if(event.key === 'Escape'){
+      fermerTout(null);
+      var ouvert = document.querySelector('.rust-nav .rust-menu > button[aria-expanded=true]');
+      if(ouvert) ouvert.focus();
+    }
+  });
+
+  // Une page appartient à la rubrique dont un lien correspond au chemin courant ;
+  // à défaut, au premier lien dont le chemin est un préfixe (ex. /bande/12 → /bandes).
+  function situer(){
+    var chemin = window.location.pathname.replace(/\/+$/,'') || '/';
+    var exact = null, approche = null;
+    menus.forEach(function(menu){
+      menu.querySelectorAll('a[href^="/"]').forEach(function(lien){
+        lien.removeAttribute('aria-current');
+        var cible = lien.getAttribute('href').replace(/\/+$/,'') || '/';
+        if(cible === chemin){ exact = exact || {menu:menu, lien:lien}; }
+        else if(cible !== '/' && chemin.indexOf(cible) === 0){ approche = approche || {menu:menu, lien:lien}; }
+      });
+      menu.classList.remove('rubrique-active');
+    });
+    // Racine des pages de détail : /bande/12 relève de /bandes, /truie/8 de /truies.
+    if(!exact && !approche){
+      var racine = '/' + chemin.split('/')[1];
+      var equivalents = {'/bande':'/bandes','/truie':'/truies','/salle':'/structure',
+        '/soin-portee':'/maternite','/charcutier':'/charcutiers','/transfert':'/transferts',
+        '/entretien':'/taches','/recherche':'/truies','/import':'/imports','/gte':'/gte'};
+      var vise = equivalents[racine];
+      if(vise){
+        menus.forEach(function(menu){
+          var lien = menu.querySelector('a[href="' + vise + '"]');
+          if(lien && !approche){ approche = {menu:menu, lien:lien}; }
+        });
+      }
+    }
+    return exact || approche;
+  }
+
+  function construire(){
+    var place = situer();
+    var fil = document.getElementById('fil-ariane');
+    var onglets = document.getElementById('onglets-section');
+    if(!fil || !onglets) return;
+    fil.textContent = '';
+    onglets.textContent = '';
+    if(!place){ onglets.hidden = true; return; }
+
+    place.menu.classList.add('rubrique-active');
+    place.lien.setAttribute('aria-current','page');
+    var rubrique = place.menu.dataset.rubrique || '';
+    var titre = (place.lien.querySelector('b') || place.lien).textContent.trim();
+    var exacte = place.lien.getAttribute('href').replace(/\/+$/,'') ===
+      (window.location.pathname.replace(/\/+$/,'') || '/');
+
+    var dedans = document.createElement('div');
+    dedans.className = 'dedans';
+    var accueil = document.createElement('a');
+    accueil.href = '/'; accueil.textContent = 'Accueil';
+    dedans.appendChild(accueil);
+    [rubrique, titre].forEach(function(texte, index){
+      if(!texte) return;
+      var sep = document.createElement('span'); sep.textContent = '›'; dedans.appendChild(sep);
+      var element;
+      if(index === 1 && exacte){ element = document.createElement('span'); element.className = 'ici'; }
+      else if(index === 1){ element = document.createElement('a'); element.href = place.lien.getAttribute('href'); }
+      else { element = document.createElement('span'); }
+      element.textContent = texte;
+      dedans.appendChild(element);
+    });
+    if(!exacte){
+      var sep = document.createElement('span'); sep.textContent = '›'; dedans.appendChild(sep);
+      var ici = document.createElement('span'); ici.className = 'ici';
+      ici.textContent = (document.title || '').split('·')[0].trim() || 'Détail';
+      dedans.appendChild(ici);
+    }
+    fil.appendChild(dedans);
+
+    // Onglets : les pages sœurs de la rubrique, dans l'ordre du menu.
+    var soeurs = place.menu.querySelectorAll('a[href^="/"]');
+    if(soeurs.length > 1){
+      soeurs.forEach(function(lien){
+        var onglet = document.createElement('a');
+        onglet.href = lien.getAttribute('href');
+        onglet.textContent = (lien.querySelector('b') || lien).textContent.trim();
+        if(lien === place.lien) onglet.className = 'actif';
+        onglets.appendChild(onglet);
+      });
+      onglets.hidden = false;
+    } else {
+      onglets.hidden = true;
+    }
+
+    // Barre du bas : marquer l'entrée correspondant à la rubrique courante.
+    var correspondances = {'Aujourd’hui':'/quotidien','Mes animaux':'/bandes',
+      'Mes résultats':'/gte','Ma gestion':'/economique'};
+    var vise = correspondances[rubrique];
+    document.querySelectorAll('.nav-pouce a[data-pouce]').forEach(function(lien){
+      if(lien.dataset.pouce === vise){ lien.setAttribute('aria-current','page'); }
+      else { lien.removeAttribute('aria-current'); }
+    });
+  }
+  construire();
+  document.addEventListener('eo:contenu-actualise', construire);
+
+  // Le bouton « Saisir » de la barre du bas ouvre la saisie rapide déjà en place.
+  var saisir = document.getElementById('pouce-saisir');
+  var fab = document.getElementById('fab');
+  if(saisir && fab){ saisir.addEventListener('click', function(){ fab.click(); }); }
 })();
 </script>
 {% include "demo_feedback.html" %}
