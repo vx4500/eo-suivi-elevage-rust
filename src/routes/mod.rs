@@ -10609,7 +10609,14 @@ async fn declaration_ajouter(
             stade = Some(deduced);
         }
     }
-    sqlx::query("INSERT INTO declarationmort(bande_code,date,stade,case_id,cause,poids,nombre,declare_par,note) VALUES(?,?,?,?,?,?,?,?,?)")
+    // `horodatage` est renseigné explicitement, jamais laissé au
+    // DEFAULT de la table : les bases héritées de la 1.65 portent la
+    // colonne en NOT NULL sans valeur par défaut, et `CREATE TABLE IF
+    // NOT EXISTS` ne redéfinit pas une table déjà présente. Compter
+    // sur le défaut faisait échouer toute déclaration de mortalité sur
+    // ces bases — et seulement sur elles — avec « NOT NULL constraint
+    // failed: declarationmort.horodatage ».
+    sqlx::query("INSERT INTO declarationmort(horodatage,bande_code,date,stade,case_id,cause,poids,nombre,declare_par,note) VALUES(CURRENT_TIMESTAMP,?,?,?,?,?,?,?,?,?)")
         .bind(&band)
         .bind(form_date_or_today(&form, "date")?)
         .bind(stade)

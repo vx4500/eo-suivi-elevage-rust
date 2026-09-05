@@ -1365,7 +1365,14 @@ pub(super) async fn saisie_rapide(
                     "Sélectionnez une cause configurée".into(),
                 ));
             }
-            sqlx::query("INSERT INTO declarationmort(bande_code,date,stade,case_id,cause,poids,nombre,declare_par,note) VALUES(?,?,?,?,?,?,?,?,?)").bind(band).bind(&date).bind(stade).bind(case_id).bind(&cause).bind(form_f64(&form,"poids")).bind(number).bind(&session.nom).bind(form_text(&form,"note")).execute(&state.pool).await?;
+            // `horodatage` est renseigné explicitement, jamais laissé au
+            // DEFAULT de la table : les bases héritées de la 1.65 portent la
+            // colonne en NOT NULL sans valeur par défaut, et `CREATE TABLE IF
+            // NOT EXISTS` ne redéfinit pas une table déjà présente. Compter
+            // sur le défaut faisait échouer toute déclaration de mortalité sur
+            // ces bases — et seulement sur elles — avec « NOT NULL constraint
+            // failed: declarationmort.horodatage ».
+            sqlx::query("INSERT INTO declarationmort(horodatage,bande_code,date,stade,case_id,cause,poids,nombre,declare_par,note) VALUES(CURRENT_TIMESTAMP,?,?,?,?,?,?,?,?,?)").bind(band).bind(&date).bind(stade).bind(case_id).bind(&cause).bind(form_f64(&form,"poids")).bind(number).bind(&session.nom).bind(form_text(&form,"note")).execute(&state.pool).await?;
             let farrowing:Option<String>=sqlx::query_scalar("SELECT date FROM evenement WHERE truie_id=? AND bande_id=? AND type='mise_bas' ORDER BY date DESC,id DESC LIMIT 1").bind(sow_id).bind(band_id).fetch_optional(&state.pool).await?;
             let age = farrowing
                 .as_deref()
@@ -2259,6 +2266,49 @@ mod perte_porcelet_tests {
             }
             other => panic!("erreur inattendue: {other:?}"),
         }
+        Ok(())
+    }
+
+    /// Vrai bug corrigé ici : sur les bases héritées de la 1.65,
+    /// `declarationmort.horodatage` est NOT NULL sans valeur par défaut.
+    /// `CREATE TABLE IF NOT EXISTS` ne redéfinit pas une table existante, si
+    /// bien que le schéma neuf et la base d'un élevage en production ne se
+    /// ressemblent pas sur ce point. L'INSERT qui s'en remettait au DEFAULT
+    /// passait donc tous les tests et échouait chez l'éleveur, avec une page
+    /// d'erreur générique renvoyant au journal.
+    #[tokio::test]
+    async fn perte_porcelet_sur_une_base_heritee_sans_defaut_horodatage() -> anyhow::Result<()> {
+        let (state, sow, pen) = test_state().await?;
+        // La table telle que la version Python la créait.
+        sqlx::raw_sql(
+            "DROP TABLE declarationmort;
+             CREATE TABLE declarationmort (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                horodatage TEXT NOT NULL,
+                bande_code TEXT, date TEXT, stade TEXT,
+                case_id INTEGER REFERENCES casesalle(id),
+                cause TEXT, poids REAL,
+                nombre INTEGER NOT NULL DEFAULT 1,
+                declare_par TEXT, note TEXT);",
+        )
+        .execute(&state.pool)
+        .await?;
+        saisie_rapide(
+            State(state.clone()),
+            Extension(session()),
+            Form(perte_form(sow, pen, "2")),
+        )
+        .await?;
+        let (nombre, horodatage): (i64, String) =
+            sqlx::query_as("SELECT nombre,horodatage FROM declarationmort")
+                .fetch_one(&state.pool)
+                .await?;
+        assert_eq!(nombre, 2);
+        assert!(!horodatage.trim().is_empty(), "horodatage renseigné");
+        let pertes: i64 = sqlx::query_scalar("SELECT COALESCE(SUM(nb),0) FROM perteporcelet")
+            .fetch_one(&state.pool)
+            .await?;
+        assert_eq!(pertes, 2);
         Ok(())
     }
 }
