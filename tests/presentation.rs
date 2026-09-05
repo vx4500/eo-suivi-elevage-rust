@@ -356,3 +356,26 @@ fn version_235_structure_maternite_et_sevrage_sont_tracables() {
     assert!(routes.contains("SELECT COUNT(*) FROM inventairecase WHERE case_id=?"));
     assert!(!include_str!("../templates/base.html").contains("href=\"/effectifs\""));
 }
+
+/// La dictée n'a d'intérêt qu'avec les mains prises : le bouton n'apparaît
+/// que sur téléphone, et le parcours reste en deux temps jusque dans
+/// l'interface — analyse sans écriture, puis validation de ce qui a été relu.
+#[test]
+fn la_dictee_vocale_est_accessible_depuis_le_telephone() {
+    let base = include_str!("../templates/base.html");
+
+    assert!(base.contains("id=\"vocal-bouton\""));
+    assert!(base.contains("#vocal-bouton{display:none}"));
+    assert!(base.contains("#vocal-bouton{display:grid"));
+    assert!(base.contains("/api/vocal/analyser"));
+    assert!(base.contains("/api/vocal/valider"));
+    assert!(base.contains("/api/vocal/contexte"));
+    // L'effectif présent de la portée est ce qui rend une erreur visible
+    // avant l'enregistrement : il doit figurer sur l'écran de relecture.
+    assert!(base.contains("porcelet(s) présent(s)"));
+    // Le formulaire de relecture reste modifiable : corriger un champ doit
+    // rester plus rapide que redicter.
+    assert!(base.contains("id=\"vocal-truie\""));
+    assert!(base.contains("id=\"vocal-nombre\""));
+    assert!(base.contains("id=\"vocal-cause\""));
+}

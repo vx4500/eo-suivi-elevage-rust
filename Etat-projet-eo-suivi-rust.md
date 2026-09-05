@@ -1,6 +1,29 @@
 # EO-Suivi Élevage Rust — État du projet
 
-Version actuelle : **2.2.63** — Dernière mise à jour de ce document : 5 septembre 2026.
+Version actuelle : **2.2.64** — Dernière mise à jour de ce document : 5 septembre 2026.
+
+### Version 2.2.64 — la dictée depuis le téléphone
+
+La brique serveur de la 2.2.63 n'avait pas d'interface : il fallait passer par
+l'API pour dicter. Un bouton micro apparaît maintenant en haut à droite de
+l'écran, sur téléphone uniquement — c'est en bâtiment, les mains prises, qu'on
+dicte ; au bureau le clavier va plus vite.
+
+Un appui ouvre l'écoute, un second l'arrête et lance l'analyse. L'écran de
+relecture montre alors la truie reconnue, sa bande, la date de mise-bas et
+surtout l'effectif encore présent sous la mère : annoncer trois écrasés sur une
+portée qui n'en compte plus qu'un se voit avant d'enregistrer, pas après. Le
+texte transcrit est rappelé en petit, ce qui permet de distinguer d'un coup
+d'œil une erreur de transcription d'une erreur d'analyse.
+
+Tout reste modifiable avant validation — truie, nombre, cause, date — parce que
+corriger un champ doit rester plus rapide que redicter. Quand le numéro compris
+n'existe pas au cheptel, les numéros voisins sont proposés en boutons : un tap
+suffit. Rien n'est enregistré tant que le bouton n'a pas été pressé, et
+l'enregistrement passe par les mêmes contrôles que la saisie manuelle.
+
+Le micro exige une connexion sécurisée : en http simple, le navigateur refuse
+l'accès et le panneau le dit clairement plutôt que d'échouer en silence.
 
 ### Version 2.2.63 — saisie vocale, et pertes de porcelets réparées
 
@@ -714,7 +737,7 @@ l'arrêt déclenche le retour arrière ; la sauvegarde de la base est conservée
 ```bash
 systemctl status eo-suivi-rust --no-pager -l
 journalctl -u eo-suivi-rust -n 80 --no-pager -l -o cat
-curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.63"
+curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.64"
 ```
 
 Puis ouvrir `https://rust-elevage.basse-chevrie.ovh`.

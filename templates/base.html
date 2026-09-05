@@ -68,6 +68,43 @@
     .danger{color:#b42318}.rust-scroll{overflow:auto}
     .rust-footer{text-align:center;padding:14px 18px;color:#6b7773;font-size:12px;border-top:1px solid #e2e8e3;background:#fff}
 
+    /* ===== Dictée vocale (téléphone) ===== */
+    /* Le bouton n'existe que sur téléphone : c'est en bâtiment, les mains
+       prises, qu'on dicte — au bureau le clavier va plus vite. */
+    #vocal-bouton{display:none}
+    #vocal-panel{position:fixed;left:8px;right:8px;top:64px;z-index:200;background:#fff;color:#1d2620;
+      border-radius:14px;box-shadow:0 22px 46px rgba(11,36,27,.3);padding:14px;
+      max-height:calc(100vh - 120px);overflow:auto}
+    #vocal-panel[hidden]{display:none}
+    #vocal-panel .vocal-head{display:flex;justify-content:space-between;align-items:center;
+      font-weight:700;margin-bottom:10px}
+    #vocal-panel .vocal-head button{background:transparent;border:0;box-shadow:none;font-size:20px;
+      line-height:1;padding:0 4px;cursor:pointer;color:inherit}
+    #vocal-etat{margin:0 0 10px;padding:10px 12px;border-radius:10px;background:#eef4f0;color:#1e4d3a;
+      font-weight:600}
+    #vocal-etat.ecoute{background:#fff3f2;color:#7a1610}
+    #vocal-etat.erreur{background:#fff3f2;color:#7a1610}
+    #vocal-brut{margin:0 0 10px;color:#667c72;font-size:.84rem;font-style:italic}
+    #vocal-brut:empty{display:none}
+    #vocal-portee{margin:0 0 10px;padding:10px 12px;border-radius:10px;background:#f6f9f7;
+      border:1px solid #e2e8e3;font-size:.88rem;line-height:1.45}
+    #vocal-portee:empty{display:none}
+    #vocal-portee b{font-size:1.05rem}
+    #vocal-suggestions{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 10px}
+    #vocal-suggestions button{background:#eef4f0;border:1px solid #cfe0d6;border-radius:9px;
+      padding:8px 12px;font:inherit;font-weight:600;cursor:pointer;box-shadow:none;color:#1e4d3a}
+    #vocal-form label{display:block;margin-bottom:9px;font-weight:600;font-size:.85rem}
+    #vocal-form select,#vocal-form input{width:100%;font:inherit;padding:10px;border-radius:9px;
+      border:1px solid #cfd8d3;margin-top:3px;font-weight:400}
+    #vocal-actions{display:flex;gap:8px;margin-top:12px}
+    #vocal-actions button{flex:1;font:inherit;font-weight:700;padding:13px 10px;border-radius:11px;
+      border:0;cursor:pointer}
+    #vocal-valider{background:#1e4d3a;color:#fff}
+    #vocal-valider:disabled{opacity:.5}
+    #vocal-refaire{background:#eef4f0;color:#1e4d3a;border:1px solid #cfe0d6}
+    #vocal-voile{position:fixed;inset:0;background:rgba(11,36,27,.35);z-index:190}
+    #vocal-voile[hidden]{display:none}
+
     /* ===== Barre du bas sur téléphone ===== */
     .nav-pouce{display:none}
     @media(max-width:850px){
@@ -102,6 +139,13 @@
         max-height:calc(100vh - 190px);overflow:auto}
       .nav-pouce .saisir .ic{width:24px;height:24px}
       #onglets-section{margin-top:10px}
+      /* Bouton micro en haut à droite, à côté du menu du compte. */
+      #vocal-bouton{display:grid;place-items:center;background:#b06a2c;color:#fff;border:0;
+        border-radius:11px;width:40px;height:40px;margin-left:6px;cursor:pointer;
+        box-shadow:0 4px 12px rgba(176,106,44,.35);padding:0}
+      #vocal-bouton .ic{width:21px;height:21px;display:block}
+      #vocal-bouton[aria-pressed=true]{background:#b42318;animation:vocal-pulse 1.1s ease-in-out infinite}
+      @keyframes vocal-pulse{50%{box-shadow:0 0 0 9px rgba(180,35,24,.18)}}
     }
   </style>
   <style>
@@ -205,6 +249,7 @@
   <form class="rust-search" action="/recherche" method="get" role="search"><span aria-hidden="true">🔍</span><input name="q" placeholder="Truie, bande, facture…" aria-label="Rechercher dans l’élevage"><button type="submit">OK</button></form>
   <button type="button" id="farm-alert-button" class="farm-alert-button" aria-label="Alertes de l’élevage" aria-controls="farm-alert-panel" aria-expanded="false"><span aria-hidden="true">!</span><b id="farm-alert-count">…</b></button>
 
+  {% if session.peut_modifier %}<button type="button" id="vocal-bouton" aria-label="Dicter une saisie" aria-pressed="false"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2.6" width="6" height="11.2" rx="3"/><path d="M5.2 11.4a6.8 6.8 0 0 0 13.6 0M12 18.2v3.2"/></svg></button>{% endif %}
   <div class="rust-menu rust-menu-fin" data-rubrique="Mon compte"><button type="button" aria-expanded="false">{{ session.nom }} <span class="chevron" aria-hidden="true">▾</span></button><div class="rust-sub">
     <div class="rust-sub-groupe"><h3>Mon compte</h3>
       <a href="/mon-compte/mdp"><b>Mot de passe</b><small>Changer mon mot de passe</small></a>
@@ -229,6 +274,34 @@
 <div id="fil-ariane" class="fil-ariane" aria-label="Vous êtes ici"></div>
 <div id="onglets-section" class="section-tabs" role="navigation" aria-label="Pages de la rubrique" hidden></div>
 <aside id="farm-alert-panel" class="farm-alert-panel" aria-label="Problèmes et informations attendues" hidden><div class="farm-alert-head"><div><b>État de l’élevage</b><small id="farm-alert-summary">Chargement…</small></div><button type="button" id="farm-alert-close" aria-label="Fermer">✕</button></div><div id="farm-alert-list" class="farm-alert-list"></div>{% if session.role != 'salarie' %}<a class="farm-alert-all" href="/etat-donnees">Ouvrir tous les contrôles</a>{% endif %}</aside>
+{% endif %}
+{% if session and session.peut_modifier %}
+<div id="vocal-voile" hidden></div>
+<aside id="vocal-panel" aria-label="Dictée vocale" hidden>
+  <div class="vocal-head">Dictée <button type="button" id="vocal-fermer" aria-label="Fermer la dictée">✕</button></div>
+  <p id="vocal-etat">Appuie sur le micro pour dicter.</p>
+  <p id="vocal-brut"></p>
+  <div id="vocal-portee"></div>
+  <div id="vocal-suggestions"></div>
+  <form id="vocal-form" hidden>
+    <label>Truie
+      <select id="vocal-truie" required><option value="">— choisir —</option></select>
+    </label>
+    <label>Nombre de porcelets
+      <input id="vocal-nombre" type="number" min="1" step="1" value="1" required>
+    </label>
+    <label>Cause
+      <select id="vocal-cause" required></select>
+    </label>
+    <label>Date
+      <input id="vocal-date" type="date" required>
+    </label>
+    <div id="vocal-actions">
+      <button type="button" id="vocal-refaire">Recommencer</button>
+      <button type="submit" id="vocal-valider">Enregistrer</button>
+    </div>
+  </form>
+</aside>
 {% endif %}
 <main class="rust-main">
 <div id="page-alert" role="alert" hidden></div>
@@ -1104,5 +1177,226 @@
 </script>
 {% include "demo_feedback.html" %}
 <footer class="rust-footer">EO-Suivi Élevage · Version Rust {{ app_version }} · © Emmanuel ORY · <a href="/contact">Contact et propriété</a></footer>
+<script>
+// ===== Dictée vocale =====
+// Deux temps, comme côté serveur : on enregistre et on fait analyser sans
+// rien écrire, puis l'éleveur relit à l'écran et valide. Le formulaire de
+// relecture reste modifiable de bout en bout : une transcription se trompe,
+// et corriger un champ doit rester plus rapide que redicter.
+(function(){
+  var bouton=document.getElementById('vocal-bouton');
+  if(!bouton) return;
+  var panneau=document.getElementById('vocal-panel');
+  var voile=document.getElementById('vocal-voile');
+  var etat=document.getElementById('vocal-etat');
+  var brut=document.getElementById('vocal-brut');
+  var portee=document.getElementById('vocal-portee');
+  var suggestions=document.getElementById('vocal-suggestions');
+  var form=document.getElementById('vocal-form');
+  var champTruie=document.getElementById('vocal-truie');
+  var champNombre=document.getElementById('vocal-nombre');
+  var champCause=document.getElementById('vocal-cause');
+  var champDate=document.getElementById('vocal-date');
+  var valider=document.getElementById('vocal-valider');
+  var enregistreur=null, morceaux=[], flux=null, saisieId=null, csrf='', listesChargees=false;
+
+  function signal(message,kind){
+    var container=document.getElementById('toast-container'); if(!container) return;
+    var toast=document.createElement('div'); toast.className='toast '+(kind||'info'); toast.textContent=message;
+    container.appendChild(toast);
+    window.getComputedStyle(toast).opacity;
+    setTimeout(function(){toast.classList.add('show');},10);
+    setTimeout(function(){toast.classList.remove('show');setTimeout(function(){toast.remove();},240);},4500);
+  }
+  function dire(message,kind){etat.textContent=message;etat.className=kind||'';}
+  function aujourdhui(){
+    var d=new Date(); d.setMinutes(d.getMinutes()-d.getTimezoneOffset());
+    return d.toISOString().slice(0,10);
+  }
+
+  // Les listes servent à corriger ce qui a été mal compris : sans elles, une
+  // erreur de transcription obligerait à quitter la dictée.
+  function chargerListes(){
+    if(listesChargees) return Promise.resolve();
+    return Promise.all([
+      fetch('/api/truies',{credentials:'same-origin'}).then(function(r){return r.json();}),
+      fetch('/api/vocal/contexte',{credentials:'same-origin'}).then(function(r){return r.json();})
+    ]).then(function(res){
+      var truies=res[0]||[], contexte=res[1]||{};
+      csrf=contexte.csrf_token||'';
+      champTruie.replaceChildren(new Option('— choisir —',''));
+      truies.forEach(function(t){
+        champTruie.add(new Option(String(t.num_travail)+(t.bande_code?' · '+t.bande_code:''),String(t.id)));
+      });
+      champCause.replaceChildren();
+      (contexte.causes||[]).forEach(function(c){champCause.add(new Option(c,c));});
+      if(!contexte.transcription_disponible){
+        dire('La transcription n’est pas installée sur le serveur.','erreur');
+      }
+      listesChargees=true;
+    });
+  }
+
+  function ouvrir(){
+    panneau.hidden=false; voile.hidden=false;
+    champDate.value=champDate.value||aujourdhui();
+    chargerListes().catch(function(){dire('Listes indisponibles.','erreur');});
+  }
+  function fermer(){
+    if(enregistreur&&enregistreur.state==='recording'){try{enregistreur.stop();}catch(e){}}
+    arreterFlux();
+    panneau.hidden=true; voile.hidden=true;
+    bouton.setAttribute('aria-pressed','false');
+    reinitialiser();
+  }
+  function reinitialiser(){
+    saisieId=null; form.hidden=true; brut.textContent=''; portee.replaceChildren();
+    suggestions.replaceChildren(); valider.disabled=false;
+    dire('Appuie sur le micro pour dicter.');
+  }
+  function arreterFlux(){
+    if(flux){flux.getTracks().forEach(function(p){p.stop();});flux=null;}
+  }
+
+  function demarrer(){
+    if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
+      ouvrir();
+      dire('Le micro demande une connexion sécurisée (https).','erreur');
+      return;
+    }
+    ouvrir(); reinitialiser();
+    dire('J’écoute… appuie de nouveau pour terminer.','ecoute');
+    bouton.setAttribute('aria-pressed','true');
+    navigator.mediaDevices.getUserMedia({audio:true}).then(function(f){
+      flux=f; morceaux=[];
+      enregistreur=new MediaRecorder(f);
+      enregistreur.ondataavailable=function(e){if(e.data&&e.data.size)morceaux.push(e.data);};
+      enregistreur.onstop=function(){
+        arreterFlux();
+        bouton.setAttribute('aria-pressed','false');
+        if(!morceaux.length){dire('Rien n’a été enregistré.','erreur');return;}
+        envoyer(new Blob(morceaux,{type:morceaux[0].type||'audio/webm'}));
+      };
+      enregistreur.start();
+    }).catch(function(){
+      bouton.setAttribute('aria-pressed','false');
+      dire('Micro refusé ou indisponible.','erreur');
+    });
+  }
+
+  function envoyer(blob){
+    dire('Analyse en cours…');
+    var donnees=new FormData();
+    donnees.append('audio',blob,'dictee.webm');
+    fetch('/api/vocal/analyser',{method:'POST',body:donnees,credentials:'same-origin'})
+      .then(function(r){
+        if(!r.ok) return r.text().then(function(t){throw new Error(t||'Analyse impossible');});
+        return r.json();
+      })
+      .then(remplir)
+      .catch(function(){dire('Analyse impossible. Recommence la dictée.','erreur');});
+  }
+
+  function remplir(data){
+    var analyse=data.analyse||{};
+    saisieId=data.saisie_id; csrf=data.csrf_token||csrf;
+    brut.textContent='« '+(analyse.texte_brut||'')+' »';
+    if(analyse.annulation){dire('Dictée annulée.');return;}
+
+    champNombre.value=analyse.quantite||1;
+    champDate.value=aujourdhui();
+    if(analyse.cause){champCause.value=analyse.cause;}
+
+    portee.replaceChildren();
+    suggestions.replaceChildren();
+    if(data.truie_trouvee&&data.truie){
+      var t=data.truie;
+      champTruie.value=String(t.id);
+      var bloc=document.createElement('div');
+      bloc.innerHTML='<b>Truie '+t.num_travail+'</b>'
+        +(t.bande_code?' · bande '+t.bande_code:'')
+        +'<br>Mise-bas du '+(t.date_mise_bas||'—')
+        +' · <b>'+(t.presents==null?'—':t.presents)+'</b> porcelet(s) présent(s)'
+        +(t.pertes?' · '+t.pertes+' perte(s) déjà notée(s)':'');
+      portee.appendChild(bloc);
+      if(t.presents!=null&&analyse.quantite>t.presents){
+        dire('Attention : plus de pertes que de porcelets présents.','erreur');
+      }else{
+        dire('Relis, puis enregistre.');
+      }
+    }else{
+      champTruie.value='';
+      dire(analyse.num_truie?('Numéro '+analyse.num_truie+' inconnu au cheptel.'):'Numéro non compris.','erreur');
+      (data.suggestions||[]).forEach(function(numero){
+        var b=document.createElement('button');
+        b.type='button'; b.textContent=numero;
+        b.addEventListener('click',function(){choisirNumero(numero);});
+        suggestions.appendChild(b);
+      });
+    }
+    if(analyse.quantite_deduite){
+      portee.appendChild(document.createTextNode(' Quantité non dictée : 1 retenu.'));
+    }
+    form.hidden=false;
+  }
+
+  // Un numéro voisin proposé : on le sélectionne et on recharge le contexte
+  // de sa portée, pour que l'effectif affiché soit bien celui de cette truie.
+  function choisirNumero(numero){
+    var trouve=null;
+    Array.prototype.forEach.call(champTruie.options,function(o){
+      if(o.text.split(' · ')[0]===numero) trouve=o.value;
+    });
+    if(!trouve){signal('Truie '+numero+' introuvable.','error');return;}
+    champTruie.value=trouve;
+    suggestions.replaceChildren();
+    dire('Truie '+numero+' sélectionnée. Relis, puis enregistre.');
+  }
+
+  form.addEventListener('submit',function(e){
+    e.preventDefault();
+    if(!saisieId){signal('Aucune dictée à enregistrer.','error');return;}
+    if(!champTruie.value){signal('Choisis la truie.','error');return;}
+    valider.disabled=true;
+    var donnees=new URLSearchParams();
+    donnees.set('csrf_token',csrf);
+    donnees.set('saisie_id',String(saisieId));
+    donnees.set('truie_id',champTruie.value);
+    donnees.set('nb',champNombre.value);
+    donnees.set('cause',champCause.value);
+    donnees.set('date',champDate.value);
+    fetch('/api/vocal/valider',{
+      method:'POST',credentials:'same-origin',
+      headers:{'Content-Type':'application/x-www-form-urlencoded'},
+      body:donnees.toString()
+    }).then(function(r){
+      if(!r.ok) return r.text().then(function(t){throw new Error(t);});
+      return r.json();
+    }).then(function(){
+      signal('Perte enregistrée.','success');
+      fermer();
+    }).catch(function(err){
+      valider.disabled=false;
+      // Le serveur renvoie sa page d'erreur : on n'en garde que le message.
+      var message=String(err&&err.message||'');
+      var extrait=message.match(/data-app-error="([^"]*)"/);
+      dire(extrait?extrait[1].replace(/&#39;/g,'’').replace(/&amp;/g,'&'):'Enregistrement refusé.','erreur');
+    });
+  });
+
+  bouton.addEventListener('click',function(){
+    if(enregistreur&&enregistreur.state==='recording'){
+      dire('Analyse en cours…');
+      try{enregistreur.stop();}catch(e){arreterFlux();}
+      return;
+    }
+    demarrer();
+  });
+  document.getElementById('vocal-fermer').addEventListener('click',fermer);
+  voile.addEventListener('click',fermer);
+  document.getElementById('vocal-refaire').addEventListener('click',demarrer);
+  document.addEventListener('keydown',function(e){if(e.key==='Escape'&&!panneau.hidden)fermer();});
+})();
+</script>
 </body>
 </html>
