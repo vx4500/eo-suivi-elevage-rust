@@ -1,6 +1,32 @@
 # EO-Suivi Élevage Rust — État du projet
 
-Version actuelle : **2.2.62** — Dernière mise à jour de ce document : 3 septembre 2026.
+Version actuelle : **2.2.63** — Dernière mise à jour de ce document : 5 septembre 2026.
+
+### Version 2.2.63 — saisie vocale, et pertes de porcelets réparées
+
+Les pertes de porcelets saisies depuis le panneau rapide échouaient sur une
+page d'erreur renvoyant au journal. La colonne `declarationmort.horodatage` est
+NOT NULL ; le schéma neuf lui donne une valeur par défaut, mais les bases
+héritées de la 1.65 portent la colonne sans défaut, et `CREATE TABLE IF NOT
+EXISTS` ne redéfinit jamais une table déjà présente. L'écriture qui s'en
+remettait au défaut passait donc tous les tests et échouait sur une base
+d'élevage réelle — pour la saisie rapide comme pour la déclaration de mortalité
+en engraissement. L'horodatage est désormais écrit explicitement, et un test
+recrée la table telle que la version Python la créait.
+
+Première brique des ordres à la parole : l'application mobile enregistre
+l'énoncé, le serveur le transcrit et le comprend, l'éleveur relit à l'écran, et
+rien n'est enregistré avant sa validation. Un ordre ressemble à « truie cinq
+zéro zéro trois deux cinq, deux porcelets écrasés » — les numéros se dictent
+chiffre par chiffre, la forme qui résiste le mieux au bruit d'un bâtiment.
+L'analyse est déterministe, sans modèle de langue : elle ne peut pas inventer un
+numéro qui n'a pas été prononcé, et les causes proposées sont uniquement celles
+configurées dans l'élevage. Quand le numéro compris n'existe pas au cheptel, les
+numéros voisins sont proposés plutôt que la saisie rejetée. La validation passe
+par les mêmes contrôles que la saisie manuelle. Les enregistrements audio sont
+conservés dix jours pour diagnostiquer les dictées mal comprises, puis effacés ;
+le texte transcrit reste. La transcription (whisper.cpp) est optionnelle : sans
+elle, l'analyse d'un texte déjà transcrit fonctionne.
 
 ### Version 2.2.62 — barre du bas réellement visible sur téléphone
 
@@ -688,7 +714,7 @@ l'arrêt déclenche le retour arrière ; la sauvegarde de la base est conservée
 ```bash
 systemctl status eo-suivi-rust --no-pager -l
 journalctl -u eo-suivi-rust -n 80 --no-pager -l -o cat
-curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.62"
+curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.63"
 ```
 
 Puis ouvrir `https://rust-elevage.basse-chevrie.ovh`.
