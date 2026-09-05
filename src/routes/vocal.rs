@@ -22,6 +22,10 @@ struct Moteur {
     binaire: String,
     modele: String,
     ffmpeg: String,
+    /// Nombre de fils de calcul. whisper.cpp en prend quatre par défaut :
+    /// sur un serveur qui a plus de cœurs, c'est autant de temps d'attente
+    /// gagné pour l'éleveur qui patiente devant son téléphone.
+    threads: usize,
 }
 
 impl Moteur {
@@ -31,10 +35,21 @@ impl Moteur {
         if binaire.trim().is_empty() || modele.trim().is_empty() {
             return None;
         }
+        let threads = std::env::var("EO_VOCAL_THREADS")
+            .ok()
+            .and_then(|valeur| valeur.trim().parse::<usize>().ok())
+            .filter(|valeur| *valeur > 0)
+            .unwrap_or_else(|| {
+                std::thread::available_parallelism()
+                    .map(|n| n.get())
+                    .unwrap_or(4)
+            })
+            .min(16);
         Some(Self {
             binaire,
             modele,
             ffmpeg: std::env::var("EO_VOCAL_FFMPEG").unwrap_or_else(|_| "ffmpeg".into()),
+            threads,
         })
     }
 }
@@ -84,11 +99,30 @@ async fn transcrire(moteur: &Moteur, audio: &[u8]) -> AppResult<String> {
 
     // `-nt` supprime les horodatages, `-l fr` fige la langue : sans cela
     // Whisper bascule parfois sur l'anglais au milieu d'une suite de chiffres.
+    let debut = std::time::Instant::now();
+    let threads = moteur.threads.to_string();
     let transcription = tokio::process::Command::new(&moteur.binaire)
-        .args(["-m", &moteur.modele, "-l", "fr", "-nt", "-np", "-f"])
+        .args([
+            "-m",
+            &moteur.modele,
+            "-l",
+            "fr",
+            "-nt",
+            "-np",
+            "-t",
+            &threads,
+            "-f",
+        ])
         .arg(&converti)
         .output()
         .await;
+    // Journaliser la durée permet de savoir s'il faut un modèle plus léger :
+    // c'est la seule mesure qui compte, celle du serveur de l'élevage.
+    tracing::info!(
+        millisecondes = debut.elapsed().as_millis(),
+        threads = moteur.threads,
+        "transcription vocale terminée"
+    );
     nettoyer(vec![entree, converti]).await;
     match transcription {
         Ok(sortie) if sortie.status.success() => {

@@ -102,6 +102,22 @@
     #vocal-valider{background:#1e4d3a;color:#fff}
     #vocal-valider:disabled{opacity:.5}
     #vocal-refaire{background:#eef4f0;color:#1e4d3a;border:1px solid #cfe0d6}
+    /* Pendant l'écoute et l'analyse, l'attente doit se voir : un chrono qui
+       avance dit que le micro prend bien le son, une barre qui défile dit que
+       le serveur travaille. Sans repère, quelques secondes passent pour une
+       panne et l'éleveur appuie une seconde fois. */
+    #vocal-chrono{font-variant-numeric:tabular-nums;font-weight:800;font-size:1.5rem;
+      display:block;margin-top:4px}
+    #vocal-niveau{display:block;height:6px;border-radius:99px;background:#f3d9c2;margin-top:8px;
+      overflow:hidden}
+    #vocal-niveau i{display:block;height:100%;width:0;background:#b42318;border-radius:99px;
+      transition:width .08s linear}
+    #vocal-barre{display:none;height:6px;border-radius:99px;background:#dbe6df;margin-top:8px;
+      overflow:hidden}
+    #vocal-barre.actif{display:block}
+    #vocal-barre i{display:block;height:100%;width:38%;border-radius:99px;background:#1e4d3a;
+      animation:vocal-defile 1.15s ease-in-out infinite}
+    @keyframes vocal-defile{0%{margin-left:-40%}100%{margin-left:100%}}
     #vocal-voile{position:fixed;inset:0;background:rgba(11,36,27,.35);z-index:190}
     #vocal-voile[hidden]{display:none}
 
@@ -140,8 +156,10 @@
       .nav-pouce .saisir .ic{width:24px;height:24px}
       #onglets-section{margin-top:10px}
       /* Bouton micro en haut à droite, à côté du menu du compte. */
+      /* `margin-left:auto` pousse le micro au bout de la barre : l'espace
+         élastique `.grow` qui joue ce rôle sur grand écran est masqué ici. */
       #vocal-bouton{display:grid;place-items:center;background:#b06a2c;color:#fff;border:0;
-        border-radius:11px;width:40px;height:40px;margin-left:6px;cursor:pointer;
+        border-radius:11px;width:40px;height:40px;margin-left:auto;cursor:pointer;
         box-shadow:0 4px 12px rgba(176,106,44,.35);padding:0}
       #vocal-bouton .ic{width:21px;height:21px;display:block}
       #vocal-bouton[aria-pressed=true]{background:#b42318;animation:vocal-pulse 1.1s ease-in-out infinite}
@@ -279,7 +297,8 @@
 <div id="vocal-voile" hidden></div>
 <aside id="vocal-panel" aria-label="Dictée vocale" hidden>
   <div class="vocal-head">Dictée <button type="button" id="vocal-fermer" aria-label="Fermer la dictée">✕</button></div>
-  <p id="vocal-etat">Appuie sur le micro pour dicter.</p>
+  <p id="vocal-etat">Appuie sur le micro pour dicter.<span id="vocal-chrono" hidden></span><span id="vocal-niveau" hidden><i></i></span></p>
+  <div id="vocal-barre"><i></i></div>
   <p id="vocal-brut"></p>
   <div id="vocal-portee"></div>
   <div id="vocal-suggestions"></div>
@@ -1199,6 +1218,13 @@
   var champDate=document.getElementById('vocal-date');
   var valider=document.getElementById('vocal-valider');
   var enregistreur=null, morceaux=[], flux=null, saisieId=null, csrf='', listesChargees=false;
+  var chrono=document.getElementById('vocal-chrono');
+  var niveau=document.getElementById('vocal-niveau');
+  var barre=document.getElementById('vocal-barre');
+  var minuteur=null, debutEcoute=0, contexteAudio=null, analyseur=null, animation=null;
+  // Au-delà, ce n'est plus une dictée : l'enregistrement s'arrête seul plutôt
+  // que d'envoyer une minute de bruit de bâtiment à transcrire.
+  var DUREE_MAX_S=20;
 
   function signal(message,kind){
     var container=document.getElementById('toast-container'); if(!container) return;
@@ -1208,7 +1234,15 @@
     setTimeout(function(){toast.classList.add('show');},10);
     setTimeout(function(){toast.classList.remove('show');setTimeout(function(){toast.remove();},240);},4500);
   }
-  function dire(message,kind){etat.textContent=message;etat.className=kind||'';}
+  function dire(message,kind){
+    // textContent effacerait le chrono et le niveau : on ne remplace que le
+    // premier nœud texte du paragraphe.
+    if(etat.firstChild&&etat.firstChild.nodeType===3){etat.firstChild.nodeValue=message;}
+    else{etat.insertBefore(document.createTextNode(message),etat.firstChild);}
+    etat.className=kind||'';
+  }
+  function vibrer(motif){try{if(navigator.vibrate)navigator.vibrate(motif);}catch(e){}}
+  function attente(actif){barre.classList.toggle('actif',!!actif);}
   function aujourdhui(){
     var d=new Date(); d.setMinutes(d.getMinutes()-d.getTimezoneOffset());
     return d.toISOString().slice(0,10);
@@ -1252,10 +1286,56 @@
   function reinitialiser(){
     saisieId=null; form.hidden=true; brut.textContent=''; portee.replaceChildren();
     suggestions.replaceChildren(); valider.disabled=false;
+    arreterChrono(); arreterNiveau(); attente(false);
     dire('Appuie sur le micro pour dicter.');
   }
   function arreterFlux(){
     if(flux){flux.getTracks().forEach(function(p){p.stop();});flux=null;}
+  }
+
+  function demarrerChrono(){
+    debutEcoute=Date.now();
+    chrono.hidden=false; chrono.textContent='0:00';
+    minuteur=window.setInterval(function(){
+      var s=Math.floor((Date.now()-debutEcoute)/1000);
+      chrono.textContent=Math.floor(s/60)+':'+String(s%60).padStart(2,'0');
+      if(s>=DUREE_MAX_S&&enregistreur&&enregistreur.state==='recording'){
+        dire('Durée maximale atteinte, j’analyse.');
+        try{enregistreur.stop();}catch(e){}
+      }
+    },250);
+  }
+  function arreterChrono(){
+    if(minuteur){window.clearInterval(minuteur);minuteur=null;}
+    chrono.hidden=true;
+  }
+  // Le niveau sonore est le seul retour qui prouve que le micro entend
+  // vraiment quelque chose : un micro coupé donne une barre plate.
+  function suivreNiveau(f){
+    try{
+      var Ctx=window.AudioContext||window.webkitAudioContext;
+      if(!Ctx) return;
+      contexteAudio=new Ctx();
+      var source=contexteAudio.createMediaStreamSource(f);
+      analyseur=contexteAudio.createAnalyser();
+      analyseur.fftSize=512;
+      source.connect(analyseur);
+      var donnees=new Uint8Array(analyseur.frequencyBinCount);
+      var jauge=niveau.firstElementChild;
+      niveau.hidden=false;
+      (function boucle(){
+        animation=window.requestAnimationFrame(boucle);
+        analyseur.getByteTimeDomainData(donnees);
+        var max=0;
+        for(var i=0;i<donnees.length;i++){var v=Math.abs(donnees[i]-128);if(v>max)max=v;}
+        jauge.style.width=Math.min(100,Math.round(max/60*100))+'%';
+      })();
+    }catch(e){}
+  }
+  function arreterNiveau(){
+    if(animation){window.cancelAnimationFrame(animation);animation=null;}
+    if(contexteAudio){try{contexteAudio.close();}catch(e){}contexteAudio=null;}
+    analyseur=null; niveau.hidden=true;
   }
 
   function demarrer(){
@@ -1272,29 +1352,42 @@
       enregistreur=new MediaRecorder(f);
       enregistreur.ondataavailable=function(e){if(e.data&&e.data.size)morceaux.push(e.data);};
       enregistreur.onstop=function(){
-        arreterFlux();
+        var secondes=Math.max(1,Math.round((Date.now()-debutEcoute)/1000));
+        arreterChrono(); arreterNiveau(); arreterFlux();
         bouton.setAttribute('aria-pressed','false');
+        vibrer([40,60,40]);
         if(!morceaux.length){dire('Rien n’a été enregistré.','erreur');return;}
-        envoyer(new Blob(morceaux,{type:morceaux[0].type||'audio/webm'}));
+        envoyer(new Blob(morceaux,{type:morceaux[0].type||'audio/webm'}),secondes);
       };
       enregistreur.start();
+      demarrerChrono(); suivreNiveau(f); vibrer(60);
     }).catch(function(){
       bouton.setAttribute('aria-pressed','false');
+      arreterChrono(); arreterNiveau();
       dire('Micro refusé ou indisponible.','erreur');
     });
   }
 
-  function envoyer(blob){
-    dire('Analyse en cours…');
+  function envoyer(blob,secondes){
+    // Transcrire prend quelques secondes : on annonce ce qui se passe et
+    // combien de son a été pris, plutôt que de laisser un écran figé.
+    attente(true);
+    dire('Envoi de '+secondes+' seconde'+(secondes>1?'s':'')+' de dictée…');
     var donnees=new FormData();
     donnees.append('audio',blob,'dictee.webm');
+    var transcription=window.setTimeout(function(){
+      dire('Transcription en cours…');
+    },700);
     fetch('/api/vocal/analyser',{method:'POST',body:donnees,credentials:'same-origin'})
       .then(function(r){
         if(!r.ok) return r.text().then(function(t){throw new Error(t||'Analyse impossible');});
         return r.json();
       })
-      .then(remplir)
-      .catch(function(){dire('Analyse impossible. Recommence la dictée.','erreur');});
+      .then(function(data){window.clearTimeout(transcription);attente(false);remplir(data);})
+      .catch(function(){
+        window.clearTimeout(transcription); attente(false);
+        dire('Analyse impossible. Recommence la dictée.','erreur');
+      });
   }
 
   function remplir(data){
@@ -1357,7 +1450,7 @@
     e.preventDefault();
     if(!saisieId){signal('Aucune dictée à enregistrer.','error');return;}
     if(!champTruie.value){signal('Choisis la truie.','error');return;}
-    valider.disabled=true;
+    valider.disabled=true; attente(true); dire('Enregistrement…');
     var donnees=new URLSearchParams();
     donnees.set('csrf_token',csrf);
     donnees.set('saisie_id',String(saisieId));
@@ -1373,10 +1466,11 @@
       if(!r.ok) return r.text().then(function(t){throw new Error(t);});
       return r.json();
     }).then(function(){
+      attente(false); vibrer(80);
       signal('Perte enregistrée.','success');
       fermer();
     }).catch(function(err){
-      valider.disabled=false;
+      valider.disabled=false; attente(false);
       // Le serveur renvoie sa page d'erreur : on n'en garde que le message.
       var message=String(err&&err.message||'');
       var extrait=message.match(/data-app-error="([^"]*)"/);
@@ -1386,8 +1480,8 @@
 
   bouton.addEventListener('click',function(){
     if(enregistreur&&enregistreur.state==='recording'){
-      dire('Analyse en cours…');
-      try{enregistreur.stop();}catch(e){arreterFlux();}
+      dire('Fin de la dictée…');
+      try{enregistreur.stop();}catch(e){arreterChrono();arreterNiveau();arreterFlux();}
       return;
     }
     demarrer();

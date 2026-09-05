@@ -1,6 +1,27 @@
 # EO-Suivi Élevage Rust — État du projet
 
-Version actuelle : **2.2.64** — Dernière mise à jour de ce document : 5 septembre 2026.
+Version actuelle : **2.2.65** — Dernière mise à jour de ce document : 5 septembre 2026.
+
+### Version 2.2.65 — savoir que ça écoute, et où ça en est
+
+Retour de terrain sur la dictée : l'attente était aveugle. On ne voyait ni que
+le micro captait, ni que le serveur travaillait, et quelques secondes de silence
+passent pour une panne — l'éleveur appuie une seconde fois et perd sa dictée.
+
+Le panneau montre maintenant un chrono qui avance et une barre de niveau
+sonore : un micro coupé donne une barre plate, ce qu'aucun message ne dirait
+aussi vite. Le téléphone vibre au début et à la fin de l'écoute, ce qui compte
+quand l'écran n'est pas sous les yeux. L'analyse annonce ses étapes — envoi,
+puis transcription — avec une barre qui défile, et l'enregistrement final fait
+de même. Au-delà de vingt secondes la dictée s'arrête seule : ce n'est plus une
+dictée, et transcrire du bruit de bâtiment ne fait qu'allonger l'attente.
+
+La transcription utilise désormais tous les cœurs de la machine au lieu des
+quatre que whisper.cpp prend par défaut, et sa durée est journalisée : c'est la
+seule mesure qui permette de décider s'il faut un modèle plus léger. Le réglage
+`EO_VOCAL_THREADS` permet de la borner sur un serveur partagé.
+
+Le bouton micro se place enfin au bout de la barre du haut, à droite.
 
 ### Version 2.2.64 — la dictée depuis le téléphone
 
@@ -737,7 +758,7 @@ l'arrêt déclenche le retour arrière ; la sauvegarde de la base est conservée
 ```bash
 systemctl status eo-suivi-rust --no-pager -l
 journalctl -u eo-suivi-rust -n 80 --no-pager -l -o cat
-curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.64"
+curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.65"
 ```
 
 Puis ouvrir `https://rust-elevage.basse-chevrie.ovh`.

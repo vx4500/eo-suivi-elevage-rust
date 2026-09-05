@@ -1,4 +1,4 @@
-# EO-Suivi Élevage — portage Rust 2.2.64
+# EO-Suivi Élevage — portage Rust 2.2.65
 
 Cette archive reprend la base EO-Suivi 1.65 sous forme d'un serveur Rust. Elle
 n'utilise plus FastAPI, SQLModel, Uvicorn ni Python pour les fonctions déjà
@@ -123,6 +123,7 @@ La base est conservée dans le volume `eo_data`.
 | `EO_VOCAL_WHISPER` | — | chemin du binaire whisper.cpp ; vide = saisie vocale sans transcription |
 | `EO_VOCAL_MODELE` | — | chemin du modèle ggml français (`small` suffit) |
 | `EO_VOCAL_FFMPEG` | `ffmpeg` | commande de conversion de l'audio du téléphone |
+| `EO_VOCAL_THREADS` | cœurs de la machine | fils de calcul de la transcription |
 
 ### Saisie vocale
 
@@ -147,6 +148,11 @@ Le découpage suit ce parcours :
 `GET /api/vocal/contexte` fournit à l'application le jeton CSRF, les causes de
 perte de l'élevage et la longueur des numéros de travail. Les causes ne sont
 jamais inventées : seules celles configurées dans l'élevage sont proposées.
+
+La durée de chaque transcription est journalisée : `journalctl -u eo-suivi-rust
+| grep "transcription vocale"` dit s'il faut un modèle plus léger. Le modèle
+`base` transcrit environ trois fois plus vite que `small`, ce qui suffit
+largement pour des chiffres dictés un par un et une dizaine de mots de métier.
 
 Sans `EO_VOCAL_WHISPER` et `EO_VOCAL_MODELE`, tout reste utilisable avec un
 texte déjà transcrit — par le téléphone, par exemple — et seule la
