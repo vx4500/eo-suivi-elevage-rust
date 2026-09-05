@@ -1,0 +1,181 @@
+From ed8515be1bb700a625970447a76b8d5d8ca7fd14 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 4 Sep 2026 10:31:56 +0000
+Subject: [PATCH] =?UTF-8?q?Barre=20du=20bas=20r=C3=A9ellement=20visible=20?=
+ =?UTF-8?q?sur=20t=C3=A9l=C3=A9phone=20(2.2.62)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Un seul élément trop large élargit le viewport de mise en page : la page est
+alors affichée dézoomée et la barre du bas, fixée à ce viewport, se retrouve
+hors de la zone visible — il fallait descendre jusqu'en bas pour la voir.
+
+- les tableaux qui n'étaient pas déjà dans un cadre défilant y sont placés
+- html et body sont rognés horizontalement sur téléphone (clip, qui ne casse
+  pas le sticky de la barre du haut contrairement à hidden)
+- test de non-régression sur ces deux garde-fous
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FAFaGdCbb2yRkHgLLnVcM1
+---
+ .github/workflows/rust.yml   |  2 +-
+ Cargo.lock                   |  2 +-
+ Cargo.toml                   |  2 +-
+ Etat-projet-eo-suivi-rust.md | 13 +++++++++++--
+ README.md                    |  2 +-
+ templates/base.html          | 23 +++++++++++++++++++++++
+ templates/correctifs.html    |  1 +
+ tests/navigation.rs          |  9 +++++++++
+ 8 files changed, 48 insertions(+), 6 deletions(-)
+
+diff --git a/.github/workflows/rust.yml b/.github/workflows/rust.yml
+index 3c523ef..837f38c 100644
+--- a/.github/workflows/rust.yml
++++ b/.github/workflows/rust.yml
+@@ -37,6 +37,6 @@ jobs:
+         run: file target/x86_64-unknown-linux-musl/release/eo-suivi-elevage | grep -Eq "statically linked|static-pie linked"
+       - uses: actions/upload-artifact@v4
+         with:
+-          name: eo-suivi-elevage-2.2.61-linux-x86_64-musl
++          name: eo-suivi-elevage-2.2.62-linux-x86_64-musl
+           path: target/x86_64-unknown-linux-musl/release/eo-suivi-elevage
+           if-no-files-found: error
+diff --git a/Cargo.lock b/Cargo.lock
+index f351dd1..e2fb335 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -648,7 +648,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "eo-suivi-elevage"
+-version = "2.2.61"
++version = "2.2.62"
+ dependencies = [
+  "anyhow",
+  "axum",
+diff --git a/Cargo.toml b/Cargo.toml
+index 9109282..88b9f58 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -1,6 +1,6 @@
+ [package]
+ name = "eo-suivi-elevage"
+-version = "2.2.61"
++version = "2.2.62"
+ edition = "2021"
+ description = "EO-Suivi Elevage - serveur Rust compatible avec les bases SQLite v1.65"
+ license = "proprietary"
+diff --git a/Etat-projet-eo-suivi-rust.md b/Etat-projet-eo-suivi-rust.md
+index 0557c33..1eefc63 100644
+--- a/Etat-projet-eo-suivi-rust.md
++++ b/Etat-projet-eo-suivi-rust.md
+@@ -1,6 +1,15 @@
+ # EO-Suivi Élevage Rust — État du projet
+ 
+-Version actuelle : **2.2.61** — Dernière mise à jour de ce document : 3 septembre 2026.
++Version actuelle : **2.2.62** — Dernière mise à jour de ce document : 3 septembre 2026.
++
++### Version 2.2.62 — barre du bas réellement visible sur téléphone
++
++La barre de navigation du bas était bien fixée à l'écran, mais un seul élément
++trop large — un tableau non encadré, par exemple — suffisait à élargir la page :
++le navigateur affichait alors tout dézoomé et ancrait la barre en bas d'une zone
++plus grande que l'écran, obligeant à descendre jusqu'en bas pour la voir. Les
++tableaux qui n'étaient pas déjà dans un cadre défilant le sont désormais, et la
++page ne peut plus dépasser la largeur de l'écran sur téléphone.
+ 
+ ### Version 2.2.61 — navigation refondue avant les essais éleveurs
+ 
+@@ -679,7 +688,7 @@ l'arrêt déclenche le retour arrière ; la sauvegarde de la base est conservée
+ ```bash
+ systemctl status eo-suivi-rust --no-pager -l
+ journalctl -u eo-suivi-rust -n 80 --no-pager -l -o cat
+-curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.61"
++curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.62"
+ ```
+ 
+ Puis ouvrir `https://rust-elevage.basse-chevrie.ovh`.
+diff --git a/README.md b/README.md
+index 8beb538..8e1c014 100644
+--- a/README.md
++++ b/README.md
+@@ -1,4 +1,4 @@
+-# EO-Suivi Élevage — portage Rust 2.2.61
++# EO-Suivi Élevage — portage Rust 2.2.62
+ 
+ Cette archive reprend la base EO-Suivi 1.65 sous forme d'un serveur Rust. Elle
+ n'utilise plus FastAPI, SQLModel, Uvicorn ni Python pour les fonctions déjà
+diff --git a/templates/base.html b/templates/base.html
+index a1759b1..2d5fbd5 100644
+--- a/templates/base.html
++++ b/templates/base.html
+@@ -71,6 +71,11 @@
+     /* ===== Barre du bas sur téléphone ===== */
+     .nav-pouce{display:none}
+     @media(max-width:850px){
++      /* Un seul élément trop large élargit le viewport de mise en page :
++         tout est alors dézoomé et la barre du bas, fixée à ce viewport,
++         se retrouve hors de l'écran. `clip` l'empêche sans casser le
++         `sticky` de la barre du haut, contrairement à `hidden`. */
++      html,body{overflow-x:clip;max-width:100%}
+       .rust-nav{position:sticky;flex-wrap:wrap;padding:0 8px}
+       .rust-nav .grow{display:none}
+       .rust-nav .rust-menu:not(.rust-menu-fin){display:none}
+@@ -945,6 +950,24 @@
+ })();
+ </script>
+ <script>
++/* Un tableau plus large que l'écran doit défiler dans son cadre, jamais
++   élargir la page : sur téléphone, une page trop large est affichée dézoomée
++   et la barre du bas se retrouve en dehors de la zone visible. */
++(function(){
++  function envelopper(racine){
++    (racine || document).querySelectorAll('table').forEach(function(table){
++      if(table.closest('.rust-scroll')) return;
++      var cadre = document.createElement('div');
++      cadre.className = 'rust-scroll';
++      table.parentNode.insertBefore(cadre, table);
++      cadre.appendChild(table);
++    });
++  }
++  envelopper(document);
++  document.addEventListener('eo:contenu-actualise', function(){ envelopper(document); });
++})();
++</script>
++<script>
+ /* Navigation : menus au clic (jamais au survol), rubrique et page marquées,
+    fil d'Ariane et onglets des pages sœurs construits depuis les liens du menu.
+    Une seule source : ce qui est dans le menu est ce qui est proposé ailleurs. */
+diff --git a/templates/correctifs.html b/templates/correctifs.html
+index 0253257..39e0f8c 100644
+--- a/templates/correctifs.html
++++ b/templates/correctifs.html
+@@ -1,6 +1,7 @@
+ {% extends "base.html" %}
+ {% block content %}
+ <h1>Correctifs et versions</h1>
++<section class="card"><h2>2.2.62 — barre du bas visible sur téléphone</h2><ul><li>La barre de navigation du bas reste sous le pouce sans avoir à descendre en bas de la page : un tableau trop large ne peut plus élargir l’écran et tout dézoomer.</li><li>Les tableaux qui débordaient défilent maintenant dans leur propre cadre, sur toutes les pages.</li></ul></section>
+ <section class="card"><h2>2.2.61 — navigation repensée</h2><ul><li>Quatre rubriques au lieu de neuf menus : Aujourd’hui, Mes animaux, Mes résultats, Ma gestion.</li><li>Les menus s’ouvrent au clic : plus d’ouverture involontaire à la souris, plus de tap fantôme sur écran tactile, et une navigation utilisable au clavier.</li><li>Vous savez toujours où vous êtes : rubrique soulignée, fil d’Ariane, et onglets des écrans voisins sous le titre.</li><li>Chaque entrée de menu explique ce qu’elle contient : plus besoin de deviner ce que cachent GTTT, GTE ou IFIP.</li><li>Sur téléphone, une barre en bas de l’écran met Aujourd’hui, Animaux, Résultats et Gestion sous le pouce, avec au centre le bouton Saisir.</li><li>La recherche accepte un numéro de truie, un code de bande ou un numéro de facture, et le menu de votre nom réunit mot de passe, aide et administration.</li></ul></section>
+ <section class="card"><h2>2.2.60 — imports de factures et de ventes plus tolérants</h2><ul><li>Un PDF illisible n’annule plus le dépôt entier : les autres fichiers sont analysés et les fichiers écartés sont nommés.</li><li>Une ligne incomprise n’empêche plus d’importer les autres : elle est laissée de côté et signalée.</li><li>Une facture déjà enregistrée peut être remplacée ligne par ligne, en cochant explicitement le remplacement.</li><li>Un fichier dont l’aperçu a expiré ou été annulé peut être redéposé.</li><li>Nouvel import CSV des factures, tous secteurs, quand le PDF du fournisseur n’est pas reconnu.</li><li>Les PDF scannés passent par la reconnaissance de caractères si le serveur dispose de poppler-utils et tesseract-ocr.</li><li>Les synthèses Uniporc sont lues derrière leurs libellés et acceptent d’autres formes de frappe.</li><li>Le stade d’aliment proposé dans l’aperçu correspond enfin à celui détecté dans le nom du produit.</li></ul></section>
+ <section class="card"><h2>2.2.59 — GTE imprimable et enregistrement sans rechargement</h2><ul><li>La page GTE dispose d’un bouton d’impression : sortie A4 paysage, tableaux entiers, en-têtes de colonnes répétés à chaque page et rappel de la période imprimée.</li><li>Enregistrer une modification ne recharge plus la page entière : le contenu se met à jour sur place et vous restez où vous étiez.</li><li>Une erreur s’affiche désormais dans un encart en haut de la page en cours, au lieu d’ouvrir une page d’erreur séparée.</li></ul></section>
+diff --git a/tests/navigation.rs b/tests/navigation.rs
+index c179bb1..0843e4b 100644
+--- a/tests/navigation.rs
++++ b/tests/navigation.rs
+@@ -171,3 +171,12 @@ fn le_jargon_des_indicateurs_est_explique_dans_le_menu() {
+         );
+     }
+ }
++
++/// Sur téléphone, une page plus large que l'écran est affichée dézoomée et la
++/// barre du bas, fixée au viewport de mise en page, sort de la zone visible.
++/// Deux garde-fous : le rognage horizontal et l'enveloppement des tableaux.
++#[test]
++fn rien_ne_peut_elargir_la_page_sur_telephone() {
++    assert!(BASE.contains("html,body{overflow-x:clip;max-width:100%}"));
++    assert!(BASE.contains("if(table.closest('.rust-scroll')) return;"));
++}
+-- 
+2.43.0
+
