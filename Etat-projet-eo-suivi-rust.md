@@ -1,6 +1,31 @@
 # EO-Suivi Élevage Rust — État du projet
 
-Version actuelle : **2.2.66** — Dernière mise à jour de ce document : 5 septembre 2026.
+Version actuelle : **2.2.67** — Dernière mise à jour de ce document : 5 septembre 2026.
+
+### Version 2.2.67 — la dictée confrontée au terrain
+
+Premières dictées en bâtiment, et trois défauts que seul l'usage pouvait
+montrer.
+
+Le moteur ne connaissait pas le vocabulaire : « porcelets écrasés » ressortait
+en « pour se les écraser », « par la truie » en « sur le trouille ». Une amorce
+de contexte lui est désormais donnée — truie, cochette, porcelets, mise bas,
+sevrage, écrasés, chétif, splayleg — ce qui oriente le décodage vers les mots
+qu'on attend réellement.
+
+La transcription d'une suite de chiffres ajoute ou perd un chiffre : six
+chiffres dictés ressortaient en sept ou huit. Exiger une correspondance exacte
+revenait à rejeter une dictée pourtant compréhensible. Le numéro entendu est
+maintenant rapproché des numéros réels du cheptel, fenêtre par fenêtre : les
+truies à deux chiffres près sont proposées, et l'éleveur tranche d'un tap. Rien
+n'est choisi d'office — désigner une truie au hasard serait pire que de dire
+qu'on n'a pas compris.
+
+Enfin, transcrire demande une dizaine de secondes sur une machine à deux cœurs,
+et l'écran ne le disait pas : la barre défilait sans repère, ce qui passe pour
+une panne. Un compteur affiche maintenant les secondes écoulées, et au bout
+d'une minute la requête est abandonnée avec un message plutôt que de laisser
+attendre indéfiniment.
 
 ### Version 2.2.66 — la saisie rapide reprise à partir du terrain
 
@@ -799,7 +824,7 @@ l'arrêt déclenche le retour arrière ; la sauvegarde de la base est conservée
 ```bash
 systemctl status eo-suivi-rust --no-pager -l
 journalctl -u eo-suivi-rust -n 80 --no-pager -l -o cat
-curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.66"
+curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.67"
 ```
 
 Puis ouvrir `https://rust-elevage.basse-chevrie.ovh`.

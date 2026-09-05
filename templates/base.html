@@ -1540,18 +1540,34 @@
     dire('Envoi de '+secondes+' seconde'+(secondes>1?'s':'')+' de dictée…');
     var donnees=new FormData();
     donnees.append('audio',blob,'dictee.webm');
-    var transcription=window.setTimeout(function(){
-      dire('Transcription en cours…');
-    },700);
-    fetch('/api/vocal/analyser',{method:'POST',body:donnees,credentials:'same-origin'})
+
+    // Transcrire prend une dizaine de secondes sur un serveur d'élevage. Un
+    // compteur qui monte vaut mieux qu'un écran figé : sans lui, l'attente
+    // passe pour une panne et la dictée est reprise pour rien.
+    var depuis=Date.now();
+    var suivi=window.setInterval(function(){
+      var s=Math.round((Date.now()-depuis)/1000);
+      dire('Transcription en cours… '+s+' s');
+    },1000);
+    // Au-delà, c'est que le serveur ne répondra plus : mieux vaut le dire que
+    // laisser la barre défiler indéfiniment.
+    var abandon=new AbortController();
+    var limite=window.setTimeout(function(){abandon.abort();},60000);
+    function terminer(){window.clearInterval(suivi);window.clearTimeout(limite);attente(false);}
+
+    fetch('/api/vocal/analyser',{
+      method:'POST',body:donnees,credentials:'same-origin',signal:abandon.signal
+    })
       .then(function(r){
         if(!r.ok) return r.text().then(function(t){throw new Error(t||'Analyse impossible');});
         return r.json();
       })
-      .then(function(data){window.clearTimeout(transcription);attente(false);remplir(data);})
-      .catch(function(){
-        window.clearTimeout(transcription); attente(false);
-        dire('Analyse impossible. Recommence la dictée.','erreur');
+      .then(function(data){terminer();remplir(data);})
+      .catch(function(err){
+        terminer();
+        var expire=err&&err.name==='AbortError';
+        dire(expire?'Le serveur n’a pas répondu. Réessaie.'
+                   :'Analyse impossible. Recommence la dictée.','erreur');
       });
   }
 

@@ -9,6 +9,12 @@
 use super::*;
 use crate::vocal;
 
+/// Amorce donnée à whisper.cpp pour l'orienter vers le vocabulaire du métier.
+/// Elle n'apparaît pas dans la transcription : elle sert de contexte.
+const AMORCE: &str = "Élevage de porcs. Truie, cochette, porcelets, mise bas, \
+sevrage, écrasés, chétif, diarrhée, splayleg, mort-nés, momifiés, tétines, bande, \
+maternité. Les numéros de truie sont dictés chiffre par chiffre.";
+
 /// Nombre de numéros voisins proposés quand le numéro compris est inconnu.
 const VOISINS_PROPOSES: usize = 3;
 
@@ -111,6 +117,12 @@ async fn transcrire(moteur: &Moteur, audio: &[u8]) -> AppResult<String> {
             "-np",
             "-t",
             &threads,
+            // Le modèle ne connaît pas le vocabulaire de l'élevage : sans
+            // amorce, « porcelets écrasés » ressort en « pour se les écraser »
+            // et « par la truie » en « sur le trouille ». Cette phrase oriente
+            // le décodage vers les mots qu'on attend réellement.
+            "--prompt",
+            AMORCE,
             "-f",
         ])
         .arg(&converti)
@@ -279,7 +291,17 @@ pub(super) async fn analyser(
                 )
                 .fetch_all(&state.pool)
                 .await?;
-                suggestions = vocal::voisins(numero, &cheptel, VOISINS_PROPOSES);
+                // La suite de chiffres entendue vaut mieux que le numéro
+                // découpé : whisper ajoute ou perd un chiffre, et c'est en
+                // comparant toute la suite au cheptel qu'on retrouve la truie.
+                let suite = analyse.chiffres_bruts.as_deref().unwrap_or(numero);
+                suggestions = vocal::rapprocher(suite, &cheptel, VOISINS_PROPOSES)
+                    .into_iter()
+                    .map(|(numero, _)| numero)
+                    .collect();
+                if suggestions.is_empty() {
+                    suggestions = vocal::voisins(numero, &cheptel, VOISINS_PROPOSES);
+                }
             }
         }
     }

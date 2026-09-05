@@ -1,4 +1,4 @@
-# EO-Suivi Élevage — portage Rust 2.2.66
+# EO-Suivi Élevage — portage Rust 2.2.67
 
 Cette archive reprend la base EO-Suivi 1.65 sous forme d'un serveur Rust. Elle
 n'utilise plus FastAPI, SQLModel, Uvicorn ni Python pour les fonctions déjà
@@ -153,6 +153,15 @@ La durée de chaque transcription est journalisée : `journalctl -u eo-suivi-rus
 | grep "transcription vocale"` dit s'il faut un modèle plus léger. Le modèle
 `base` transcrit environ trois fois plus vite que `small`, ce qui suffit
 largement pour des chiffres dictés un par un et une dizaine de mots de métier.
+Sur une machine à deux cœurs, `small` demande une dizaine de secondes par
+dictée : `base` y est nettement plus confortable.
+
+Une amorce de vocabulaire est passée au moteur — truie, porcelets, écrasés,
+mise bas — sans quoi « porcelets écrasés » ressort en « pour se les écraser ».
+Et comme la transcription d'une suite de chiffres ajoute ou perd volontiers un
+chiffre, le numéro entendu est rapproché du cheptel réel : les truies dont le
+numéro est à deux chiffres près de ce qui a été dit sont proposées d'un tap,
+plutôt que la dictée rejetée.
 
 Sans `EO_VOCAL_WHISPER` et `EO_VOCAL_MODELE`, tout reste utilisable avec un
 texte déjà transcrit — par le téléphone, par exemple — et seule la

@@ -77,6 +77,10 @@ pub struct Analyse {
     pub texte_brut: String,
     pub texte_normalise: String,
     pub num_truie: Option<String>,
+    /// Toute la suite de chiffres entendue, avant découpe. Whisper ajoute ou
+    /// perd volontiers un chiffre : c'est elle, et non le numéro découpé, qui
+    /// permet de retrouver la bonne truie au cheptel.
+    pub chiffres_bruts: Option<String>,
     pub quantite: Option<i64>,
     /// Vrai quand la quantité n'a pas été prononcée et qu'on a retenu 1.
     pub quantite_deduite: bool,
@@ -306,6 +310,7 @@ pub fn analyser(texte: &str, causes: &[String], longueur_num: usize) -> Analyse 
 
     let mut quantite: Option<i64> = None;
     if let Some(segment) = porteur {
+        analyse.chiffres_bruts = Some(segment.chiffres.clone());
         if segment.chiffres.len() > longueur_num && longueur_num > 0 {
             // Numéro et quantité prononcés d'affilée : la longueur du numéro
             // tranche. Le reliquat est la quantité.
@@ -381,6 +386,54 @@ pub fn distance(a: &str, b: &str) -> usize {
     }
     ligne[b.len()]
 }
+
+/// Rapproche une suite de chiffres entendue des numéros réels du cheptel.
+///
+/// Dicter « cinq zéro zéro trois deux cinq » peut ressortir en sept ou huit
+/// chiffres : le modèle en ajoute, en perd, ou colle un morceau de la suite du
+/// propos. Exiger une correspondance exacte revient alors à rejeter une dictée
+/// pourtant compréhensible. On compare donc chaque numéro du cheptel à toutes
+/// les fenêtres de longueur voisine, et on classe par écart croissant.
+///
+/// Rien n'est choisi d'office : les meilleures correspondances sont proposées,
+/// c'est l'éleveur qui tranche d'un geste sur l'écran de relecture.
+pub fn rapprocher(chiffres: &str, cheptel: &[String], maximum: usize) -> Vec<(String, usize)> {
+    if chiffres.is_empty() {
+        return Vec::new();
+    }
+    let mut classes: Vec<(String, usize)> = cheptel
+        .iter()
+        .filter_map(|numero| {
+            let attendue = numero.chars().count();
+            if attendue == 0 {
+                return None;
+            }
+            let suite: Vec<char> = chiffres.chars().collect();
+            let mut meilleure = usize::MAX;
+            // Fenêtres d'un chiffre en moins à un chiffre en plus : au-delà,
+            // ce n'est plus une erreur de transcription mais un autre numéro.
+            for largeur in attendue.saturating_sub(1)..=attendue + 1 {
+                if largeur == 0 || largeur > suite.len() {
+                    continue;
+                }
+                for depart in 0..=(suite.len() - largeur) {
+                    let fenetre: String = suite[depart..depart + largeur].iter().collect();
+                    meilleure = meilleure.min(distance(&fenetre, numero));
+                }
+            }
+            // Toute la suite comparée telle quelle : un numéro plus court que
+            // la fenêtre minimale reste ainsi rattrapable.
+            meilleure = meilleure.min(distance(chiffres, numero));
+            (meilleure <= ECART_MAX).then(|| (numero.clone(), meilleure))
+        })
+        .collect();
+    classes.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+    classes.truncate(maximum);
+    classes
+}
+
+/// Au-delà de deux chiffres d'écart, ce n'est plus la même truie.
+const ECART_MAX: usize = 2;
 
 /// Les numéros du cheptel les plus proches de celui qui a été compris,
 /// classés du plus proche au plus lointain, écarts trop grands exclus.
@@ -534,5 +587,71 @@ mod tests {
             normaliser("Truie 500325, écrasés !"),
             "truie 500325 ecrases"
         );
+    }
+
+    /// Transcriptions relevées en bâtiment sur un téléphone : whisper ajoute
+    /// ou perd des chiffres et déforme les mots du métier. Une dictée reste
+    /// exploitable dès lors que la bonne truie figure dans les propositions.
+    #[test]
+    fn dictees_reelles_retrouvent_la_truie_au_cheptel() {
+        let cheptel: Vec<String> = ["500325", "500326", "500412", "412200", "553253", "355523"]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        for (transcrit, attendu) in [
+            (
+                "5, 0, 0, 3, 2, 5. De Porte-Solais écrasé par la truie.",
+                "500325",
+            ),
+            (
+                "5, 0, 0, 3, 5, 2 porceliers écrasés par la trouille.",
+                "500325",
+            ),
+            (
+                "5, 0, 0, 3, 2, 5, 2, porcelais écrasés par la crée.",
+                "500325",
+            ),
+            (
+                "5, 5, 5, 3, 2, 5, 3 pour se les écraser sur le trouille.",
+                "553253",
+            ),
+        ] {
+            let analyse = analyser(transcrit, &causes(), 6);
+            let suite = analyse
+                .chiffres_bruts
+                .as_deref()
+                .expect("une suite de chiffres doit être relevée");
+            let proches: Vec<String> = rapprocher(suite, &cheptel, 3)
+                .into_iter()
+                .map(|(numero, _)| numero)
+                .collect();
+            assert!(
+                proches.contains(&attendu.to_string()),
+                "« {transcrit} » → suite {suite}, propositions {proches:?}"
+            );
+        }
+    }
+
+    /// Un numéro correctement entendu reste reconnu du premier coup : le
+    /// rapprochement ne doit pas noyer l'évident sous des approximations.
+    #[test]
+    fn une_suite_exacte_arrive_en_tete() {
+        let cheptel: Vec<String> = ["500325", "500326", "500327"]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        let proches = rapprocher("500325", &cheptel, 3);
+        assert_eq!(
+            proches.first().map(|(n, e)| (n.as_str(), *e)),
+            Some(("500325", 0))
+        );
+    }
+
+    /// Une suite qui ne ressemble à rien du cheptel ne doit rien proposer :
+    /// mieux vaut dire qu'on n'a pas compris que désigner une truie au hasard.
+    #[test]
+    fn une_suite_etrangere_ne_propose_rien() {
+        let cheptel: Vec<String> = ["500325"].into_iter().map(str::to_string).collect();
+        assert!(rapprocher("987654", &cheptel, 3).is_empty());
     }
 }
