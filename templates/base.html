@@ -68,6 +68,27 @@
     .danger{color:#b42318}.rust-scroll{overflow:auto}
     .rust-footer{text-align:center;padding:14px 18px;color:#6b7773;font-size:12px;border-top:1px solid #e2e8e3;background:#fff}
 
+    /* Deux boutons valent mieux qu'un menu déroulant pour une réponse par
+       oui ou non : un geste au lieu de trois, et l'état se lit sans ouvrir. */
+    .fab-choix{border:0;padding:0;margin:0 0 9px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    .fab-choix legend{float:left;width:100%;font-size:.85rem;font-weight:600;margin-bottom:5px;padding:0}
+    .fab-choix label{flex:1;margin:0}
+    .fab-choix input{position:absolute;opacity:0;width:0;height:0}
+    .fab-choix span{display:block;text-align:center;padding:11px 8px;border-radius:10px;
+      border:1px solid #cfd8d3;background:#fff;font-weight:700;cursor:pointer}
+    .fab-choix input:checked+span{background:#1e4d3a;border-color:#1e4d3a;color:#fff}
+    .fab-choix input:focus-visible+span{outline:2px solid #b06a2c;outline-offset:2px}
+    .fab-choix input:disabled+span{opacity:.5}
+    /* Interrupteur : l'état actif doit se voir d'un coup d'œil, une case à
+       cocher perdue dans une grille de nombres ne se remarque pas. */
+    .fab-bascule{display:flex;align-items:center;gap:10px;margin:0 0 9px;padding:10px 12px;
+      border:1px solid #cfd8d3;border-radius:10px;background:#fff;cursor:pointer;font-weight:600}
+    .fab-bascule input{width:20px;height:20px;accent-color:#b06a2c;margin:0}
+    .fab-bascule:has(input:checked){background:#fff3e8;border-color:#b06a2c;color:#8a4c17}
+    .fab-mini-grid label small{display:block;font-weight:400;color:#667c72;font-size:.78rem;
+      margin-top:3px;line-height:1.35}
+    .fab-mini-grid .wide{grid-column:1 / -1}
+
     /* ===== Dictée vocale (téléphone) ===== */
     /* Le bouton n'existe que sur téléphone : c'est en bâtiment, les mains
        prises, qu'on dicte — au bureau le clavier va plus vite. */
@@ -357,6 +378,7 @@
     <button type="button" class="fab-t" data-type="sortie">Sortie truie</button>
     <button type="button" class="fab-t" data-type="mouvement">Mouvement</button>
     <button type="button" class="fab-t" data-type="sevrage">Sevrage</button>
+    <button type="button" class="fab-t" data-type="cochette">Nouvelle cochette</button>
   </div>
   <form method="post" action="/saisie-rapide" id="fab-form">
     <input type="hidden" name="csrf_token" value="{{ session.csrf }}">
@@ -412,23 +434,33 @@
         <label>Tués par la truie<input name="tues_truie" type="number" min="0" value="0" disabled></label>
         <label>Heure de début<input name="heure_debut" type="time" disabled></label>
         <label>Heure de fin<input name="heure_fin" type="time" disabled></label>
-        <label>Délivrance<select name="delivrance_ok" disabled required><option value="">— à contrôler —</option><option value="1">OK</option><option value="0">NOK</option></select></label>
-        <label><input name="suivi_actif" type="checkbox" value="1" disabled> Suivi de mise-bas nécessaire</label>
+        <fieldset class="fab-choix wide"><legend>Délivrance</legend>
+          <label><input type="radio" name="delivrance_ok" value="1" disabled required><span>Oui</span></label>
+          <label><input type="radio" name="delivrance_ok" value="0" disabled><span>Non</span></label>
+        </fieldset>
+        <label class="fab-bascule wide"><input name="suivi_actif" type="checkbox" value="1" disabled><span>Truie à surveiller</span></label>
+        <label class="wide">Porcelets splayleg<input name="splayleg" type="number" min="0" disabled>
+          <small>Pattes écartées. Ils sont vivants : déjà comptés dans les nés vifs, ne les retirez pas.</small>
+        </label>
       </div>
     </div>
     <div class="fab-f" data-for="perte" hidden>
       <label>Nombre de porcelets<input name="nombre" inputmode="numeric" value="1" min="1" disabled></label>
-      <label>Stade
-        <select name="stade" disabled><option value="maternite">Maternité</option><option value="post_sevrage">Post-sevrage</option><option value="engraissement">Engraissement</option></select>
-      </label>
-      <label>Case d’origine
-        <select name="case_id" id="fab-case" disabled><option value="">— aucune / sous la mère —</option></select>
-      </label>
       <label>Cause
         <select name="cause" id="fab-cause" disabled><option>Chargement des causes configurées…</option></select>
       </label>
-      <label>Âge (jours)<input name="age_j" inputmode="numeric" min="0" disabled></label>
-      <label>Poids (kg)<input name="poids" inputmode="decimal" disabled></label>
+      <!-- Le stade se déduit de la bande ou de la case, l'âge se calcule
+           depuis la date de mise-bas : les redemander à l'éleveur, c'est
+           rallonger l'écran pour des valeurs que le serveur connaît déjà.
+           La case, elle, reste utile hors maternité — repliée par défaut,
+           et restreinte aux cases où la bande se trouve vraiment. -->
+      <details id="fab-perte-detail">
+        <summary>Case d’origine et poids</summary>
+        <label>Case d’origine
+          <select name="case_id" id="fab-case" disabled><option value="">— aucune / sous la mère —</option></select>
+        </label>
+        <label>Poids (kg)<input name="poids" inputmode="decimal" disabled></label>
+      </details>
     </div>
     <div class="fab-f" data-for="sortie" hidden>
       <label>Motif de sortie
@@ -471,6 +503,25 @@
       <input type="hidden" name="sevrage_truies" id="sevrage_truies">
       <input type="hidden" name="sevrage_distribution" id="sevrage_distribution">
     </div>
+    <div class="fab-f" data-for="cochette" hidden>
+      <div class="fab-mini-grid">
+        <label class="wide">N° de travail<input name="num_travail" disabled required placeholder="numéro interne à l’élevage"></label>
+        <label class="wide">N° national<input name="num_national" disabled placeholder="numéro officiel"></label>
+        <label class="wide">RFID<input name="rfid" disabled></label>
+        <label>Date de naissance<input name="date_naissance" type="date" disabled></label>
+        <label>Poids d’entrée (kg)<input name="poids" inputmode="decimal" disabled></label>
+        <label class="wide">Race<input name="race" disabled placeholder="ex. Landrace × Large White"></label>
+        <label class="wide">Bande
+          <select name="bande_code" id="fab-cochette-bande" disabled><option value="">Sans bande</option></select>
+        </label>
+        {% if session.module_genetique %}<label class="wide">Lignée
+          <select name="lignee_id" id="fab-cochette-lignee" disabled><option value="">Sans lignée</option></select>
+        </label>{% endif %}
+        <label>N° du père<input name="pere_national" disabled></label>
+        <label>N° de la mère<input name="mere_national" disabled></label>
+      </div>
+      <p class="fab-aide">L’âge se calcule depuis la date de naissance. Le poids rejoint les mesures de la truie.</p>
+    </div>
     <label id="fab-note-wrap">Observation<input name="note" id="fab-note" placeholder="Observation facultative"></label>
     <button type="submit" class="fab-ok">Valider</button>
   </form>
@@ -506,10 +557,43 @@
   }
   window.eoToast = showToast;
   function setSubmitPending(pending){ var btn = form.querySelector('.fab-ok'); if(!btn) return; if(pending){ btn.disabled = true; btn.dataset._orig = btn.textContent; btn.textContent = 'Enregistrement…'; } else { btn.disabled = false; if(btn.dataset._orig) { btn.textContent = btn.dataset._orig; delete btn.dataset._orig; } } }
+  // Déplacer une truie seule est le cas le plus courant en verraterie et en
+  // maternité : elle doit figurer dans les sources au même titre qu'une bande
+  // ou qu'une case, et la recherche doit permettre de la retrouver par son
+  // numéro sans dérouler tout le cheptel.
   function refreshMovementSources(){
+    var query=(typeInput.value==='mouvement'?(sowSearch.value||''):'').trim().toLowerCase();
+    function retenu(valeurs){
+      if(!query) return true;
+      return valeurs.some(function(v){return String(v||'').toLowerCase().includes(query);});
+    }
+    var precedent=source.value;
     source.replaceChildren(new Option('— sélectionner —',''));
-    movementBands.forEach(function(row){source.add(new Option('Bande · '+text(row.code)+(row.site?' · '+text(row.site):''),'bande:'+text(row.id)));});
-    movementCases.forEach(function(row){source.add(new Option('Unité · '+[row.site,row.salle,row.nom].filter(Boolean).join(' · '),'case:'+text(row.id)));});
+    movementBands.forEach(function(row){
+      if(!retenu([row.code,row.site])) return;
+      source.add(new Option('Bande · '+text(row.code)+(row.site?' · '+text(row.site):''),'bande:'+text(row.id)));
+    });
+    _truieRows.forEach(function(row){
+      if(!retenu([row.num_travail,row.rfid,row.bande_code,row.num_vanne])) return;
+      source.add(new Option('Truie · '+text(row.num_travail)+(row.bande_code?' · '+text(row.bande_code):'')+(row.num_vanne?' · vanne '+text(row.num_vanne):''),'truie:'+text(row.id)));
+    });
+    movementCases.forEach(function(row){
+      if(!retenu([row.nom,row.salle,row.site])) return;
+      source.add(new Option('Unité · '+[row.site,row.salle,row.nom].filter(Boolean).join(' · '),'case:'+text(row.id)));
+    });
+    if(precedent) source.value=precedent;
+    if(source.options.length===1) source.options[0].text='Rien ne correspond';
+  }
+  // Une truie se déplace entière : le nombre n'a pas de sens, et
+  // l'enregistrement passe par la route des truies, pas par celle des porcs.
+  function ajusterMouvement(){
+    var truie=String(source.value||'').indexOf('truie:')===0;
+    var nb=form.querySelector('[data-for="mouvement"] input[name="nombre"]');
+    if(nb){nb.disabled=truie;nb.required=!truie;
+      var champ=nb.closest('label'); if(champ) champ.hidden=truie;}
+    if(typeInput.value==='mouvement'){
+      form.action=truie?'/transferts/truies':'/transferts/porcs';
+    }
   }
   function setOpen(open){
     panel.classList.toggle('open',open); panel.setAttribute('aria-hidden',String(!open));
@@ -616,7 +700,10 @@
     if(rows.some(function(row){return String(row.id)===previous;})) sow.value=previous;
     if(!rows.length) sow.options[0].text=query?'Aucune truie trouvée':'Aucune truie dans la période de mise-bas';
   }
-  sowSearch.addEventListener('input',refreshMiseBasSows);
+  sowSearch.addEventListener('input',function(){
+    if(typeInput.value==='mouvement') refreshMovementSources(); else refreshMiseBasSows();
+  });
+  source.addEventListener('change',ajusterMouvement);
   fetch('/api/bandes-actives').then(function(response){return response.json();}).then(function(rows){
     fillSelect(band,rows,function(row){return text(row.code)+(row.site?' · '+text(row.site):'');});
     movementBands=rows; refreshMovementSources();
@@ -669,6 +756,58 @@
     rows.forEach(function(row){cause.add(new Option(row.libelle,row.libelle));});
     if(!rows.length){cause.add(new Option('Autre','Autre'));}
   }).catch(function(){var cause=document.getElementById('fab-cause');cause.replaceChildren(new Option('Autre','Autre'));});
+  // Les cases proposées pour une perte sont celles où la bande se trouve
+  // vraiment : chercher dans tout l'élevage pour en trouver deux ou trois
+  // fait perdre plus de temps que la saisie elle-même.
+  function casesDeLaBande(){
+    var select=document.getElementById('fab-case');
+    var bande=band.value;
+    if(!bande){
+      select.replaceChildren(new Option('— aucune / sous la mère —',''));
+      return;
+    }
+    fetch('/api/bande/'+encodeURIComponent(bande)+'/cases',{credentials:'same-origin'})
+      .then(function(r){return r.ok?r.json():Promise.reject();})
+      .then(function(rows){
+        select.replaceChildren(new Option('— aucune / sous la mère —',''));
+        (rows||[]).forEach(function(row){
+          var label=[row.salle,row.nom].filter(Boolean).join(' · ');
+          select.add(new Option(label,text(row.id)));
+        });
+        if(!(rows||[]).length){
+          // Une bande sans case connue est le cas normal en maternité : les
+          // porcelets sont sous la mère, il n'y a rien à choisir.
+          select.add(new Option('Aucune case connue pour cette bande',''));
+        }
+      }).catch(function(){});
+  }
+
+  band.addEventListener('change',function(){
+    if(typeInput.value==='perte') casesDeLaBande();
+  });
+
+  // Bande et lignée d'une cochette : les mêmes listes que partout ailleurs,
+  // chargées une seule fois à la première ouverture de l'onglet.
+  var cochetteChargee=false;
+  function chargerCochette(){
+    if(cochetteChargee) return;
+    cochetteChargee=true;
+    var bandeSel=document.getElementById('fab-cochette-bande');
+    if(bandeSel){
+      movementBands.forEach(function(row){bandeSel.add(new Option(text(row.code),text(row.code)));});
+    }
+    var ligneeSel=document.getElementById('fab-cochette-lignee');
+    if(ligneeSel){
+      fetch('/api/lignees',{credentials:'same-origin'})
+        .then(function(r){return r.ok?r.json():Promise.reject();})
+        .then(function(rows){
+          (rows||[]).forEach(function(row){
+            ligneeSel.add(new Option(text(row.nom)+(row.fournisseur?' — '+text(row.fournisseur):''),text(row.id)));
+          });
+        }).catch(function(){});
+    }
+  }
+
   function chooseType(type,chosen){
     typeInput.value=type;
     document.querySelectorAll('.fab-t').forEach(function(item){item.classList.toggle('on',item===chosen);});
@@ -676,14 +815,27 @@
       var active=section.dataset.for===type; section.hidden=!active;
       section.querySelectorAll('input,select,textarea,button').forEach(function(field){field.disabled=!active;});
     });
-    var loss=type==='perte', movement=type==='mouvement', sevrage=type==='sevrage';
+    var loss=type==='perte', movement=type==='mouvement', sevrage=type==='sevrage', cochette=type==='cochette';
+    if(cochette) chargerCochette();
     form.action=movement?'/transferts/porcs':'/saisie-rapide';
-    sow.disabled=movement||sevrage; sow.required=!movement&&!sevrage; document.getElementById('fab-truie-wrap').hidden=movement||sevrage;
+    // Une cochette n'existe pas encore : il n'y a pas de truie à choisir.
+    var sansTruie=movement||sevrage||cochette;
+    sow.disabled=sansTruie; sow.required=!sansTruie;
+    document.getElementById('fab-truie-wrap').hidden=sansTruie;
     sowLabel.textContent=loss?'Numéro de la truie':'Truie';
-    sowSearch.hidden=type!=='mise_bas'&&!loss;
-    sowSearch.placeholder=loss?'Écrire le numéro de la truie, son RFID ou sa bande':'Rechercher par numéro, RFID ou bande';
+    sowSearch.hidden=type!=='mise_bas'&&!loss&&!movement;
+    if(cochette) sowSearch.hidden=true;
+    sowSearch.placeholder=loss?'Écrire le numéro de la truie, son RFID ou sa bande'
+      :(movement?'Rechercher une bande, une truie ou une case':'Rechercher par numéro, RFID ou bande');
     if(type==='mise_bas'||loss) refreshMiseBasSows(); else if(_truieRows.length) fillSelect(sow,_truieRows,function(row){return text(row.num_travail)+(row.bande_code?' · '+text(row.bande_code):'');});
-    band.disabled=!loss; band.required=false; noteWrap.hidden=type==='sortie'; note.disabled=type==='sortie';
+    if(loss) casesDeLaBande();
+    if(movement){refreshMovementSources();ajusterMouvement();}
+    band.disabled=!loss; band.required=false;
+    // L'observation en texte libre ne ressort dans aucune analyse : sur une
+    // perte comme sur un sevrage, elle allonge l'écran sans rien apporter à
+    // l'étude des résultats. Les types où elle sert la gardent.
+    var sansNote=type==='sortie'||loss||sevrage||cochette;
+    noteWrap.hidden=sansNote; note.disabled=sansNote;
 
     // Sevrage: initialisation spécifique
     if(type==='sevrage'){
@@ -797,6 +949,19 @@
   }); document.getElementById('fab-sevrage-sum').textContent = sum; document.getElementById('fab-sevrage-sum').dataset.value = sum; if(invalid){ document.getElementById('fab-sevrage-sum').style.color='red'; } else { document.getElementById('fab-sevrage-sum').style.color='inherit'; } }
 
   form.addEventListener('submit',function(event){
+    // La route des truies attend une case cochée par animal (`truie_<id>`) :
+    // on traduit ici le choix fait dans la liste des sources.
+    if(typeInput.value==='mouvement'){
+      var ancien=document.getElementById('fab-mouvement-truie');
+      if(ancien) ancien.remove();
+      var choix=String(source.value||'');
+      if(choix.indexOf('truie:')===0){
+        var champ=document.createElement('input');
+        champ.type='hidden'; champ.id='fab-mouvement-truie';
+        champ.name='truie_'+choix.slice(6); champ.value='1';
+        form.appendChild(champ);
+      }
+    }
     if(typeInput.value==='eld'){
       var values=['eld','poids','nec'].map(function(name){return form.querySelector('[data-for="eld"] [name="'+name+'"]').value.trim();});
       if(values.every(function(value){return !value;})){event.preventDefault(); showToast('Saisissez au moins l\u2019ELD, le poids ou la NEC.','error'); return; }

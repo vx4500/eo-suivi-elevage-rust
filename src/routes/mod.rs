@@ -273,6 +273,8 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/bande/{id}", get(api_bande_json))
         .route("/api/cases", get(api_cases))
+        .route("/api/bande/{id}/cases", get(api_bande_cases))
+        .route("/api/lignees", get(api_lignees))
         .route("/api/cases-capacity", get(api_cases_capacity))
         .route("/api/causes-perte", get(api_causes_perte))
         // Saisie vocale : analyse sans écriture, puis validation après
@@ -4553,6 +4555,48 @@ async fn api_cases(State(state): State<AppState>) -> AppResult<axum::Json<Value>
     )
     .await?;
     Ok(axum::Json(Value::Array(rows)))
+}
+
+/// Les cases où cette bande se trouve réellement.
+///
+/// Proposer les cases de tout l'élevage pour déclarer une perte oblige à
+/// chercher dans une liste de dizaines d'entrées alors que la bande n'en
+/// occupe qu'une poignée. On retient trois traces : les truies de la bande
+/// affectées à une case, les transferts arrivés dans une case pour cette
+/// bande, et les mouvements de stock qui l'y ont amenée.
+/// Catalogue des lignées, pour rattacher une cochette dès son arrivée.
+async fn api_lignees(State(state): State<AppState>) -> AppResult<axum::Json<Value>> {
+    let rows = generic_rows(
+        &state.pool,
+        "SELECT id,nom,fournisseur FROM lignee_genetique ORDER BY nom COLLATE NOCASE",
+    )
+    .await?;
+    Ok(axum::Json(Value::Array(rows)))
+}
+
+async fn api_bande_cases(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> AppResult<axum::Json<Value>> {
+    let rows = sqlx::query(
+        "SELECT c.id,c.nom,s.nom AS salle,si.code AS site,s.type AS type_salle,c.num_vanne \
+         FROM casesalle c JOIN salle s ON s.id=c.salle_id JOIN site si ON si.id=s.site_id \
+         WHERE c.id IN ( \
+           SELECT t.case_id FROM truie t JOIN bande b ON b.code=t.bande_code \
+             WHERE b.id=? AND t.case_id IS NOT NULL AND t.reformee=0 \
+           UNION SELECT tr.case_dest_id FROM transfert tr \
+             WHERE tr.bande_id=? AND tr.case_dest_id IS NOT NULL \
+           UNION SELECT CAST(replace(m.destination,'case:','') AS INTEGER) FROM mouvementstock m \
+             JOIN bande b ON b.code=m.bande_code \
+             WHERE b.id=? AND m.destination LIKE 'case:%' \
+         ) ORDER BY si.code,s.ordre,c.nom",
+    )
+    .bind(id)
+    .bind(id)
+    .bind(id)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(axum::Json(Value::Array(rows_to_json(rows)?)))
 }
 
 async fn recherche(

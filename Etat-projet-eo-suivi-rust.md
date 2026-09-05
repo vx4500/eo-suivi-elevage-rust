@@ -1,6 +1,47 @@
 # EO-Suivi Élevage Rust — État du projet
 
-Version actuelle : **2.2.65** — Dernière mise à jour de ce document : 5 septembre 2026.
+Version actuelle : **2.2.66** — Dernière mise à jour de ce document : 5 septembre 2026.
+
+### Version 2.2.66 — la saisie rapide reprise à partir du terrain
+
+Neuf champs pour déclarer deux porcelets écrasés : la saisie rapide demandait
+ce que le serveur savait déjà. Le stade se déduit de la bande ou de la case,
+l'âge se calcule depuis la mise-bas — les deux champs disparaissent. Restent la
+truie, le nombre, la cause et la date ; la case d'origine et le poids, utiles
+hors maternité, passent sous un dépliant. La case d'origine ne propose plus que
+les cases où la bande se trouve vraiment, au lieu de toutes celles de
+l'élevage : trois entrées à lire plutôt que cinquante.
+
+L'observation en texte libre quitte la perte et le sevrage. Elle ne ressort
+dans aucune analyse, et le principe du logiciel est que tout puisse être étudié
+ensuite ; un champ que rien ne relit allonge l'écran sans rien apporter.
+
+L'âge des pertes, désormais toujours calculé, l'est plus solidement : une truie
+qui a changé de bande depuis sa mise-bas ne fait plus perdre l'information.
+C'est lui qui permet d'étudier à quel moment de la lactation les pertes
+surviennent.
+
+À la mise-bas, la délivrance se répond par deux boutons Oui et Non au lieu d'un
+menu déroulant — un geste au lieu de trois — et la surveillance devient un
+interrupteur qui se voit. Un champ splayleg apparaît, avec ce qu'il faut savoir
+écrit à côté : ces porcelets sont vivants, ils sont déjà comptés dans les nés
+vifs et ne doivent pas en être retirés. Le nombre est conservé sur la truie, où
+il sert de critère de sélection des mères à cochettes.
+
+Un mouvement peut désormais porter sur une truie seule, et non plus seulement
+sur une bande ou une case : c'est le cas le plus courant en verraterie comme en
+maternité. La recherche, jusque-là absente de cet écran, filtre les trois à la
+fois.
+
+Nouvelle entrée « Nouvelle cochette » : une cochette entre au cheptel avec son
+numéro de travail, son numéro national, sa RFID, sa date de naissance, son
+poids d'entrée, sa race, sa lignée, son père et sa mère. Ces informations ne se
+retrouvent plus après coup alors qu'elles conditionnent l'analyse de toute sa
+carrière. Le poids rejoint les mesures de la truie, un numéro déjà porté est
+refusé.
+
+La conduite des bandes ne se rappelle plus en haut de la page Bandes : elle se
+règle dans Paramètres, où elle a toujours vécu.
 
 ### Version 2.2.65 — savoir que ça écoute, et où ça en est
 
@@ -758,7 +799,7 @@ l'arrêt déclenche le retour arrière ; la sauvegarde de la base est conservée
 ```bash
 systemctl status eo-suivi-rust --no-pager -l
 journalctl -u eo-suivi-rust -n 80 --no-pager -l -o cat
-curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.65"
+curl -fsS http://127.0.0.1:8080/login | grep -F "Version Rust 2.2.66"
 ```
 
 Puis ouvrir `https://rust-elevage.basse-chevrie.ovh`.

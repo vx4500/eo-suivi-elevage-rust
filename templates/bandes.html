@@ -1,6 +1,5 @@
 {% extends "base.html" %}{% block content %}
 <h1>Bandes</h1>
-<div class="card"><b>Conduite configurée : {{ conduite_bandes.nombre }} bandes</b> · intervalle {{ conduite_bandes.intervalle_j }} jours. <a href="/parametres#conduite-bandes">Modifier la conduite</a></div>
 {% if session.peut_modifier %}<form class="card rust-actions" method="post" action="/bandes/ajouter">
   <input type="hidden" name="csrf_token" value="{{ session.csrf }}">
   <label>Code<input name="code" required></label><label>N° marquage<select name="num_officiel"><option value="">Non défini</option>{% for m in marquages %}<option value="{{ m.numero }}">{{ m.numero }}</option>{% endfor %}</select></label>

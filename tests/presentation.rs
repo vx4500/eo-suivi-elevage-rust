@@ -78,7 +78,10 @@ fn saisie_rapide_prepare_le_sevrage_avant_lenvoi() {
         serialisation < form_data,
         "les truies doivent être sérialisées avant FormData"
     );
-    assert!(template.contains("sow.disabled=movement||sevrage"));
+    // Mouvement, sevrage et création de cochette ne portent sur aucune truie
+    // déjà au cheptel : le sélecteur doit être neutralisé pour les trois.
+    assert!(template.contains("var sansTruie=movement||sevrage||cochette;"));
+    assert!(template.contains("sow.disabled=sansTruie;"));
     assert!(template.contains("selected=sevrageWholeSelection.slice()"));
     assert!(!template.contains("inp.previousSibling.checked"));
 }
@@ -401,4 +404,57 @@ fn la_dictee_montre_quelle_ecoute_et_ou_elle_en_est() {
     // s'il faut un modèle plus léger sur le serveur de l'élevage.
     assert!(routes.contains("transcription vocale terminée"));
     assert!(routes.contains("EO_VOCAL_THREADS"));
+}
+
+/// La saisie rapide a été reprise depuis le terrain : ce qui se calcule ne se
+/// demande plus, ce qui ne se relit jamais disparaît, et ce qui ne se retrouve
+/// pas après coup se saisit au moment où l'animal arrive.
+#[test]
+fn la_saisie_rapide_ne_demande_que_ce_qui_ne_se_calcule_pas() {
+    let base = include_str!("../templates/base.html");
+    let parity = include_str!("../src/routes/parity.rs");
+    let bandes = include_str!("../templates/bandes.html");
+    let parametres = include_str!("../templates/parametres.html");
+
+    // Stade et âge sont déduits : les redemander allongeait l'écran pour rien.
+    assert!(!base.contains("name=\"age_j\""));
+    assert!(!base.contains("<option value=\"post_sevrage\">Post-sevrage</option>"));
+    // La case reste utile hors maternité, mais repliée et restreinte à la bande.
+    assert!(base.contains("id=\"fab-perte-detail\""));
+    assert!(base.contains("/api/bande/'+encodeURIComponent(bande)+'/cases"));
+    // L'observation quitte la perte et le sevrage.
+    assert!(base.contains("var sansNote=type==='sortie'||loss||sevrage||cochette;"));
+
+    // Mise-bas : réponse en deux boutons, surveillance visible, splayleg noté
+    // avec ce qu'il faut savoir écrit à côté.
+    assert!(base.contains("class=\"fab-choix wide\""));
+    assert!(base.contains("class=\"fab-bascule wide\""));
+    assert!(base.contains("name=\"splayleg\""));
+    assert!(base.contains("déjà comptés dans les nés vifs"));
+
+    // Mouvement : une truie seule est une source comme une autre.
+    assert!(base.contains("'truie:'+text(row.id)"));
+    assert!(base.contains("'/transferts/truies'"));
+
+    // Cochette : tout ce qui ne se retrouve plus après coup.
+    assert!(base.contains("data-type=\"cochette\""));
+    for champ in [
+        "num_travail",
+        "num_national",
+        "rfid",
+        "date_naissance",
+        "race",
+        "pere_national",
+        "mere_national",
+    ] {
+        assert!(
+            base.contains(&format!("name=\"{champ}\"")),
+            "champ manquant : {champ}"
+        );
+    }
+    assert!(parity.contains("\"cochette\" => {"));
+
+    // La conduite se règle dans Paramètres, et nulle part ailleurs.
+    assert!(!bandes.contains("Conduite configurée"));
+    assert!(parametres.contains("id=\"conduite-bandes\""));
 }

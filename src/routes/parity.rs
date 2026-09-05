@@ -1373,13 +1373,31 @@ pub(super) async fn saisie_rapide(
             // ces bases — et seulement sur elles — avec « NOT NULL constraint
             // failed: declarationmort.horodatage ».
             sqlx::query("INSERT INTO declarationmort(horodatage,bande_code,date,stade,case_id,cause,poids,nombre,declare_par,note) VALUES(CURRENT_TIMESTAMP,?,?,?,?,?,?,?,?,?)").bind(band).bind(&date).bind(stade).bind(case_id).bind(&cause).bind(form_f64(&form,"poids")).bind(number).bind(&session.nom).bind(form_text(&form,"note")).execute(&state.pool).await?;
-            let farrowing:Option<String>=sqlx::query_scalar("SELECT date FROM evenement WHERE truie_id=? AND bande_id=? AND type='mise_bas' ORDER BY date DESC,id DESC LIMIT 1").bind(sow_id).bind(band_id).fetch_optional(&state.pool).await?;
+            // L'âge n'est plus demandé à la saisie : il se calcule depuis la
+            // mise-bas, et c'est lui qui permet d'étudier ensuite à quel
+            // moment de la lactation les pertes surviennent. On cherche donc
+            // la mise-bas de la bande, puis, à défaut, la dernière mise-bas
+            // de la truie antérieure à la perte — une truie déplacée de bande
+            // ne doit pas faire perdre l'information.
+            let farrowing: Option<String> = sqlx::query_scalar(
+                "SELECT COALESCE( \
+                   (SELECT date FROM evenement WHERE truie_id=? AND bande_id=? AND type='mise_bas' AND date<=? ORDER BY date DESC,id DESC LIMIT 1), \
+                   (SELECT date FROM evenement WHERE truie_id=? AND type='mise_bas' AND date<=? ORDER BY date DESC,id DESC LIMIT 1))",
+            )
+            .bind(sow_id)
+            .bind(band_id)
+            .bind(&date)
+            .bind(sow_id)
+            .bind(&date)
+            .fetch_optional(&state.pool)
+            .await?
+            .flatten();
             let age = farrowing
                 .as_deref()
                 .and_then(parse_stored_date)
                 .and_then(|start| parse_stored_date(&date).map(|end| (end - start).num_days()))
                 .filter(|value| *value >= 0);
-            sqlx::query("INSERT INTO perteporcelet(truie_id,bande_id,age_j,nb,cause,date) VALUES(?,?,?,?,?,?)").bind(sow_id).bind(band_id).bind(age.or_else(||form_i64(&form,"age_j"))).bind(number).bind(cause).bind(&date).execute(&state.pool).await?;
+            sqlx::query("INSERT INTO perteporcelet(truie_id,bande_id,age_j,nb,cause,date) VALUES(?,?,?,?,?,?)").bind(sow_id).bind(band_id).bind(age).bind(number).bind(cause).bind(&date).execute(&state.pool).await?;
         }
         "sortie" => {
             let sow_id = form_i64(&form, "truie_id")
@@ -1406,6 +1424,68 @@ pub(super) async fn saisie_rapide(
             }
             sqlx::query("INSERT INTO mesuretruie(truie_id,date,periode,eld,poids,nec,note) VALUES(?,?,?,?,?,?,?)").bind(sow_id).bind(date).bind(form_text(&form,"periode")).bind(eld).bind(poids).bind(nec).bind(form_text(&form,"note")).execute(&state.pool).await?;
         }
+        // Une cochette entre au cheptel avec tout ce qui servira ensuite à la
+        // juger : sa filiation, sa lignée, son poids et sa date de naissance.
+        // Ces informations ne se retrouvent plus après coup, alors qu'elles
+        // conditionnent l'analyse de sa carrière — d'où leur saisie ici, au
+        // moment où l'animal arrive, plutôt que dans un écran séparé.
+        "cochette" => {
+            let numero = form_text(&form, "num_travail")
+                .ok_or_else(|| AppError::Invalid("N° de travail obligatoire".into()))?;
+            let existe: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM truie WHERE num_travail=? AND reformee=0")
+                    .bind(&numero)
+                    .fetch_one(&state.pool)
+                    .await?;
+            if existe > 0 {
+                return Err(AppError::Invalid(format!(
+                    "Le numéro {numero} est déjà porté par une truie au cheptel"
+                )));
+            }
+            // La lignée n'existe qu'avec le module Génétique avancée : une
+            // valeur envoyée sans lui est ignorée plutôt que refusée.
+            let lignee_id = session
+                .module_genetique
+                .then(|| form_i64(&form, "lignee_id"))
+                .flatten();
+            let naissance = form_text(&form, "date_naissance");
+            let mut tx = state.pool.begin().await?;
+            let cochette = sqlx::query(
+                "INSERT INTO truie(num_travail,num_national,rfid,race,date_naissance,date_entree,bande_code,lignee_id,pere_national,mere_national,statut,reformee,rang,mere_cochette) \
+                 VALUES(?,?,?,?,?,?,?,?,?,?,'active',0,0,0)",
+            )
+            .bind(&numero)
+            .bind(form_text(&form, "num_national"))
+            .bind(form_text(&form, "rfid"))
+            .bind(form_text(&form, "race"))
+            .bind(naissance)
+            .bind(&date)
+            .bind(form_text(&form, "bande_code"))
+            .bind(lignee_id)
+            .bind(form_text(&form, "pere_national"))
+            .bind(form_text(&form, "mere_national"))
+            .execute(&mut *tx)
+            .await?
+            .last_insert_rowid();
+            // Le poids d'entrée rejoint les mesures : c'est le même suivi que
+            // les pesées suivantes, il apparaît donc dans la courbe de la
+            // truie sans traitement particulier.
+            if let Some(poids) = form_f64(&form, "poids") {
+                sqlx::query(
+                    "INSERT INTO mesuretruie(truie_id,date,poids,periode) VALUES(?,?,?,'Entrée quarantaine')",
+                )
+                .bind(cochette)
+                .bind(&date)
+                .bind(poids)
+                .execute(&mut *tx)
+                .await?;
+            }
+            tx.commit().await?;
+            if ajax_mode {
+                return Ok(axum::Json(json!({"ok":true,"truie_id":cochette})).into_response());
+            }
+            return Ok(Redirect::to(&format!("/truie/{cochette}")).into_response());
+        }
         "mise_bas" => {
             let sow_id = form_i64(&form, "truie_id")
                 .ok_or_else(|| AppError::Invalid("Truie obligatoire".into()))?;
@@ -1421,6 +1501,11 @@ pub(super) async fn saisie_rapide(
             let weak = form_i64(&form, "chetifs").unwrap_or(0).max(0);
             let crushed = form_i64(&form, "ecrases").unwrap_or(0).max(0);
             let killed = form_i64(&form, "tues_truie").unwrap_or(0).max(0);
+            // Les porcelets aux pattes écartées sont vivants : ils sont déjà
+            // dans les nés vifs et ne doivent surtout pas en être retirés.
+            // C'est une observation de portée, conservée sur la truie comme
+            // critère de sélection des mères à cochettes.
+            let splayleg = form_i64(&form, "splayleg").filter(|n| *n >= 0);
             let total = live + still + mummies;
             let existing: Option<i64> = sqlx::query_scalar(
                 "SELECT id FROM evenement WHERE truie_id=? AND type='mise_bas' AND bande_id IS ? ORDER BY id DESC LIMIT 1",
@@ -1435,12 +1520,30 @@ pub(super) async fn saisie_rapide(
                     .bind(&date).bind(total).bind(live).bind(still).bind(mummies).bind(weak).bind(crushed).bind(killed)
                     .bind(form_text(&form,"heure_debut")).bind(form_text(&form,"heure_fin")).bind(form.contains_key("suivi_actif") as i64).bind(form_i64(&form,"delivrance_ok")).bind(form_text(&form,"note")).bind(case_id)
                     .bind(event_id).execute(&mut *tx).await?;
+                if let Some(splayleg) = splayleg {
+                    sqlx::query(
+                        "UPDATE truie SET splayleg=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                    )
+                    .bind(splayleg)
+                    .bind(sow_id)
+                    .execute(&mut *tx)
+                    .await?;
+                }
                 event_id
             } else {
                 let result = sqlx::query("INSERT INTO evenement(type,date,truie_id,bande_id,nes_totaux,nes_vifs,mort_nes,momifies,chetifs,ecrases,tues_truie,heure_debut,heure_fin,suivi_actif,delivrance_ok,note,case_id) VALUES('mise_bas',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
                     .bind(&date).bind(sow_id).bind(band_id).bind(total).bind(live).bind(still).bind(mummies).bind(weak).bind(crushed).bind(killed)
                     .bind(form_text(&form,"heure_debut")).bind(form_text(&form,"heure_fin")).bind(form.contains_key("suivi_actif") as i64).bind(form_i64(&form,"delivrance_ok")).bind(form_text(&form,"note")).bind(case_id)
                     .execute(&mut *tx).await?;
+                if let Some(splayleg) = splayleg {
+                    sqlx::query(
+                        "UPDATE truie SET splayleg=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                    )
+                    .bind(splayleg)
+                    .bind(sow_id)
+                    .execute(&mut *tx)
+                    .await?;
+                }
                 if parse_stored_date(&date).is_some_and(|day| day <= Local::now().date_naive()) {
                     sqlx::query(
                         "UPDATE truie SET rang=rang+1,updated_at=CURRENT_TIMESTAMP WHERE id=?",
@@ -2309,6 +2412,142 @@ mod perte_porcelet_tests {
             .fetch_one(&state.pool)
             .await?;
         assert_eq!(pertes, 2);
+        Ok(())
+    }
+
+    /// L'âge n'est plus demandé à la saisie : il doit se calculer seul,
+    /// sinon plus moyen d'étudier ensuite à quel moment de la lactation les
+    /// pertes surviennent.
+    #[tokio::test]
+    async fn l_age_de_la_perte_se_calcule_sans_etre_saisi() -> anyhow::Result<()> {
+        let (state, sow, pen) = test_state().await?;
+        let mut form = perte_form(sow, pen, "1");
+        form.insert("date".into(), "2026-08-06".into());
+        // Le formulaire n'envoie plus d'âge : la valeur doit venir du calcul.
+        assert!(!form.contains_key("age_j"));
+        saisie_rapide(State(state.clone()), Extension(session()), Form(form)).await?;
+        // Mise-bas au 1er août, perte au 6 : cinq jours.
+        let age: Option<i64> =
+            sqlx::query_scalar("SELECT age_j FROM perteporcelet ORDER BY id DESC LIMIT 1")
+                .fetch_one(&state.pool)
+                .await?;
+        assert_eq!(age, Some(5));
+        Ok(())
+    }
+
+    /// Les porcelets aux pattes écartées sont vivants : les compter comme une
+    /// perte fausserait les nés vifs de la portée. Le nombre est conservé sur
+    /// la truie, où il sert de critère de sélection des mères à cochettes.
+    #[tokio::test]
+    async fn le_splayleg_est_note_sans_toucher_aux_nes_vifs() -> anyhow::Result<()> {
+        let (state, sow, _pen) = test_state().await?;
+        let form: HashMap<String, String> = [
+            ("csrf_token", "csrf-test"),
+            ("type", "mise_bas"),
+            ("date", "2026-08-20"),
+            ("truie_id", &sow.to_string()),
+            ("nes_vifs", "14"),
+            ("mort_nes", "1"),
+            ("momifies", "0"),
+            ("splayleg", "2"),
+            ("delivrance_ok", "1"),
+        ]
+        .into_iter()
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+        .collect();
+        saisie_rapide(State(state.clone()), Extension(session()), Form(form)).await?;
+
+        let (vifs, delivrance): (i64, Option<i64>) = sqlx::query_as(
+            "SELECT nes_vifs,delivrance_ok FROM evenement WHERE type='mise_bas' AND date='2026-08-20'",
+        )
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(vifs, 14, "les splayleg restent dans les nés vifs");
+        assert_eq!(delivrance, Some(1));
+        let splayleg: Option<i64> = sqlx::query_scalar("SELECT splayleg FROM truie WHERE id=?")
+            .bind(sow)
+            .fetch_one(&state.pool)
+            .await?;
+        assert_eq!(splayleg, Some(2));
+        // Aucune perte ne doit avoir été créée pour ces porcelets.
+        let pertes: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(SUM(nb),0) FROM perteporcelet WHERE lower(COALESCE(cause,'')) LIKE '%splay%'",
+        )
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(pertes, 0);
+        Ok(())
+    }
+
+    /// Une cochette arrive avec tout ce qui servira à juger sa carrière :
+    /// filiation, naissance, poids d'entrée. Ces informations ne se
+    /// retrouvent plus après coup, elles doivent être saisies à l'arrivée.
+    #[tokio::test]
+    async fn une_cochette_entre_au_cheptel_avec_sa_filiation() -> anyhow::Result<()> {
+        let (state, _sow, _pen) = test_state().await?;
+        let champs = |numero: &str| -> HashMap<String, String> {
+            [
+                ("csrf_token", "csrf-test"),
+                ("type", "cochette"),
+                ("date", "2026-08-20"),
+                ("num_travail", numero),
+                ("num_national", "FR35123456"),
+                ("rfid", "982000123456789"),
+                ("date_naissance", "2026-02-14"),
+                ("poids", "132,5"),
+                ("race", "Landrace"),
+                ("pere_national", "P-900"),
+                ("mere_national", "M-450"),
+                ("bande_code", "BTEST"),
+            ]
+            .into_iter()
+            .map(|(a, b)| (a.to_string(), b.to_string()))
+            .collect()
+        };
+        saisie_rapide(
+            State(state.clone()),
+            Extension(session()),
+            Form(champs("900001")),
+        )
+        .await?;
+
+        // Une colonne par ligne : la fiche vaut par le fait qu'aucune de ces
+        // informations ne se retrouve après coup.
+        for (colonne, attendu) in [
+            ("num_national", "FR35123456"),
+            ("rfid", "982000123456789"),
+            ("date_naissance", "2026-02-14"),
+            ("race", "Landrace"),
+            ("pere_national", "P-900"),
+            ("mere_national", "M-450"),
+            ("bande_code", "BTEST"),
+        ] {
+            let valeur: Option<String> = sqlx::query_scalar(&format!(
+                "SELECT {colonne} FROM truie WHERE num_travail='900001'"
+            ))
+            .fetch_one(&state.pool)
+            .await?;
+            assert_eq!(valeur.as_deref(), Some(attendu), "colonne {colonne}");
+        }
+
+        // Le poids d'entrée rejoint les mesures, décimale française comprise.
+        let poids: Option<f64> = sqlx::query_scalar(
+            "SELECT poids FROM mesuretruie WHERE truie_id=(SELECT id FROM truie WHERE num_travail='900001')",
+        )
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(poids, Some(132.5));
+
+        // Un numéro déjà porté doit être refusé : deux truies homonymes au
+        // cheptel rendraient toute analyse de carrière ininterprétable.
+        let err = saisie_rapide(
+            State(state.clone()),
+            Extension(session()),
+            Form(champs("900001")),
+        )
+        .await
+        .expect_err("doublon refusé");
+        assert!(matches!(err, AppError::Invalid(ref m) if m.contains("900001")));
         Ok(())
     }
 }
